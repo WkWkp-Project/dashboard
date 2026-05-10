@@ -341,6 +341,30 @@
   .client-banner { background:linear-gradient(135deg,#1B2028,#2A323E); color:white; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-size:12px; font-family:'Geist Mono',monospace; letter-spacing:0.5px;}
   .client-banner .pill { background:var(--gold); color:white; padding:2px 8px; border-radius:3px; font-weight:600;}
 
+  /* Airline-style date picker */
+  .date-trigger { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:5px; background:var(--paper); cursor:pointer; text-align:left; font-family:'Geist',sans-serif; font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--ink); }
+  .date-trigger:hover { border-color:var(--gold); }
+  .date-trigger.empty { color:var(--muted); }
+  .date-trigger .ico { color:var(--gold); }
+  .dp-popup { position:fixed; z-index:10500; background:var(--paper); border:1px solid var(--line-2); border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,0.25); padding:14px; width:300px; font-family:'Geist',sans-serif; }
+  .dp-popup.hidden { display:none; }
+  .dp-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .dp-head button { background:transparent; border:1px solid var(--line); width:28px; height:28px; border-radius:5px; cursor:pointer; font-size:16px; line-height:1; color:var(--ink); }
+  .dp-head button:hover { background:var(--paper-2); border-color:var(--ink); }
+  .dp-title { font-family:'Fraunces',serif; font-size:15px; font-weight:600; color:var(--ink); }
+  .dp-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+  .dp-dow { font-family:'Geist Mono',monospace; font-size:9px; letter-spacing:1px; color:var(--muted); text-align:center; padding:4px 0; text-transform:uppercase; }
+  .dp-cell { background:transparent; border:1px solid transparent; border-radius:5px; padding:8px 0; cursor:pointer; font-size:12px; color:var(--ink); transition:all 0.12s; }
+  .dp-cell:hover { background:var(--paper-2); border-color:var(--line); }
+  .dp-cell.empty { visibility:hidden; cursor:default; }
+  .dp-cell.today { color:var(--gold); font-weight:700; }
+  .dp-cell.selected { background:var(--ink); color:var(--paper); border-color:var(--ink); font-weight:600; }
+  .dp-cell.weekend { color:var(--accent); }
+  .dp-cell.weekend.selected { color:var(--paper); }
+  .dp-foot { display:flex; justify-content:space-between; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .dp-foot button { padding:6px 10px; background:var(--paper-2); border:1px solid var(--line); border-radius:5px; font-size:11px; cursor:pointer; font-family:'Geist Mono',monospace; letter-spacing:0.5px; }
+  .dp-foot button:hover { background:var(--ink); color:var(--paper); }
+
   /* Client mode lock-down */
   .client-disabled, .client-disabled:hover { opacity:0.35 !important; cursor:not-allowed !important; pointer-events:none !important; filter:grayscale(0.5); }
   body.client-mode .save-indicator { display:none !important; }
@@ -732,7 +756,11 @@
       <div class="grid-2">
         <div class="input-group">
           <label>Scheduled Date (สำหรับปฏิทิน)</label>
-          <input type="date" id="asset-date" />
+          <button type="button" class="date-trigger empty" id="asset-date-trigger" onclick="openDatePicker('asset-date')">
+            <span id="asset-date-label">— เลือกวัน —</span>
+            <span class="ico">📅</span>
+          </button>
+          <input type="hidden" id="asset-date" />
         </div>
         <div class="input-group">
           <label>Reference Link (URL)</label>
@@ -934,6 +962,21 @@
 
 <div class="toast" id="toast">Message</div>
 
+<!-- Date picker popup -->
+<div class="dp-popup hidden" id="datePickerPopup">
+  <div class="dp-head">
+    <button type="button" onclick="dpPrevMonth()" title="เดือนก่อน">‹</button>
+    <span class="dp-title" id="dp-title">—</span>
+    <button type="button" onclick="dpNextMonth()" title="เดือนถัดไป">›</button>
+  </div>
+  <div class="dp-grid" id="dp-grid"></div>
+  <div class="dp-foot">
+    <button type="button" onclick="dpToday()">Today</button>
+    <button type="button" onclick="dpClear()">Clear</button>
+    <button type="button" onclick="closeDatePicker()">Close</button>
+  </div>
+</div>
+
 <script>
 // ============================================================================
 // CONFIG
@@ -1052,6 +1095,7 @@ function handleRealGoogleLogin() {
 async function onLoginSuccess() {
   isOfflineMode = false;
   userRole = 'internal';
+  document.body.classList.remove('client-mode');
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
   setSaveStatus('idle', 'Connected');
@@ -1065,8 +1109,113 @@ async function onLoginSuccess() {
     document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
     document.getElementById('sb-mode-tag').style.color = "var(--connect)";
     logAction('SYSTEM', `User authenticated: ${user.email}`);
+    saveSession();
     await syncDatabaseFromDrive();
+    if (pendingForceSaveAfterLogin) { pendingForceSaveAfterLogin = false; setTimeout(() => saveToDrive(), 200); }
   } catch(e) { showToast('Profile load failed', 'err'); console.error(e); }
+}
+
+// ============================================================================
+// SESSION PERSISTENCE — refresh ไม่หลุดออก
+// ============================================================================
+const SESSION_KEY = 'wkw_session_v1';
+const SESSION_DATA_KEY = 'wkw_offline_data_v1';
+let pendingForceSaveAfterLogin = false;
+
+function saveSession() {
+  try {
+    const meta = {
+      ts: Date.now(),
+      userRole, isOfflineMode,
+      accessToken: userRole === 'internal' ? accessToken : null,
+      tokenExpiresAt: userRole === 'internal' ? (Date.now() + 50*60*1000) : null,
+      databaseFileId,
+      currentCampaignId,
+      profileName: document.getElementById('sb-name')?.textContent || '',
+      profileAvatar: document.getElementById('sb-avatar')?.textContent || ''
+    };
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+    if (isOfflineMode || userRole === 'client') {
+      try {
+        const dataPayload = JSON.stringify({ campaigns, accessTokens });
+        sessionStorage.setItem(SESSION_DATA_KEY, dataPayload);
+      } catch(e) {
+        // Quota exceeded — try without binary file data
+        try {
+          const lite = campaigns.map(c => ({ ...c, assets: c.assets.map(a => ({ ...a, files: [], fileData: '' })) }));
+          sessionStorage.setItem(SESSION_DATA_KEY, JSON.stringify({ campaigns: lite, accessTokens, _stripped: true }));
+          console.warn('Session saved without media (quota exceeded)');
+        } catch(e2) {
+          sessionStorage.removeItem(SESSION_DATA_KEY);
+          console.warn('Session data not persisted');
+        }
+      }
+    }
+  } catch(e) { console.warn('saveSession failed:', e); }
+}
+
+function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_DATA_KEY); } catch(e) {}
+}
+
+async function tryRestoreSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (!s || !s.ts) return false;
+    if (Date.now() - s.ts > 6*60*60*1000) { clearSession(); return false; } // 6hr cap
+
+    if (s.userRole === 'internal' && s.accessToken && Date.now() < (s.tokenExpiresAt || 0)) {
+      accessToken = s.accessToken;
+      databaseFileId = s.databaseFileId || null;
+      // Verify token by fetching profile
+      try {
+        const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!r.ok) throw new Error('token invalid');
+        const user = await r.json();
+        isOfflineMode = false; userRole = 'internal';
+        document.body.classList.remove('client-mode');
+        document.getElementById('authOverlay').style.display = 'none';
+        document.getElementById('mainApp').style.display = 'grid';
+        setSaveStatus('idle', 'Connected');
+        document.getElementById('sb-name').textContent = user.name;
+        document.getElementById('sb-avatar').textContent = (user.given_name || user.name)[0];
+        document.getElementById('tb-name').textContent = user.name;
+        document.getElementById('tb-avatar').textContent = (user.given_name || user.name)[0];
+        document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
+        document.getElementById('sb-mode-tag').style.color = "var(--connect)";
+        await syncDatabaseFromDrive();
+        showToast('Session restored');
+        return true;
+      } catch(e) {
+        clearSession();
+        return false;
+      }
+    }
+
+    if ((s.userRole === 'client' || s.isOfflineMode) && sessionStorage.getItem(SESSION_DATA_KEY)) {
+      const data = JSON.parse(sessionStorage.getItem(SESSION_DATA_KEY));
+      campaigns = (data.campaigns || []).map(normalizeCampaign);
+      accessTokens = data.accessTokens || [];
+      currentCampaignId = s.currentCampaignId || (campaigns[0] && campaigns[0].id);
+      isOfflineMode = !!s.isOfflineMode;
+      userRole = s.userRole;
+      document.getElementById('authOverlay').style.display = 'none';
+      document.getElementById('mainApp').style.display = 'grid';
+      setSaveStatus('offline', 'Offline preview · changes won\'t persist');
+      document.getElementById('sb-name').textContent = s.profileName || (userRole === 'client' ? 'Client / Guest' : 'Internal (Offline)');
+      document.getElementById('sb-avatar').textContent = s.profileAvatar || (userRole === 'client' ? '👁' : '📦');
+      document.getElementById('sb-mode-tag').textContent = userRole === 'client' ? 'Client View · Read Only' : 'Offline Preview';
+      document.getElementById('sb-mode-tag').style.color = "var(--gold)";
+      renderEverything();
+      if (userRole === 'client') applyClientModeRestrictions();
+      if (data._stripped) showToast('Session restored (media ใหญ่เกิน — กรุณา re-import bundle เพื่อโหลดสื่อ)', 'warn');
+      else showToast('Session restored');
+      return true;
+    }
+  } catch(e) { console.warn('restore failed:', e); }
+  return false;
 }
 
 async function authFetch(url, options = {}) {
@@ -1089,14 +1238,29 @@ function scheduleSave() {
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
   setSaveStatus('saving', 'Saving in 2.5s...');
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { saveToDrive(); }, SAVE_DEBOUNCE_MS);
+  saveTimer = setTimeout(() => { saveToDrive().catch(e => showToast('Auto-save failed: ' + e.message, 'err')); }, SAVE_DEBOUNCE_MS);
 }
-function forceSave() {
+async function forceSave() {
   if (blockIfClient('Backup เป็นของ Internal เท่านั้น')) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  if (isOfflineMode) { showToast('Offline mode. Use Handoff to download bundle.', 'warn'); return; }
-  if (!accessToken) { handleRealGoogleLogin(); return; }
-  saveToDrive();
+  if (isOfflineMode) {
+    showToast('Offline mode — ใช้ "Prepare Handoff" เพื่อ export bundle', 'warn');
+    return;
+  }
+  if (!accessToken) {
+    pendingForceSaveAfterLogin = true;
+    showToast('กำลังเปิด Google sign-in เพื่อ backup...', 'warn');
+    handleRealGoogleLogin();
+    return;
+  }
+  if (isSaving) { showToast('กำลังบันทึกอยู่ — รอสักครู่', 'warn'); return; }
+  showToast('☁️ กำลัง backup ขึ้น Drive...');
+  try {
+    await saveToDrive();
+    showToast('✓ Backup สำเร็จ · เก็บใน Google Drive แล้ว', 'ok');
+  } catch(e) {
+    showToast('❌ Backup ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+  }
 }
 
 function buildDatabasePayload() {
@@ -1125,12 +1289,18 @@ async function saveToDrive() {
     : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
   try {
     const resp = await authFetch(url, { method: databaseFileId ? 'PATCH' : 'POST', body: formData });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const result = await resp.json();
     if (!databaseFileId && result.id) databaseFileId = result.id;
     lastSaveTime = new Date(); pendingChanges = false;
     setSaveStatus('saved', 'All changes saved');
     document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-  } catch(e) { setSaveStatus('error', 'Save failed · click to retry'); showToast('Save failed: ' + e.message, 'err'); }
+    saveSession();
+  } catch(e) {
+    setSaveStatus('error', 'Save failed · click to retry');
+    isSaving = false;
+    throw e;
+  }
   finally { isSaving = false; }
 }
 
@@ -1402,6 +1572,7 @@ function performLogout() {
       google.accounts.oauth2.revoke(accessToken, () => {});
     }
   } catch(e) { /* ignore */ }
+  clearSession();
   accessToken = null;
   databaseFileId = null;
   pendingChanges = false;
@@ -1465,6 +1636,7 @@ function openAddAssetModal() {
   pendingFiles = [];
   document.getElementById('asset-modal-title').textContent = 'Add New Asset';
   ['asset-h2','asset-h3','asset-prompt','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
+  syncDateTrigger('asset-date');
   document.getElementById('asset-cat').value = 'catch';
   document.getElementById('asset-type').value = 'image';
   document.getElementById('asset-file').value = '';
@@ -1486,6 +1658,7 @@ function editAsset(id) {
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
   document.getElementById('asset-link').value = a.link || '';
   document.getElementById('asset-date').value = a.scheduledDate || '';
+  syncDateTrigger('asset-date');
   document.getElementById('asset-file').value = '';
   document.getElementById('asset-file-preview').textContent = pendingFiles.length ? `${pendingFiles.length} file(s) attached` : '';
   renderAssetFileList();
@@ -2449,6 +2622,7 @@ function loadDataOffline(data, providedToken) {
   if (userRole === 'client') applyClientModeRestrictions();
   showToast('✓ Project loaded · ' + (userRole === 'client' ? 'read-only' : 'offline edit'));
   logAction('IMPORT', `Bundle loaded (${userRole} mode)`);
+  saveSession();
 }
 
 // ============================================================================
@@ -2559,6 +2733,115 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.querySelectorAll('.simple-overlay.show').forEach(o => o.classList.remove('show'));
 });
 
+// ============================================================================
+// AIRLINE-STYLE DATE PICKER
+// ============================================================================
+let dpState = { targetId: null, viewDate: new Date(), selected: null };
+const DP_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function fmtDate(ds) {
+  if (!ds) return '';
+  const d = new Date(ds + 'T00:00:00');
+  if (isNaN(d)) return ds;
+  return d.toLocaleDateString('th-TH', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+}
+
+function syncDateTrigger(inputId) {
+  const input = document.getElementById(inputId);
+  const trig = document.getElementById(inputId + '-trigger');
+  const lbl = document.getElementById(inputId + '-label');
+  if (!input || !trig || !lbl) return;
+  if (input.value) { lbl.textContent = fmtDate(input.value); trig.classList.remove('empty'); }
+  else { lbl.textContent = '— เลือกวัน —'; trig.classList.add('empty'); }
+}
+
+function openDatePicker(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  dpState.targetId = inputId;
+  if (input.value) {
+    dpState.selected = input.value;
+    dpState.viewDate = new Date(input.value + 'T00:00:00');
+    if (isNaN(dpState.viewDate)) dpState.viewDate = new Date();
+  } else {
+    dpState.selected = null;
+    dpState.viewDate = new Date();
+  }
+  const popup = document.getElementById('datePickerPopup');
+  popup.classList.remove('hidden');
+  positionDatePicker();
+  renderDatePicker();
+}
+
+function positionDatePicker() {
+  const popup = document.getElementById('datePickerPopup');
+  const trig = document.getElementById(dpState.targetId + '-trigger');
+  if (!trig) return;
+  const r = trig.getBoundingClientRect();
+  const w = 300, h = 340;
+  let left = r.left;
+  let top = r.bottom + 6;
+  if (left + w > window.innerWidth - 10) left = window.innerWidth - w - 10;
+  if (top + h > window.innerHeight - 10) top = r.top - h - 6;
+  if (left < 10) left = 10;
+  if (top < 10) top = 10;
+  popup.style.left = left + 'px';
+  popup.style.top = top + 'px';
+}
+
+function renderDatePicker() {
+  const d = dpState.viewDate;
+  const year = d.getFullYear(), month = d.getMonth();
+  document.getElementById('dp-title').textContent = `${DP_MONTHS[month]} ${year}`;
+  const first = new Date(year, month, 1).getDay();
+  const last = new Date(year, month + 1, 0).getDate();
+  const today = new Date(); const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const grid = document.getElementById('dp-grid');
+  let html = '';
+  ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(n => html += `<div class="dp-dow">${n.slice(0,3)}</div>`);
+  for (let i = 0; i < first; i++) html += '<button type="button" class="dp-cell empty" disabled></button>';
+  for (let day = 1; day <= last; day++) {
+    const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const dow = new Date(year, month, day).getDay();
+    const cls = ['dp-cell'];
+    if (ds === todayStr) cls.push('today');
+    if (ds === dpState.selected) cls.push('selected');
+    if (dow === 0 || dow === 6) cls.push('weekend');
+    html += `<button type="button" class="${cls.join(' ')}" onclick="dpPick('${ds}')">${day}</button>`;
+  }
+  grid.innerHTML = html;
+}
+
+function dpPrevMonth() { dpState.viewDate.setDate(1); dpState.viewDate.setMonth(dpState.viewDate.getMonth() - 1); renderDatePicker(); }
+function dpNextMonth() { dpState.viewDate.setDate(1); dpState.viewDate.setMonth(dpState.viewDate.getMonth() + 1); renderDatePicker(); }
+function dpToday() {
+  const t = new Date();
+  const ds = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+  dpPick(ds);
+}
+function dpClear() {
+  const input = document.getElementById(dpState.targetId);
+  if (input) { input.value = ''; syncDateTrigger(dpState.targetId); }
+  closeDatePicker();
+}
+function dpPick(ds) {
+  const input = document.getElementById(dpState.targetId);
+  if (input) { input.value = ds; syncDateTrigger(dpState.targetId); }
+  dpState.selected = ds;
+  closeDatePicker();
+}
+function closeDatePicker() { document.getElementById('datePickerPopup').classList.add('hidden'); dpState.targetId = null; }
+
+document.addEventListener('click', e => {
+  const popup = document.getElementById('datePickerPopup');
+  if (!popup || popup.classList.contains('hidden')) return;
+  if (popup.contains(e.target)) return;
+  if (e.target.closest('.date-trigger')) return;
+  closeDatePicker();
+});
+window.addEventListener('resize', () => { if (dpState.targetId) positionDatePicker(); });
+window.addEventListener('scroll', () => { if (dpState.targetId) positionDatePicker(); }, true);
+
 function switchAuthMode(mode) {
   document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
   document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
@@ -2567,9 +2850,10 @@ function switchAuthMode(mode) {
 }
 
 // INIT
-window.onload = () => {
+window.onload = async () => {
   initGoogleAuth();
-  renderEverything();
+  const restored = await tryRestoreSession();
+  if (!restored) renderEverything();
 };
 </script>
 </body>
