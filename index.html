@@ -970,11 +970,9 @@
         </button>
         <input type="hidden" id="editStartISO" />
         <input type="hidden" id="editEndISO" />
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
-          <div><small class="hint-label">Start label (ข้อความที่แสดง)</small><input type="text" id="editStart" placeholder="May 2026" /></div>
-          <div><small class="hint-label">End label (ข้อความที่แสดง)</small><input type="text" id="editEnd" placeholder="Aug 2026" /></div>
-        </div>
-        <small class="hint" id="editPeriodSummary">เลือกช่วงวันบนปฏิทินเพื่อกรอกอัตโนมัติ — หรือพิมพ์ข้อความเองได้</small>
+        <input type="hidden" id="editStart" />
+        <input type="hidden" id="editEnd" />
+        <small class="hint" id="editPeriodSummary">เลือกช่วงวันบนปฏิทิน — ระบบจะคำนวณช่วงและจำนวนวันให้อัตโนมัติ</small>
       </div>
 
       <div class="grid-2">
@@ -1050,10 +1048,20 @@
     <div class="simple-modal-body">
       <p style="font-size:12px; color:var(--muted); margin-bottom:14px;">เลือกฟอร์แมตที่ต้องการ — ทุกอันรวมข้อมูลครบ ประวัติทั้งหมดจะถูก export ไม่มีการตัด</p>
       <div class="export-grid">
+        <button class="export-card highlight" onclick="doExport('pdf-snap')">
+          <span class="export-ico">🖼</span>
+          <strong>PDF (Visual Capture)</strong>
+          <small>แคปหน้า Overview ปัจจุบันทั้งหมดเป็น PDF — รองรับภาษาไทย, font, สี ครบเหมือนหน้าจอ</small>
+        </button>
+        <button class="export-card" onclick="doExport('png-snap')">
+          <span class="export-ico">📸</span>
+          <strong>PNG Screenshot</strong>
+          <small>แคปหน้าปัจจุบันเป็นรูป PNG ความละเอียดสูง</small>
+        </button>
         <button class="export-card" onclick="doExport('pdf')">
           <span class="export-ico">📄</span>
-          <strong>PDF Report</strong>
-          <small>รายงานสรุป + ทุก asset + ประวัติทั้งหมด · เหมาะสำหรับส่งลูกค้า</small>
+          <strong>PDF (Text Report)</strong>
+          <small>รายงาน text-based + ทุก asset + log ทั้งหมด (ฟอนต์ helvetica · ไทยอาจไม่ครบ)</small>
         </button>
         <button class="export-card" onclick="doExport('json')">
           <span class="export-ico">🗂</span>
@@ -2582,6 +2590,19 @@ async function doExport(kind) {
       logAction('EXPORT', 'PDF report');
       exportProgress(`✓ ${slug}_report_${stamp}.pdf`);
       showToast('✓ PDF exported');
+    } else if (kind === 'png-snap') {
+      exportProgress('กำลังแคปหน้าจอ...');
+      const blob = await captureOverviewAsImage('png');
+      downloadBlob(blob, `${slug}_snapshot_${stamp}.png`);
+      logAction('EXPORT', 'PNG snapshot');
+      exportProgress(`✓ ${slug}_snapshot_${stamp}.png`);
+      showToast('✓ PNG saved');
+    } else if (kind === 'pdf-snap') {
+      exportProgress('กำลังแคปหน้าจอเป็น PDF...');
+      await captureOverviewAsPDF(`${slug}_visual_${stamp}.pdf`, msg => exportProgress(msg));
+      logAction('EXPORT', 'PDF visual capture');
+      exportProgress(`✓ ${slug}_visual_${stamp}.pdf`);
+      showToast('✓ Visual PDF exported');
     } else if (kind === 'json') {
       exportProgress('กำลังเตรียม JSON...');
       const data = { exportedAt: new Date().toISOString(), schemaVersion: SCHEMA_VERSION, campaign: camp };
@@ -2638,6 +2659,64 @@ async function doExport(kind) {
     exportProgress('❌ ' + (e.message || 'Export failed'));
     showToast('Export failed: ' + e.message, 'err');
   }
+}
+
+async function captureOverviewAsCanvas() {
+  if (typeof html2canvas === 'undefined') throw new Error('html2canvas not loaded');
+  // Switch to overview view if not already
+  switchView('overview');
+  await new Promise(r => setTimeout(r, 100));
+  const target = document.getElementById('view-overview');
+  if (!target) throw new Error('Overview view not found');
+  // Temporarily allow content overflow / remove animations
+  const scrollY = window.scrollY;
+  window.scrollTo(0, 0);
+  const canvas = await html2canvas(target, {
+    backgroundColor: '#FAFAF7',
+    scale: 2,
+    useCORS: true,
+    logging: false,
+    windowWidth: target.scrollWidth,
+    windowHeight: target.scrollHeight
+  });
+  window.scrollTo(0, scrollY);
+  return canvas;
+}
+
+async function captureOverviewAsImage(format) {
+  const canvas = await captureOverviewAsCanvas();
+  const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas toBlob failed')), mime, 0.95);
+  });
+}
+
+async function captureOverviewAsPDF(filename, progress) {
+  if (!window.jspdf) throw new Error('jsPDF not loaded');
+  progress && progress('Rendering canvas...');
+  const canvas = await captureOverviewAsCanvas();
+  progress && progress('Composing PDF pages...');
+  const { jsPDF } = window.jspdf;
+  const pdfW = 210, pdfH = 297; // A4 mm
+  const ratio = canvas.width / pdfW; // px per mm
+  const pageHpx = Math.floor(pdfH * ratio);
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4', compress:true });
+  let yPx = 0; let pageIdx = 0;
+  while (yPx < canvas.height) {
+    const sliceH = Math.min(pageHpx, canvas.height - yPx);
+    const tmp = document.createElement('canvas');
+    tmp.width = canvas.width; tmp.height = sliceH;
+    const ctx = tmp.getContext('2d');
+    ctx.fillStyle = '#FAFAF7'; ctx.fillRect(0, 0, tmp.width, tmp.height);
+    ctx.drawImage(canvas, 0, yPx, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+    const img = tmp.toDataURL('image/jpeg', 0.92);
+    if (pageIdx > 0) doc.addPage();
+    const drawH = sliceH / ratio;
+    doc.addImage(img, 'JPEG', 0, 0, pdfW, drawH);
+    yPx += sliceH; pageIdx++;
+    progress && progress(`Page ${pageIdx}...`);
+  }
+  doc.save(filename);
 }
 
 function csvEscape(v) {
@@ -2928,17 +3007,16 @@ function updateEditPeriodSummary() {
   const s = document.getElementById('editStartISO').value;
   const e = document.getElementById('editEndISO').value;
   const el = document.getElementById('editPeriodSummary');
+  // Always auto-derive period text from ISO dates
+  document.getElementById('editStart').value = s ? monthYearLabel(s) : '';
+  document.getElementById('editEnd').value = e ? monthYearLabel(e) : '';
   if (s && e) {
     const days = Math.round((new Date(e) - new Date(s)) / 86400000) + 1;
-    el.textContent = `🗓 ${fmtDate(s)} → ${fmtDate(e)} (${days} วัน)`;
-    // Auto-fill labels if empty
-    const sl = document.getElementById('editStart'), el2 = document.getElementById('editEnd');
-    if (!sl.value) sl.value = monthYearLabel(s);
-    if (!el2.value) el2.value = monthYearLabel(e);
+    el.textContent = `🗓 ${fmtDate(s)} → ${fmtDate(e)} · ${days} วัน · จะแสดงเป็น "${monthYearLabel(s)} → ${monthYearLabel(e)}"`;
   } else if (s) {
     el.textContent = `🗓 เริ่ม ${fmtDate(s)} — ยังไม่เลือกวันสิ้นสุด`;
   } else {
-    el.textContent = 'เลือกช่วงวันบนปฏิทินเพื่อกรอกอัตโนมัติ — หรือพิมพ์ข้อความเองได้';
+    el.textContent = 'เลือกช่วงวันบนปฏิทิน — ระบบจะคำนวณช่วงและจำนวนวันให้อัตโนมัติ';
   }
 }
 
