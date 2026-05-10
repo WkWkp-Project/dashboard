@@ -328,6 +328,24 @@
   /* Client mode banner */
   .client-banner { background:linear-gradient(135deg,#1B2028,#2A323E); color:white; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-size:12px; font-family:'Geist Mono',monospace; letter-spacing:0.5px;}
   .client-banner .pill { background:var(--gold); color:white; padding:2px 8px; border-radius:3px; font-weight:600;}
+
+  /* Media thumbnails & viewer */
+  .media-thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px; }
+  .media-thumb { position:relative; aspect-ratio:1/1; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:var(--paper-2); display:grid; place-items:center; cursor:pointer; }
+  .media-thumb img, .media-thumb video { width:100%; height:100%; object-fit:cover; display:block; }
+  .media-thumb .badge { position:absolute; top:4px; left:4px; background:rgba(0,0,0,0.7); color:white; padding:2px 6px; border-radius:3px; font-family:'Geist Mono',monospace; font-size:9px; letter-spacing:0.5px; }
+  .media-thumb .rm { position:absolute; top:4px; right:4px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,0.7); color:white; border:none; cursor:pointer; font-size:14px; line-height:1; display:grid; place-items:center; }
+  .media-thumb .filemeta { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(to top, rgba(0,0,0,0.85), transparent); color:white; padding:14px 6px 4px; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:'Geist Mono',monospace; }
+  .media-thumb .play-icon { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:36px; height:36px; border-radius:50%; background:rgba(0,0,0,0.6); color:white; display:grid; place-items:center; pointer-events:none; }
+  .media-count-chip { display:inline-flex; align-items:center; gap:4px; background:var(--paper-3); padding:2px 6px; border-radius:3px; font-size:10px; margin-right:4px; cursor:pointer; border:none; font-family:inherit; color:var(--ink); }
+  .media-count-chip:hover { background:var(--ink); color:var(--paper); }
+  .media-viewer-stage { background:#0a0d12; border-radius:6px; padding:16px; min-height:340px; display:grid; place-items:center; position:relative; }
+  .media-viewer-stage img, .media-viewer-stage video { max-width:100%; max-height:60vh; border-radius:4px; }
+  .media-viewer-strip { display:flex; gap:8px; overflow-x:auto; padding:10px 4px; margin-top:10px; }
+  .media-viewer-strip .media-thumb { width:80px; height:80px; aspect-ratio:auto; flex:0 0 auto; }
+  .media-viewer-strip .media-thumb.current { outline:2px solid var(--gold); outline-offset:1px; }
+  .media-viewer-actions { display:flex; gap:8px; justify-content:space-between; align-items:center; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .media-viewer-meta { font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -684,14 +702,39 @@
       </div>
 
       <div class="input-group">
-        <label>Attached File (เก็บใน bundle)</label>
-        <input type="file" id="asset-file" />
+        <label>Attached Media (รูปหลายรูป / วิดีโอ — เก็บใน bundle)</label>
+        <input type="file" id="asset-file" multiple accept="image/*,video/*,.pdf" />
         <div id="asset-file-preview" style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted); margin-top:6px;"></div>
+        <div id="asset-file-list" class="media-thumb-grid" style="margin-top:10px;"></div>
+        <div style="font-size:10px; color:var(--muted-2); margin-top:6px;">รองรับ JPG/PNG/GIF/WEBP, MP4/WEBM/MOV และ PDF · จำกัด 50MB ต่อไฟล์</div>
       </div>
     </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeAssetModal()">Cancel</button>
       <button class="btn primary" onclick="saveAssetFromModal()">Save Asset</button>
+    </div>
+  </div>
+</div>
+
+<!-- Media Viewer Modal -->
+<div class="simple-overlay" id="mediaModal">
+  <div class="simple-modal lg">
+    <div class="simple-modal-head">
+      <h3 id="media-modal-title">Media Viewer</h3>
+      <button class="close-btn" onclick="closeMediaViewer()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="simple-modal-body">
+      <div class="media-viewer-stage" id="media-viewer-stage"></div>
+      <div class="media-viewer-actions">
+        <div class="media-viewer-meta" id="media-viewer-meta">—</div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn sm" onclick="mediaViewerPrev()">‹ Prev</button>
+          <button class="btn sm" onclick="mediaViewerNext()">Next ›</button>
+          <button class="btn sm primary" data-always-on="1" onclick="mediaViewerDownload()">⬇ Download</button>
+          <button class="btn sm" data-always-on="1" onclick="mediaViewerDownloadAll()">⬇ Download All</button>
+        </div>
+      </div>
+      <div class="media-viewer-strip" id="media-viewer-strip"></div>
     </div>
   </div>
 </div>
@@ -877,7 +920,9 @@ let lastSaveTime = null;
 let pendingChanges = false;
 let confirmCallback = null;
 let editingAssetId = null;
-let pendingFileAttachment = null;
+let pendingFileAttachment = null; // legacy, unused
+let pendingFiles = []; // [{name,type,data(base64 dataURL)}]
+let mediaViewerCtx = { assetId: null, files: [], index: 0 };
 let calendarDate = new Date();
 
 // Default schema for a new campaign
@@ -1076,13 +1121,14 @@ async function syncDatabaseFromDrive() {
 }
 
 function normalizeCampaign(c) {
+  const assets = (Array.isArray(c.assets) ? c.assets : []).map(normalizeAsset);
   return {
     id: c.id || ('camp-' + Date.now() + Math.random().toString(36).slice(2,7)),
     client: c.client || '', campaign: c.campaign || '',
     startPeriod: c.startPeriod || '', endPeriod: c.endPeriod || '',
     status: c.status || 'draft',
     handoffInfo: c.handoffInfo || null,
-    assets: Array.isArray(c.assets) ? c.assets : [],
+    assets,
     log: Array.isArray(c.log) ? c.log : [],
     schema: c.schema || defaultSchema(),
     excelData: c.excelData || null,
@@ -1090,6 +1136,23 @@ function normalizeCampaign(c) {
     linkedFilesCount: c.linkedFilesCount || 0
   };
 }
+
+function normalizeAsset(a) {
+  let files = Array.isArray(a.files) ? a.files.slice() : [];
+  // Migrate legacy single-file fields to files[]
+  if ((!files.length) && a.fileData) {
+    files.push({ name: a.fileName || 'file', type: guessMimeFromDataUrl(a.fileData), data: a.fileData });
+  }
+  return { ...a, files };
+}
+
+function guessMimeFromDataUrl(d) {
+  const m = String(d || '').match(/^data:([^;]+);/);
+  return m ? m[1] : 'application/octet-stream';
+}
+
+function isImageType(t) { return /^image\//.test(t || ''); }
+function isVideoType(t) { return /^video\//.test(t || ''); }
 
 // ============================================================================
 // LOG
@@ -1181,8 +1244,20 @@ function renderAssets() {
     const dateStr = d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
     const sched = a.scheduledDate ? `<small style="color:var(--gold);">📅 ${a.scheduledDate}</small>` : '';
     const promptHTML = a.imagePrompt ? `<div class="img-prompt">${escapeHtml(a.imagePrompt)}</div>` : '';
+    const fileCount = (a.files && a.files.length) || (a.fileData ? 1 : 0);
+    const imgCount = (a.files || []).filter(f => isImageType(f.type)).length;
+    const vidCount = (a.files || []).filter(f => isVideoType(f.type)).length;
+    let mediaChip = '';
+    if (fileCount > 0) {
+      const parts = [];
+      if (imgCount) parts.push(`${imgCount} 🖼`);
+      if (vidCount) parts.push(`${vidCount} 🎬`);
+      const other = fileCount - imgCount - vidCount;
+      if (other > 0) parts.push(`${other} 📄`);
+      mediaChip = `<button class="media-count-chip" onclick="openMediaViewer('${a.id}')" title="View / Download media">📎 ${parts.join(' · ') || fileCount + ' files'}</button>`;
+    }
     const linksHTML = (a.link ? `<a href="${escapeHtml(a.link)}" target="_blank">🔗 ${truncate(a.link, 40)}</a>` : '')
-                    + (a.fileName ? `<span class="file-chip">📎 ${escapeHtml(a.fileName)}</span>` : '');
+                    + mediaChip;
     tr.innerHTML = `
       <td><span class="cat-pill ${a.catClass}">${escapeHtml(a.catLabel || a.catClass.toUpperCase())}</span>${sched ? '<br>'+sched : ''}</td>
       <td class="topic-cell">
@@ -1264,9 +1339,29 @@ function confirmDeleteAsset(id) {
 }
 
 function confirmLogout() {
+  // Clients / offline users have no Drive to save to — just exit.
+  if (userRole === 'client' || isOfflineMode || !accessToken) {
+    showConfirm('Logout', 'ออกจากระบบและกลับไปหน้าเข้าสู่ระบบ?', () => { performLogout(); });
+    return;
+  }
   if (pendingChanges) {
-    showConfirm('Unsaved changes', 'You have unsaved changes. Save before logging out?', async () => { await saveToDrive(); location.reload(); });
-  } else { location.reload(); }
+    showConfirm('Unsaved changes', 'You have unsaved changes. Save before logging out?', async () => {
+      try { await saveToDrive(); } catch(e) {}
+      performLogout();
+    });
+  } else { performLogout(); }
+}
+
+function performLogout() {
+  try {
+    if (accessToken && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+      google.accounts.oauth2.revoke(accessToken, () => {});
+    }
+  } catch(e) { /* ignore */ }
+  accessToken = null;
+  databaseFileId = null;
+  pendingChanges = false;
+  location.reload();
 }
 
 // ============================================================================
@@ -1320,13 +1415,14 @@ function openAddAssetModal() {
   if (userRole === 'client') { showToast('Read-only mode', 'warn'); return; }
   if (getCurrentCampaign().status === 'handed-off') { showToast('Re-open campaign first', 'warn'); return; }
   editingAssetId = null;
-  pendingFileAttachment = null;
+  pendingFiles = [];
   document.getElementById('asset-modal-title').textContent = 'Add New Asset';
   ['asset-h2','asset-h3','asset-prompt','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('asset-cat').value = 'catch';
   document.getElementById('asset-type').value = 'image';
   document.getElementById('asset-file').value = '';
   document.getElementById('asset-file-preview').textContent = '';
+  renderAssetFileList();
   onAssetCatChange();
   document.getElementById('assetModal').classList.add('show');
 }
@@ -1336,14 +1432,16 @@ function editAsset(id) {
   const a = camp.assets.find(x => x.id === id);
   if (!a) return;
   editingAssetId = id;
-  pendingFileAttachment = a.fileData ? { name: a.fileName, data: a.fileData } : null;
+  pendingFiles = (a.files || []).map(f => ({ name:f.name, type:f.type, data:f.data }));
   document.getElementById('asset-modal-title').textContent = 'Edit Asset';
   document.getElementById('asset-cat').value = a.catClass;
   document.getElementById('asset-type').value = a.assetType || 'image';
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
   document.getElementById('asset-link').value = a.link || '';
   document.getElementById('asset-date').value = a.scheduledDate || '';
-  document.getElementById('asset-file-preview').textContent = a.fileName ? `Current file: ${a.fileName}` : '';
+  document.getElementById('asset-file').value = '';
+  document.getElementById('asset-file-preview').textContent = pendingFiles.length ? `${pendingFiles.length} file(s) attached` : '';
+  renderAssetFileList();
   onAssetCatChange();
   document.getElementById('asset-h2').value = a.h2 || '';
   document.getElementById('asset-h3').value = a.h3 || '';
@@ -1352,7 +1450,130 @@ function editAsset(id) {
   document.getElementById('assetModal').classList.add('show');
 }
 
-function closeAssetModal() { document.getElementById('assetModal').classList.remove('show'); editingAssetId = null; pendingFileAttachment = null; }
+function closeAssetModal() { document.getElementById('assetModal').classList.remove('show'); editingAssetId = null; pendingFiles = []; }
+
+function renderAssetFileList() {
+  const wrap = document.getElementById('asset-file-list');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  pendingFiles.forEach((f, i) => {
+    const div = document.createElement('div');
+    div.className = 'media-thumb';
+    const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : 0;
+    let inner = '';
+    if (isImageType(f.type)) {
+      inner = `<img src="${f.data}" alt="">`;
+    } else if (isVideoType(f.type)) {
+      inner = `<video src="${f.data}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
+    } else {
+      inner = `<div style="font-size:24px;">📄</div>`;
+    }
+    const badge = isVideoType(f.type) ? 'VIDEO' : (isImageType(f.type) ? 'IMG' : 'FILE');
+    div.innerHTML = `${inner}<span class="badge">${badge}</span><button class="rm" type="button" title="Remove" onclick="removePendingFile(${i})">×</button><div class="filemeta">${escapeHtml(f.name)} · ${sizeKB}KB</div>`;
+    wrap.appendChild(div);
+  });
+}
+
+function removePendingFile(i) {
+  pendingFiles.splice(i, 1);
+  renderAssetFileList();
+  document.getElementById('asset-file-preview').textContent = pendingFiles.length ? `${pendingFiles.length} file(s) attached` : '';
+}
+
+// ============================================================================
+// MEDIA VIEWER (preview / playback / download)
+// ============================================================================
+function openMediaViewer(assetId) {
+  const camp = getCurrentCampaign();
+  const a = camp.assets.find(x => x.id === assetId);
+  if (!a) return;
+  const files = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
+  if (!files.length) { showToast('No media attached', 'warn'); return; }
+  mediaViewerCtx = { assetId, files, index: 0 };
+  document.getElementById('media-modal-title').textContent = `Media · ${a.h2 || 'Asset'} (${files.length})`;
+  renderMediaViewer();
+  document.getElementById('mediaModal').classList.add('show');
+}
+
+function closeMediaViewer() {
+  document.getElementById('mediaModal').classList.remove('show');
+  const stage = document.getElementById('media-viewer-stage');
+  if (stage) stage.innerHTML = '';
+  mediaViewerCtx = { assetId: null, files: [], index: 0 };
+}
+
+function renderMediaViewer() {
+  const { files, index } = mediaViewerCtx;
+  const stage = document.getElementById('media-viewer-stage');
+  const strip = document.getElementById('media-viewer-strip');
+  const meta = document.getElementById('media-viewer-meta');
+  if (!files.length) { stage.innerHTML = '<div style="color:#888;">No media</div>'; return; }
+  const f = files[index];
+  let body = '';
+  if (isImageType(f.type)) {
+    body = `<img src="${f.data}" alt="${escapeHtml(f.name)}">`;
+  } else if (isVideoType(f.type)) {
+    body = `<video src="${f.data}" controls playsinline preload="metadata" style="background:#000;"></video>`;
+  } else {
+    body = `<div style="color:#ddd; text-align:center; padding:32px;">📄<br><strong>${escapeHtml(f.name)}</strong><br><small>คลิก Download เพื่อบันทึกไฟล์</small></div>`;
+  }
+  stage.innerHTML = body;
+  const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : 0;
+  meta.textContent = `${index + 1} / ${files.length} · ${f.name} · ${sizeKB}KB · ${f.type || 'unknown'}`;
+  strip.innerHTML = '';
+  files.forEach((ff, i) => {
+    const div = document.createElement('div');
+    div.className = 'media-thumb' + (i === index ? ' current' : '');
+    div.onclick = () => { mediaViewerCtx.index = i; renderMediaViewer(); };
+    let thumb;
+    if (isImageType(ff.type)) thumb = `<img src="${ff.data}" alt="">`;
+    else if (isVideoType(ff.type)) thumb = `<video src="${ff.data}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
+    else thumb = `<div style="font-size:20px;">📄</div>`;
+    div.innerHTML = thumb;
+    strip.appendChild(div);
+  });
+}
+
+function mediaViewerNext() {
+  if (!mediaViewerCtx.files.length) return;
+  mediaViewerCtx.index = (mediaViewerCtx.index + 1) % mediaViewerCtx.files.length;
+  renderMediaViewer();
+}
+function mediaViewerPrev() {
+  if (!mediaViewerCtx.files.length) return;
+  mediaViewerCtx.index = (mediaViewerCtx.index - 1 + mediaViewerCtx.files.length) % mediaViewerCtx.files.length;
+  renderMediaViewer();
+}
+
+function downloadDataUrl(dataUrl, filename) {
+  const a = document.createElement('a');
+  a.href = dataUrl; a.download = filename || 'download';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+function mediaViewerDownload() {
+  const { files, index } = mediaViewerCtx;
+  if (!files[index]) return;
+  downloadDataUrl(files[index].data, files[index].name);
+}
+
+async function mediaViewerDownloadAll() {
+  const { files } = mediaViewerCtx;
+  if (!files.length) return;
+  if (typeof JSZip === 'undefined') {
+    files.forEach((f, i) => setTimeout(() => downloadDataUrl(f.data, f.name), i * 200));
+    return;
+  }
+  const zip = new JSZip();
+  files.forEach(f => {
+    const m = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
+    if (m) zip.file(f.name || 'file', m[2], { base64: true });
+  });
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  downloadDataUrl(url, 'media-bundle.zip');
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
 
 function onAssetCatChange() {
   const cat = document.getElementById('asset-cat').value;
@@ -1393,15 +1614,29 @@ function onH3PickChange() { const v = document.getElementById('asset-h3-pick').v
 
 document.addEventListener('change', e => {
   if (e.target && e.target.id === 'asset-file') {
-    const file = e.target.files[0];
-    if (!file) { pendingFileAttachment = null; return; }
-    if (file.size > 5 * 1024 * 1024) { showToast('File too large (max 5MB)', 'err'); e.target.value=''; return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      pendingFileAttachment = { name: file.name, data: reader.result };
-      document.getElementById('asset-file-preview').textContent = `✓ ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
-    };
-    reader.readAsDataURL(file);
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const MAX = 50 * 1024 * 1024;
+    let added = 0, skipped = 0;
+    let pending = files.length;
+    files.forEach(file => {
+      if (file.size > MAX) { skipped++; if (--pending === 0) finalize(); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        pendingFiles.push({ name: file.name, type: file.type || guessMimeFromDataUrl(reader.result), data: reader.result });
+        added++;
+        if (--pending === 0) finalize();
+      };
+      reader.onerror = () => { skipped++; if (--pending === 0) finalize(); };
+      reader.readAsDataURL(file);
+    });
+    function finalize() {
+      renderAssetFileList();
+      const msg = `✓ ${added} added` + (skipped ? ` · ${skipped} skipped (>50MB)` : '');
+      document.getElementById('asset-file-preview').textContent = `${pendingFiles.length} file(s) attached · ${msg}`;
+      e.target.value = '';
+      if (skipped) showToast(`${skipped} file(s) skipped — over 50MB`, 'warn');
+    }
   }
 });
 
@@ -1421,8 +1656,9 @@ function saveAssetFromModal() {
     imagePrompt: document.getElementById('asset-prompt').value.trim(),
     link: document.getElementById('asset-link').value.trim(),
     scheduledDate: document.getElementById('asset-date').value,
-    fileName: pendingFileAttachment ? pendingFileAttachment.name : (editingAssetId ? (camp.assets.find(x=>x.id===editingAssetId)?.fileName || '') : ''),
-    fileData: pendingFileAttachment ? pendingFileAttachment.data : (editingAssetId ? (camp.assets.find(x=>x.id===editingAssetId)?.fileData || '') : ''),
+    files: pendingFiles.map(f => ({ name:f.name, type:f.type, data:f.data })),
+    fileName: pendingFiles[0] ? pendingFiles[0].name : '',
+    fileData: pendingFiles[0] ? pendingFiles[0].data : '',
     createdAt: editingAssetId ? camp.assets.find(x=>x.id===editingAssetId).createdAt : new Date().toISOString()
   };
   if (editingAssetId) {
@@ -1734,9 +1970,15 @@ function revokeToken(token) {
 function applyClientModeRestrictions() {
   // Hide Access Control nav from clients
   document.getElementById('nav-access').classList.add('hidden');
-  // Disable buttons that mutate
+  // Disable buttons that mutate — but keep modal action buttons (confirm/media viewer) usable
+  const safeContainers = ['confirmModal','mediaModal','assetModal'];
   document.querySelectorAll('.btn.accent, .btn.gold, .btn.primary').forEach(b => {
     if (b.id === 'finalizeHandoffBtn' || b.textContent.includes('Cancel')) return;
+    if (b.dataset.alwaysOn === '1') return;
+    const inSafe = safeContainers.some(id => {
+      const c = document.getElementById(id); return c && c.contains(b);
+    });
+    if (inSafe) return;
     b.disabled = true; b.style.opacity = '0.4'; b.style.cursor = 'not-allowed';
   });
 }
@@ -1797,7 +2039,7 @@ function runChecklist() {
     <div class="bundle-file indent">final-report.pdf</div>
     <div class="bundle-file indent">README.html</div>
     <div class="bundle-file indent">access-token.txt (1:1 client view)</div>
-    <div class="bundle-folder indent">attachments/ (${camp.assets.filter(a=>a.fileData).length} files)</div>
+    <div class="bundle-folder indent">attachments/ (${camp.assets.reduce((n,a)=>n+((a.files&&a.files.length)||(a.fileData?1:0)),0)} files)</div>
   `;
 }
 
@@ -1945,12 +2187,13 @@ async function buildHandoffBundle() {
   // Attachments
   const attach = folder.folder('attachments');
   let attachCount = 0;
-  for (const a of camp.assets) {
-    if (a.fileData) {
-      const m = a.fileData.match(/^data:([^;]+);base64,(.+)$/);
-      if (m) { attach.file(`${a.id}_${a.fileName||'file'}`, m[2], { base64: true }); attachCount++; }
-    }
-  }
+  camp.assets.forEach(a => {
+    const list = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
+    list.forEach((f, i) => {
+      const m = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
+      if (m) { attach.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, m[2], { base64: true }); attachCount++; }
+    });
+  });
   if (attachCount === 0) attach.file('.placeholder', 'No file attachments in this campaign');
 
   return zip;
