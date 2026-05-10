@@ -361,6 +361,17 @@
   .info-card-meta { font-size:11px; color:var(--muted); margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); white-space:pre-wrap; font-family:'Geist Mono',monospace; }
   .info-card-meta:empty { display:none; }
 
+  /* Reference link list */
+  .ref-link-list { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+  .ref-link-list:empty { display:none; }
+  .ref-link-item { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--paper-2); border:1px solid var(--line); border-radius:5px; font-size:12px; }
+  .ref-link-item a { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--connect); }
+  .ref-link-item .rm { background:transparent; border:none; cursor:pointer; color:var(--err); font-size:14px; line-height:1; padding:2px 6px; border-radius:3px; }
+  .ref-link-item .rm:hover { background:var(--err); color:white; }
+  .ref-link-add-row { display:flex; gap:6px; }
+  .ref-link-add-row input { flex:1; }
+  .links-cell .file-chip.link-chip { background:var(--paper-2); color:var(--connect); border:1px solid var(--line); }
+
   /* Form helpers */
   .req { color:var(--err); font-weight:700; }
   .hint { display:block; font-size:11px; color:var(--muted); margin-top:6px; }
@@ -802,8 +813,13 @@
           <input type="hidden" id="asset-date" />
         </div>
         <div class="input-group">
-          <label>Reference Link (URL)</label>
-          <input type="url" id="asset-link" placeholder="https://..." />
+          <label>🔗 Reference Links (URL · ใส่ได้หลาย link)</label>
+          <div id="asset-links-list" class="ref-link-list"></div>
+          <div class="ref-link-add-row">
+            <input type="url" id="asset-link-input" placeholder="https://... แล้วกด Enter หรือ +" />
+            <button type="button" class="btn sm" onclick="addAssetLink()">+ Add</button>
+          </div>
+          <input type="hidden" id="asset-link" />
         </div>
       </div>
 
@@ -1139,6 +1155,7 @@ let confirmCallback = null;
 let editingAssetId = null;
 let pendingFileAttachment = null; // legacy, unused
 let pendingFiles = []; // [{name,type,data(base64 dataURL)}]
+let pendingLinks = []; // [string]
 let mediaViewerCtx = { assetId: null, files: [], index: 0 };
 let calendarDate = new Date();
 
@@ -1492,7 +1509,9 @@ function normalizeAsset(a) {
   if ((!files.length) && a.fileData) {
     files.push({ name: a.fileName || 'file', type: guessMimeFromDataUrl(a.fileData), data: a.fileData });
   }
-  return { ...a, files };
+  let links = Array.isArray(a.links) ? a.links.slice() : [];
+  if (!links.length && a.link) links.push(a.link);
+  return { ...a, files, links };
 }
 
 function guessMimeFromDataUrl(d) {
@@ -1621,8 +1640,9 @@ function renderAssets() {
       if (other > 0) parts.push(`${other} 📄`);
       mediaChip = `<button class="media-count-chip" onclick="openMediaViewer('${a.id}')" title="View / Download media">📎 ${parts.join(' · ') || fileCount + ' files'}</button>`;
     }
-    const linksHTML = (a.link ? `<a href="${escapeHtml(a.link)}" target="_blank">🔗 ${truncate(a.link, 40)}</a>` : '')
-                    + mediaChip;
+    const linkArr = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
+    const linksMarkup = linkArr.map((u, i) => `<a href="${escapeHtml(u)}" target="_blank" class="file-chip link-chip" title="${escapeHtml(u)}">🔗 ${linkArr.length > 1 ? (i+1) + '. ' : ''}${escapeHtml(truncate(u, 36))}</a>`).join('');
+    const linksHTML = linksMarkup + mediaChip;
     tr.innerHTML = `
       <td><span class="cat-pill ${a.catClass}">${escapeHtml(a.catLabel || a.catClass.toUpperCase())}</span>${sched ? '<br>'+sched : ''}</td>
       <td class="topic-cell">
@@ -1789,14 +1809,17 @@ function openAddAssetModal() {
   if (getCurrentCampaign().status === 'handed-off') { showToast('Re-open campaign first', 'warn'); return; }
   editingAssetId = null;
   pendingFiles = [];
+  pendingLinks = [];
   document.getElementById('asset-modal-title').textContent = 'Add New Asset';
   ['asset-h2','asset-h3','asset-prompt','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('asset-link-input').value = '';
   syncDateTrigger('asset-date');
   document.getElementById('asset-cat').value = 'catch';
   document.getElementById('asset-type').value = 'image';
   document.getElementById('asset-file').value = '';
   document.getElementById('asset-file-preview').textContent = '';
   renderAssetFileList();
+  renderAssetLinksList();
   onAssetCatChange();
   document.getElementById('assetModal').classList.add('show');
 }
@@ -1807,16 +1830,19 @@ function editAsset(id) {
   if (!a) return;
   editingAssetId = id;
   pendingFiles = (a.files || []).map(f => ({ name:f.name, type:f.type, data:f.data }));
+  pendingLinks = (a.links && a.links.length) ? a.links.slice() : (a.link ? [a.link] : []);
   document.getElementById('asset-modal-title').textContent = 'Edit Asset';
   document.getElementById('asset-cat').value = a.catClass;
   document.getElementById('asset-type').value = a.assetType || 'image';
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
-  document.getElementById('asset-link').value = a.link || '';
+  document.getElementById('asset-link').value = pendingLinks[0] || '';
+  document.getElementById('asset-link-input').value = '';
   document.getElementById('asset-date').value = a.scheduledDate || '';
   syncDateTrigger('asset-date');
   document.getElementById('asset-file').value = '';
   document.getElementById('asset-file-preview').textContent = pendingFiles.length ? `${pendingFiles.length} file(s) attached` : '';
   renderAssetFileList();
+  renderAssetLinksList();
   onAssetCatChange();
   document.getElementById('asset-h2').value = a.h2 || '';
   document.getElementById('asset-h3').value = a.h3 || '';
@@ -1825,7 +1851,43 @@ function editAsset(id) {
   document.getElementById('assetModal').classList.add('show');
 }
 
-function closeAssetModal() { document.getElementById('assetModal').classList.remove('show'); editingAssetId = null; pendingFiles = []; }
+function closeAssetModal() { document.getElementById('assetModal').classList.remove('show'); editingAssetId = null; pendingFiles = []; pendingLinks = []; }
+
+function renderAssetLinksList() {
+  const wrap = document.getElementById('asset-links-list');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  pendingLinks.forEach((url, i) => {
+    const div = document.createElement('div');
+    div.className = 'ref-link-item';
+    div.innerHTML = `<span style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted-2);">${i+1}.</span><a href="${escapeHtml(url)}" target="_blank">${escapeHtml(url)}</a><button type="button" class="rm" title="Remove" onclick="removeAssetLink(${i})">×</button>`;
+    wrap.appendChild(div);
+  });
+}
+
+function addAssetLink() {
+  const input = document.getElementById('asset-link-input');
+  let v = (input.value || '').trim();
+  if (!v) return;
+  if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+  if (pendingLinks.includes(v)) { showToast('link นี้ถูกเพิ่มไว้แล้ว', 'warn'); input.value = ''; return; }
+  pendingLinks.push(v);
+  input.value = '';
+  document.getElementById('asset-link').value = pendingLinks[0] || '';
+  renderAssetLinksList();
+}
+
+function removeAssetLink(i) {
+  pendingLinks.splice(i, 1);
+  document.getElementById('asset-link').value = pendingLinks[0] || '';
+  renderAssetLinksList();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target && e.target.id === 'asset-link-input' && e.key === 'Enter') {
+    e.preventDefault(); addAssetLink();
+  }
+});
 
 function renderAssetFileList() {
   const wrap = document.getElementById('asset-file-list');
@@ -2029,7 +2091,8 @@ function saveAssetFromModal() {
     assetType: document.getElementById('asset-type').value,
     h2, h3,
     imagePrompt: document.getElementById('asset-prompt').value.trim(),
-    link: document.getElementById('asset-link').value.trim(),
+    link: pendingLinks[0] || '',
+    links: pendingLinks.slice(),
     scheduledDate: document.getElementById('asset-date').value,
     files: pendingFiles.map(f => ({ name:f.name, type:f.type, data:f.data })),
     fileName: pendingFiles[0] ? pendingFiles[0].name : '',
@@ -2519,7 +2582,11 @@ function generatePDFReport() {
         doc.text(lines, margin, y); y += lines.length * 4.5;
       }
       if (a.scheduledDate) { doc.setFontSize(8); doc.setTextColor(184,146,72); doc.text(`Scheduled: ${a.scheduledDate}`, margin, y); y += 4; }
-      if (a.link) { doc.setFontSize(8); doc.setTextColor(30,79,168); doc.text(`Link: ${truncate(a.link, 80)}`, margin, y); y += 4; }
+      const allLinks = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
+      allLinks.forEach((u, idx) => {
+        doc.setFontSize(8); doc.setTextColor(30,79,168);
+        doc.text(`Link${allLinks.length > 1 ? ' ' + (idx+1) : ''}: ${truncate(u, 80)}`, margin, y); y += 4;
+      });
       doc.setFontSize(8); doc.setTextColor(150,146,138);
       doc.text(`Created: ${new Date(a.createdAt||a.date||Date.now()).toLocaleString('en-US')}`, margin, y); y += 8;
     });
@@ -2726,13 +2793,14 @@ function csvEscape(v) {
   return s;
 }
 function buildAssetsCSV(camp) {
-  const headers = ['id','category','h2','h3','asset_type','image_prompt','scheduled_date','link','file_count','created_at'];
+  const headers = ['id','category','h2','h3','asset_type','image_prompt','scheduled_date','links','link_count','file_count','created_at'];
   const lines = [headers.join(',')];
   camp.assets.forEach(a => {
     const fileCount = (a.files && a.files.length) || (a.fileData ? 1 : 0);
+    const links = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
     lines.push([
       a.id, a.catLabel || a.catClass, a.h2, a.h3, a.assetType,
-      a.imagePrompt, a.scheduledDate, a.link, fileCount, a.createdAt
+      a.imagePrompt, a.scheduledDate, links.join(' | '), links.length, fileCount, a.createdAt
     ].map(csvEscape).join(','));
   });
   // BOM for Excel UTF-8
