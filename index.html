@@ -980,15 +980,13 @@
 
       <div class="input-group">
         <label>📅 Campaign Period · ช่วงเวลาแคมเปญ</label>
-        <button type="button" class="date-trigger empty" id="editStartISO-editEndISO-trigger" onclick="openDateRangePicker('editStartISO','editEndISO')">
-          <span id="editStartISO-editEndISO-label">— เลือกช่วงวัน (เริ่ม → สิ้นสุด) —</span>
-          <span class="ico">📅</span>
-        </button>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <div><small class="hint-label">Start</small><input type="text" id="editStart" placeholder="e.g. May 2026" /></div>
+          <div><small class="hint-label">End</small><input type="text" id="editEnd" placeholder="e.g. Aug 2026" /></div>
+        </div>
         <input type="hidden" id="editStartISO" />
         <input type="hidden" id="editEndISO" />
-        <input type="hidden" id="editStart" />
-        <input type="hidden" id="editEnd" />
-        <small class="hint" id="editPeriodSummary">เลือกช่วงวันบนปฏิทิน — ระบบจะคำนวณช่วงและจำนวนวันให้อัตโนมัติ</small>
+        <small class="hint">พิมพ์ข้อความได้ตามต้องการ เช่น "May 2026", "Q2 2026", "Mid-May → End of Aug"</small>
       </div>
 
       <div class="grid-2">
@@ -3260,29 +3258,13 @@ function openEditModal() {
   document.getElementById('editStakeholders').value = camp.stakeholders || '';
   document.getElementById('editTags').value = (camp.tags || []).join(', ');
   document.getElementById('editStatus').value = camp.status === 'handed-off' ? 'completed' : camp.status;
-  syncDateRangeTrigger('editStartISO','editEndISO');
-  updateEditPeriodSummary();
   updateEditDescCount();
   document.getElementById('editInfoModal').classList.add('show');
 }
 function closeEditModal() { document.getElementById('editInfoModal').classList.remove('show'); }
 
-function updateEditPeriodSummary() {
-  const s = document.getElementById('editStartISO').value;
-  const e = document.getElementById('editEndISO').value;
-  const el = document.getElementById('editPeriodSummary');
-  // Always auto-derive period text from ISO dates
-  document.getElementById('editStart').value = s ? monthYearLabel(s) : '';
-  document.getElementById('editEnd').value = e ? monthYearLabel(e) : '';
-  if (s && e) {
-    const days = Math.round((new Date(e) - new Date(s)) / 86400000) + 1;
-    el.textContent = `🗓 ${fmtDate(s)} → ${fmtDate(e)} · ${days} วัน · จะแสดงเป็น "${monthYearLabel(s)} → ${monthYearLabel(e)}"`;
-  } else if (s) {
-    el.textContent = `🗓 เริ่ม ${fmtDate(s)} — ยังไม่เลือกวันสิ้นสุด`;
-  } else {
-    el.textContent = 'เลือกช่วงวันบนปฏิทิน — ระบบจะคำนวณช่วงและจำนวนวันให้อัตโนมัติ';
-  }
-}
+// Kept for backwards-compat (event listener calls it); period now manual text
+function updateEditPeriodSummary() { /* no-op: period is manual text now */ }
 
 function monthYearLabel(ds) {
   const d = parseISODateLocal(ds);
