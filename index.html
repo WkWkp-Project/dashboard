@@ -809,6 +809,7 @@
         <div class="hero-actions">
           <button class="btn" onclick="forceSave()">☁️ Sync now</button>
           <button class="btn" onclick="downloadManualBackup()">💾 Manual backup</button>
+          <button class="btn" onclick="restoreFromLocalBackup()" title="กู้ข้อมูลจาก backup ที่เก็บอัตโนมัติในเครื่อง">↩ Restore local backup</button>
           <button class="btn gold" onclick="doExport('full-snapshot')">📦 Full Snapshot ZIP</button>
         </div>
       </div>
@@ -1518,31 +1519,53 @@ function handleRealGoogleLogin() {
   if (CLIENT_ID.includes('YOUR_CLIENT_ID')) { showToast('CLIENT_ID not configured. Use Offline Import instead.', 'err'); return; }
   if (!tokenClient) { showToast('Google services not loaded yet.', 'warn'); return; }
   _isInitialLogin = true;
-  tokenClient.requestAccessToken({ prompt: 'consent' });
+  // No prompt arg → GIS shows the account picker and re-asks consent ONLY
+  // if the required scopes aren't already granted (avoids re-consenting every login).
+  tokenClient.requestAccessToken();
 }
 
 async function onLoginSuccess() {
   isOfflineMode = false;
   userRole = 'internal';
-  document.body.classList.remove('client-mode');
+  document.body.classList.remove('client-mode', 'operator-mode');
+  _currentTokenLogin = null;
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
   setSaveStatus('idle', 'Connected');
+  // 1) Profile — failure here must NOT block DB loading
+  let userEmail = '';
   try {
     const userResp = await authFetch('https://www.googleapis.com/oauth2/v3/userinfo');
-    const user = await userResp.json();
-    document.getElementById('sb-name').textContent = user.name;
-    document.getElementById('sb-avatar').textContent = (user.given_name || user.name)[0];
-    document.getElementById('tb-name').textContent = user.name;
-    document.getElementById('tb-avatar').textContent = (user.given_name || user.name)[0];
-    document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
-    document.getElementById('sb-mode-tag').style.color = "var(--connect)";
-    logAction('SYSTEM', `User authenticated: ${user.email}`);
-    saveSession();
-    await syncDatabaseFromDrive();
-    if (_pendingTokenLogin) { const t = _pendingTokenLogin; _pendingTokenLogin = null; applyTokenLogin(t); }
-    if (pendingForceSaveAfterLogin) { pendingForceSaveAfterLogin = false; setTimeout(() => saveToDrive(), 200); }
-  } catch(e) { showToast('Profile load failed', 'err'); console.error(e); }
+    if (userResp.ok) {
+      const user = await userResp.json();
+      userEmail = user.email || '';
+      const name = user.name || user.email || 'Wakuwaku Internal';
+      const initial = (user.given_name || name)[0] || 'W';
+      document.getElementById('sb-name').textContent = name;
+      document.getElementById('sb-avatar').textContent = initial;
+      document.getElementById('tb-name').textContent = name;
+      document.getElementById('tb-avatar').textContent = initial;
+    } else { throw new Error('userinfo HTTP ' + userResp.status); }
+  } catch(e) {
+    console.warn('Profile load failed:', e);
+    document.getElementById('sb-name').textContent = 'Wakuwaku Internal';
+    document.getElementById('sb-avatar').textContent = 'W';
+    document.getElementById('tb-name').textContent = 'Wakuwaku Internal';
+    document.getElementById('tb-avatar').textContent = 'W';
+    showToast('โหลดโปรไฟล์ไม่ได้ (ยังเข้าระบบได้ปกติ)', 'warn');
+  }
+  document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
+  document.getElementById('sb-mode-tag').style.color = "var(--connect)";
+  logAction('SYSTEM', `User authenticated${userEmail ? ': ' + userEmail : ''}`);
+  saveSession();
+  // 2) Load DB — failure here must NOT throw away the session
+  try { await syncDatabaseFromDrive(); }
+  catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
+  // 3) If Drive had no DB but a local backup exists, offer to restore it
+  maybeOfferLocalRestore();
+  // 4) Pending follow-ups
+  if (_pendingTokenLogin) { const t = _pendingTokenLogin; _pendingTokenLogin = null; applyTokenLogin(t); }
+  if (pendingForceSaveAfterLogin) { pendingForceSaveAfterLogin = false; setTimeout(() => saveToDrive().catch(()=>{}), 200); }
 }
 
 // ============================================================================
@@ -1558,7 +1581,7 @@ function loginWithToken() {
   _pendingTokenLogin = token;
   _isInitialLogin = true;
   showToast('กำลังเข้าระบบผ่าน Google เพื่อตรวจสอบ token...');
-  tokenClient.requestAccessToken({ prompt: 'consent' });
+  tokenClient.requestAccessToken();
 }
 function applyTokenLogin(token) {
   const match = (accessTokens || []).find(x => x.token === token);
@@ -1592,7 +1615,62 @@ function applyTokenLogin(token) {
 // ============================================================================
 const SESSION_KEY = 'wkw_session_v1';
 const SESSION_DATA_KEY = 'wkw_offline_data_v1';
+const LOCAL_BACKUP_KEY = 'wkw_local_backup_v1'; // durable: survives logout & browser close
 let pendingForceSaveAfterLogin = false;
+
+// Durable local-disk backup of the database (so data isn't lost when Drive
+// is unavailable and the user logs out). Strips media if it doesn't fit.
+function persistLocalBackup() {
+  try {
+    if (userRole === 'client') return; // clients view a bundle; nothing to back up
+    const payload = buildDatabasePayload();
+    const meta = { ts: Date.now(), by: currentUserName(), databaseFileId };
+    try {
+      localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({ ...meta, db: payload }));
+    } catch(e) {
+      // Too big — strip embedded media base64 (offloaded media survives via driveFileId)
+      const lite = JSON.parse(JSON.stringify(payload));
+      (lite.campaigns || []).forEach(c => (c.assets || []).forEach(a => (a.files || []).forEach(f => { if (f.data) { f._wasEmbedded = true; delete f.data; } })));
+      try { localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({ ...meta, stripped: true, db: lite })); }
+      catch(e2) { console.warn('local backup not stored (quota):', e2); }
+    }
+  } catch(e) { console.warn('persistLocalBackup failed:', e); }
+}
+function readLocalBackup() {
+  try { const raw = localStorage.getItem(LOCAL_BACKUP_KEY); return raw ? JSON.parse(raw) : null; }
+  catch(e) { return null; }
+}
+function clearLocalBackup() { try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {} }
+
+// Offered after login when Drive returned no DB file but we have a local copy.
+function maybeOfferLocalRestore() {
+  if (userRole === 'client' || isOfflineMode) return;
+  const bk = readLocalBackup();
+  if (!bk || !bk.db || !Array.isArray(bk.db.campaigns)) return;
+  // Only offer if Drive currently shows nothing meaningful (no fileId or 0/1 empty campaign)
+  const driveEmpty = !databaseFileId || (campaigns.length <= 1 && campaigns.every(c => (c.assets || []).length === 0 && (c.log || []).length <= 1));
+  const backupHasData = bk.db.campaigns.some(c => (c.assets || []).length > 0 || (c.log || []).length > 1) || bk.db.campaigns.length > 1;
+  if (!driveEmpty || !backupHasData) return;
+  const when = new Date(bk.ts).toLocaleString();
+  showConfirm('💾 พบ backup ในเครื่อง',
+    `Drive ไม่มีข้อมูล แต่เครื่องนี้มี backup จาก ${when} (โดย ${bk.by || '?'})${bk.stripped ? '\n\n⚠️ backup นี้ไม่มีไฟล์สื่อที่ฝัง (offloaded media ยังอยู่)' : ''}\n\nกู้คืนข้อมูลจาก backup นี้?`,
+    () => { restoreFromLocalBackup(); });
+}
+function restoreFromLocalBackup() {
+  const bk = readLocalBackup();
+  if (!bk || !bk.db) { showToast('ไม่พบ backup ในเครื่อง', 'warn'); return; }
+  const db = bk.db;
+  campaigns = (db.campaigns || []).map(normalizeCampaign);
+  currentCampaignId = (db.currentCampaignId && campaigns.find(c => c.id === db.currentCampaignId)) ? db.currentCampaignId : (campaigns[0] && campaigns[0].id);
+  accessTokens = db.accessTokens || [];
+  if (db.hub) hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+  if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
+  renderEverything();
+  logAction('RESTORE', `Restored from local backup (${new Date(bk.ts).toLocaleString()})`);
+  showToast('✓ กู้คืนจาก backup ในเครื่องแล้ว · กด Backup to Cloud เพื่อ sync', 'ok');
+  pendingChanges = true;
+  scheduleSave();
+}
 
 function saveSession() {
   try {
@@ -1742,6 +1820,7 @@ async function authFetch(url, options = {}, _retried) {
 // ============================================================================
 function scheduleSave() {
   pendingChanges = true;
+  try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
   setSaveStatus('saving', 'Saving in 2.5s...');
@@ -1843,11 +1922,13 @@ async function saveToDrive() {
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
+    persistLocalBackup();
     // Make sure the file lives inside the configured Hub folder
     if (hub && hub.driveFolderId) ensureDBInHubFolder(wasNewFile);
     if (typeof renderDataHub === 'function' && document.getElementById('view-hub')?.classList.contains('active')) renderDataHub();
   } catch(e) {
     console.error('Save error:', e);
+    persistLocalBackup(); // keep a durable copy even though Drive failed
     _consecutiveSaveFailures++;
     _lastSaveError = e;
     if (e.driveCause === 'api-disabled') {
@@ -2849,6 +2930,8 @@ function confirmDeleteAsset(id) {
 }
 
 function confirmLogout() {
+  // Always keep a durable local copy before any logout path
+  try { persistLocalBackup(); } catch(e) {}
   // Clients / offline: exit immediately — no Drive to save to, no friction
   if (userRole === 'client' || isOfflineMode || !accessToken) {
     showToast('ออกจากระบบ...');
@@ -2856,9 +2939,16 @@ function confirmLogout() {
     return;
   }
   if (pendingChanges) {
-    showConfirm('Unsaved changes', 'You have unsaved changes. Save before logging out?', async () => {
-      try { await saveToDrive(); } catch(e) {}
-      performLogout();
+    showConfirm('Unsaved changes', 'มีการแก้ไขที่ยังไม่ได้เซฟ — เซฟขึ้น Drive ก่อนออกจากระบบ?', async () => {
+      try {
+        await saveToDrive();
+        performLogout();
+      } catch(e) {
+        // Save failed — DO NOT proceed and lose data. Offer manual backup instead.
+        showConfirm('⚠️ เซฟขึ้น Drive ไม่สำเร็จ — อย่าเพิ่งออก!',
+          `เหตุผล: ${e.message || e}\n\nข้อมูลถูกสำรองไว้ในเครื่องแล้ว (local backup) แต่แนะนำให้กด "ยืนยัน" เพื่อ download ไฟล์ JSON เก็บไว้ก่อน · จากนั้นค่อย logout เองอีกครั้ง`,
+          () => { try { downloadManualBackup(); } catch(e2) {} });
+      }
     });
   } else {
     showConfirm('Logout', 'ออกจากระบบ Wakuwaku?', () => performLogout());
@@ -2866,18 +2956,22 @@ function confirmLogout() {
 }
 
 function performLogout() {
+  try { persistLocalBackup(); } catch(e) {}
   try {
     if (accessToken && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
       google.accounts.oauth2.revoke(accessToken, () => {});
     }
   } catch(e) { /* ignore */ }
   clearSession();
+  // NOTE: deliberately keep LOCAL_BACKUP_KEY so data survives logout and can
+  // be offered for restore on next login.
   accessToken = null;
   databaseFileId = null;
   pendingChanges = false;
   userRole = 'internal';
   isOfflineMode = false;
-  document.body.classList.remove('client-mode');
+  _currentTokenLogin = null;
+  document.body.classList.remove('client-mode', 'operator-mode');
   location.reload();
 }
 
@@ -4903,8 +4997,21 @@ window.__runTests = async function() {
    'getFileDataUrl','fileToBase64','dataUrlToBlob','blobToDataUrl','fileSrcNow','fileIsOnDrive','loadCurrentMediaFile',
    'applyRoleRestrictions','blockIfNotInternal','loginWithToken','applyTokenLogin','takeSnapshot','revertToSnapshot',
    'clearCurrentCampaign','manualSnapshot','openSnapshotsModal','renderSnapshotsModal','showTypedConfirm','onConfirmTypedInput',
-   'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName'
+   'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName',
+   'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
+  t('LOCAL_BACKUP_KEY defined', () => ok(typeof LOCAL_BACKUP_KEY === 'string' && LOCAL_BACKUP_KEY.length));
+  t('persistLocalBackup writes & readLocalBackup reads', () => {
+    persistLocalBackup();
+    const bk = readLocalBackup();
+    ok(bk && bk.db && Array.isArray(bk.db.campaigns), 'backup has db.campaigns');
+    ok(typeof bk.ts === 'number');
+  });
+  t('handleRealGoogleLogin uses no forced consent prompt', () => {
+    // Source-level guard: the function body should call requestAccessToken() without {prompt:'consent'}
+    const src = handleRealGoogleLogin.toString();
+    ok(!/prompt:\s*['"]consent['"]/.test(src), 'should not force consent every login');
+  });
   t('SCOPES includes full drive scope', () => ok(/auth\/drive(\s|$)/.test(SCOPES), 'SCOPES = ' + SCOPES));
 
   // ---- Date picker round-trip ----
