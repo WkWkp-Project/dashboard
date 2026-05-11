@@ -797,6 +797,19 @@
       <div class="hub-grid" id="hub-stats"></div>
 
       <div class="section-head">
+        <div class="section-num">⓪</div>
+        <div class="section-title">Drive Connection · สถานะการเชื่อมต่อ</div>
+      </div>
+      <div class="hub-card">
+        <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
+          <label>🔌 Test connection</label>
+          <pre id="hub-drive-test-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">กดปุ่มเพื่อทดสอบว่า Drive API ใช้งานได้หรือไม่</pre>
+          <button class="btn sm" onclick="testDriveConnection()">Test now</button>
+        </div>
+        <small class="hint">ถ้าขึ้น <strong>"Drive API ปิดอยู่"</strong> = เจ้าของ Google Cloud project ต้องเข้าไปกด Enable ที่ลิงก์ที่แสดง (รอ 1–3 นาที) · ระหว่างนั้นใช้ <strong>Manual Backup</strong> / <strong>Full Snapshot</strong> ได้เลย ไม่ต้องพึ่ง Drive</small>
+      </div>
+
+      <div class="section-head">
         <div class="section-num">①</div>
         <div class="section-title">Master Hub Folder · จุดเก็บข้อมูลกลาง</div>
         <div class="section-meta" id="hub-status-pill"></div>
@@ -808,7 +821,11 @@
           <button class="btn sm" onclick="saveHubConfig()">Save</button>
           <button class="btn sm" onclick="openHubFolder()">Open ↗</button>
         </div>
-        <small class="hint">โฟลเดอร์ Google Drive ที่เก็บทุกอย่างของระบบ — Database, Backup, Attachments. แชร์โฟลเดอร์นี้กับทีมเพื่อ collaborate</small>
+        <small class="hint">วาง URL โฟลเดอร์ Google Drive — ระบบจะดึง folder ID อัตโนมัติ แล้ว <strong>สร้างไฟล์ database ในโฟลเดอร์นี้</strong> (การเซฟครั้งถัดไปจะ overwrite ไฟล์เดิมเสมอ) · ต้องแชร์โฟลเดอร์ให้บัญชีที่ login แบบ Editor</small>
+        <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
+          <label>🆔 Folder ID</label>
+          <code id="hub-folder-id-display" style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">—</code>
+        </div>
         <div class="hub-row" style="margin-top:14px;">
           <label>💾 Backup Folder URL</label>
           <input type="url" id="hubBackupFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
@@ -1306,7 +1323,18 @@ let campaigns = [
 ];
 let currentCampaignId = campaigns[0].id;
 let accessTokens = []; // [{token, name, role, campaignIds:[], expiresAt|null, createdAt}]
-let hub = { folderUrl: '', backupFolderUrl: '', notes: '', updatedAt: '' };
+let hub = { folderUrl: '', driveFolderId: '', backupFolderUrl: '', notes: '', updatedAt: '' };
+// Parse a Drive folder ID out of a share URL or accept a raw ID
+function parseDriveFolderId(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  let m = s.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  m = s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(s)) return s; // looks like a bare ID
+  return '';
+}
 let manualBackupHistory = []; // [{ts, filename, sizeKB}]
 let editingTokenId = null;
 
@@ -1668,7 +1696,7 @@ async function saveToDrive() {
   try {
     const dbData = buildDatabasePayload();
     const jsonBody = JSON.stringify(dbData);
-    const metadata = { name: DB_FILENAME, mimeType: 'application/json' };
+    const metadata = dbFileMetadata();
 
     let result;
     if (jsonBody.length > DRIVE_MULTIPART_LIMIT) {
@@ -1682,31 +1710,50 @@ async function saveToDrive() {
     lastSaveTime = new Date();
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
+    _lastSaveError = null;
     setSaveStatus('saved', 'All changes saved');
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
+    if (typeof renderDataHub === 'function' && document.getElementById('view-hub')?.classList.contains('active')) renderDataHub();
   } catch(e) {
     console.error('Save error:', e);
     _consecutiveSaveFailures++;
-    setSaveStatus('error', `Save failed (${_consecutiveSaveFailures}x) · click for manual backup`);
-    // After 2 consecutive failures, auto-prompt manual backup so the user
-    // never loses work due to Drive being unreachable.
-    if (_consecutiveSaveFailures >= 2) {
-      offerManualBackup(e);
+    _lastSaveError = e;
+    if (e.driveCause === 'api-disabled') {
+      setSaveStatus('error', 'Drive API disabled · click for setup');
+      offerManualBackup(e); // dialog has the enable-API link
+    } else {
+      setSaveStatus('error', `Save failed (${_consecutiveSaveFailures}x) · click for backup`);
+      if (_consecutiveSaveFailures >= 2) offerManualBackup(e);
     }
     throw e;
   } finally {
     isSaving = false;
   }
 }
+let _lastSaveError = null;
 
 function offerManualBackup(reason) {
-  showConfirm(
-    '⚠️ Drive ยังบันทึกไม่สำเร็จ',
-    `Cloud save ล้มเหลว ${_consecutiveSaveFailures} ครั้งติด${reason ? '\n\nเหตุผล: ' + (reason.message || reason) : ''}\n\nบันทึกเป็นไฟล์ JSON ลงเครื่องไว้ก่อน (ปลอดภัย 100%) · นำกลับเข้าระบบได้ตอนหลังด้วย Quick Handoff Viewer`,
-    () => downloadManualBackup()
-  );
+  const cause = reason && reason.driveCause;
+  let title = '⚠️ Drive ยังบันทึกไม่สำเร็จ';
+  let body = `Cloud save ล้มเหลว ${_consecutiveSaveFailures} ครั้งติด`;
+  if (reason) body += `\n\nเหตุผล: ${reason.message || reason}`;
+  if (cause === 'api-disabled') {
+    title = '🔧 ต้องเปิด Google Drive API ก่อน';
+    body = `Google Cloud project นี้ยังไม่ได้เปิด Drive API จึงเซฟขึ้น Drive ไม่ได้\n\nวิธีแก้ (เจ้าของ project ทำ):\n1. เปิดลิงก์: ${reason.driveHelpUrl}\n2. กด "Enable" / "เปิดใช้งาน"\n3. รอ 1–3 นาที แล้วกลับมากด Backup อีกครั้ง\n\nระหว่างนี้: บันทึกเป็นไฟล์ JSON ลงเครื่องไว้ก่อน (ปลอดภัย 100%) — นำกลับเข้าระบบได้ตอนหลังด้วย Quick Handoff Viewer`;
+  } else if (cause === 'insufficient-scope') {
+    body += `\n\nสิทธิ์ไม่พอ — ลอง Logout แล้ว Login ใหม่ เพื่อให้ระบบขอสิทธิ์ Drive อีกครั้ง\n\nระหว่างนี้: บันทึก JSON ลงเครื่องไว้ก่อน`;
+  } else if (cause === 'token-expired') {
+    body += `\n\nSession หมดอายุ — กด Backup to Cloud อีกครั้ง ระบบจะ refresh token ให้\n\nระหว่างนี้: บันทึก JSON ลงเครื่องไว้ก่อน`;
+  } else {
+    body += `\n\nบันทึกเป็นไฟล์ JSON ลงเครื่องไว้ก่อน (ปลอดภัย 100%) · นำกลับเข้าระบบได้ตอนหลังด้วย Quick Handoff Viewer`;
+  }
+  // Open the help URL alongside the manual backup, if any
+  showConfirm(title, body, () => {
+    if (reason && reason.driveHelpUrl) { try { window.open(reason.driveHelpUrl, '_blank'); } catch(e) {} }
+    downloadManualBackup();
+  });
 }
 
 function downloadManualBackup() {
@@ -1725,6 +1772,13 @@ function downloadManualBackup() {
   } catch(e) {
     showToast('Manual backup failed: ' + (e.message || 'unknown'), 'err');
   }
+}
+
+// Build create-metadata, optionally targeting the configured Hub folder
+function dbFileMetadata() {
+  const md = { name: DB_FILENAME, mimeType: 'application/json' };
+  if (!databaseFileId && hub && hub.driveFolderId) md.parents = [hub.driveFolderId];
+  return md;
 }
 
 // ---- multipart/related (small files) ----
@@ -1746,7 +1800,7 @@ async function driveMultipartUpload(metadata, jsonBody) {
     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
     body
   });
-  if (!resp.ok) throw new Error(await readDriveError(resp));
+  if (!resp.ok) throw await driveError(resp);
   return resp.json();
 }
 
@@ -1760,7 +1814,7 @@ async function driveResumableUpload(metadata, jsonBody) {
     headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' },
     body: JSON.stringify(metadata)
   });
-  if (!initResp.ok) throw new Error('Resumable init failed · ' + await readDriveError(initResp));
+  if (!initResp.ok) { const e = await driveError(initResp); e.message = 'Resumable init failed · ' + e.message; throw e; }
   const sessionUrl = initResp.headers.get('Location');
   if (!sessionUrl) throw new Error('Resumable session URL missing');
 
@@ -1770,20 +1824,50 @@ async function driveResumableUpload(metadata, jsonBody) {
     headers: { 'Content-Type': 'application/json; charset=UTF-8' },
     body: blob
   });
-  if (!putResp.ok) throw new Error('Resumable upload failed · ' + await readDriveError(putResp));
+  if (!putResp.ok) { const e = await driveError(putResp); e.message = 'Resumable upload failed · ' + e.message; throw e; }
   return putResp.json();
 }
 
-async function readDriveError(resp) {
+// Returns a structured Error with .driveCode / .driveStatus / .driveHelpUrl
+async function driveError(resp) {
   let text = '';
   try { text = await resp.text(); } catch(e) {}
-  let detail = '';
+  let code = '', message = '';
   try {
     const j = JSON.parse(text);
-    detail = (j.error && j.error.message) || '';
-  } catch(e) { detail = text.slice(0, 200); }
-  return `HTTP ${resp.status} ${resp.statusText}${detail ? ' · ' + detail : ''}`;
+    if (j.error) {
+      message = j.error.message || '';
+      const reasons = (j.error.errors || []).map(e => e.reason).filter(Boolean);
+      code = reasons[0] || j.error.status || '';
+    }
+  } catch(e) { message = text.slice(0, 300); }
+  const err = new Error(`HTTP ${resp.status} ${resp.statusText}${message ? ' · ' + message : ''}`);
+  err.driveStatus = resp.status;
+  err.driveCode = code;
+  err.driveMessage = message;
+  // Classify well-known causes
+  if (resp.status === 403 && /has not been used in project|accessNotConfigured|drive\.googleapis\.com/i.test(message)) {
+    err.driveCause = 'api-disabled';
+    const m = message.match(/project[=\s]+(\d+)/i);
+    const proj = m ? m[1] : '';
+    err.driveHelpUrl = proj
+      ? `https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=${proj}`
+      : 'https://console.developers.google.com/apis/api/drive.googleapis.com';
+  } else if (resp.status === 403 && /insufficient|permission|scope/i.test(message)) {
+    err.driveCause = 'insufficient-scope';
+  } else if (resp.status === 401) {
+    err.driveCause = 'token-expired';
+  } else if (resp.status === 404) {
+    err.driveCause = 'not-found';
+  } else if (resp.status === 429 || /rate|quota/i.test(message)) {
+    err.driveCause = 'rate-limited';
+  } else {
+    err.driveCause = 'unknown';
+  }
+  return err;
 }
+// Back-compat shim
+async function readDriveError(resp) { return (await driveError(resp)).message; }
 
 async function syncDatabaseFromDrive() {
   setSaveStatus('saving', 'Loading...');
@@ -1799,7 +1883,7 @@ async function syncDatabaseFromDrive() {
         currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
       }
       if (db.accessTokens) accessTokens = db.accessTokens;
-      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
       if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
       lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
       renderEverything();
@@ -1889,11 +1973,52 @@ function saveHubConfig() {
   hub.folderUrl = document.getElementById('hubFolderUrl').value.trim();
   hub.backupFolderUrl = document.getElementById('hubBackupFolderUrl').value.trim();
   hub.notes = document.getElementById('hubNotes').value.trim();
+  // Auto-derive Drive folder ID from the Hub folder URL so new DB files
+  // land inside it (PATCH/overwrite on later saves doesn't need parents).
+  const fid = parseDriveFolderId(hub.folderUrl);
+  hub.driveFolderId = fid || '';
   hub.updatedAt = new Date().toISOString();
-  logAction('UPDATE', 'Hub config updated');
-  showToast('✓ Hub saved');
+  logAction('UPDATE', 'Hub config updated' + (fid ? ` · folder ${fid.slice(0,12)}…` : ''));
+  showToast(fid ? `✓ Hub saved · ไฟล์ใหม่จะถูกสร้างในโฟลเดอร์นี้` : '✓ Hub saved');
+  scheduleSave();
   renderDataHub();
   renderHubSidebar();
+}
+
+// Lightweight Drive reachability test — reports the exact problem
+async function testDriveConnection() {
+  const out = document.getElementById('hub-drive-test-out');
+  if (out) out.textContent = '⏳ กำลังทดสอบ...';
+  if (!accessToken) {
+    if (out) out.innerHTML = '⚠ ยังไม่ได้ login — กด "Backup to Cloud" หรือ login ก่อน';
+    return;
+  }
+  try {
+    const resp = await authFetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota');
+    if (!resp.ok) {
+      const e = await driveError(resp);
+      let msg = `❌ ${e.message}`;
+      if (e.driveCause === 'api-disabled') msg = `❌ Drive API ปิดอยู่ในโปรเจกต์นี้\n→ เปิดที่: <a href="${e.driveHelpUrl}" target="_blank">${e.driveHelpUrl}</a>\nกด Enable แล้วรอ 1–3 นาที`;
+      else if (e.driveCause === 'insufficient-scope') msg = '❌ สิทธิ์ Drive ไม่พอ — Logout แล้ว Login ใหม่';
+      else if (e.driveCause === 'token-expired') msg = '❌ Session หมดอายุ — login ใหม่';
+      if (out) out.innerHTML = msg;
+      return;
+    }
+    const info = await resp.json();
+    const used = info.storageQuota ? fmtBytes(+info.storageQuota.usage || 0) : '?';
+    const limit = info.storageQuota && info.storageQuota.limit ? fmtBytes(+info.storageQuota.limit) : 'unlimited';
+    let folderNote = '';
+    if (hub.driveFolderId) {
+      try {
+        const fr = await authFetch(`https://www.googleapis.com/drive/v3/files/${hub.driveFolderId}?fields=id,name,mimeType`);
+        if (fr.ok) { const fj = await fr.json(); folderNote = `\n📁 Hub folder: "${fj.name}" — เข้าถึงได้ ✓`; }
+        else { const fe = await driveError(fr); folderNote = `\n📁 Hub folder: เข้าถึงไม่ได้ (${fe.driveStatus}) — ตรวจว่าแชร์ให้บัญชีนี้แล้ว`; }
+      } catch(e) { folderNote = '\n📁 Hub folder: ตรวจสอบไม่ได้'; }
+    }
+    if (out) out.innerHTML = `✓ Drive ใช้งานได้ · บัญชี ${escapeHtml((info.user && info.user.emailAddress) || '?')}\n💾 ใช้ไป ${used} / ${limit}${folderNote}`;
+  } catch(e) {
+    if (out) out.textContent = '❌ ' + (e.message || 'connection failed');
+  }
 }
 function openHubFolder() {
   if (hub.folderUrl) window.open(hub.folderUrl, '_blank');
@@ -1915,6 +2040,8 @@ function renderDataHub() {
   document.getElementById('hubFolderUrl').value = hub.folderUrl || '';
   document.getElementById('hubBackupFolderUrl').value = hub.backupFolderUrl || '';
   document.getElementById('hubNotes').value = hub.notes || '';
+  const fidEl = document.getElementById('hub-folder-id-display');
+  if (fidEl) fidEl.textContent = hub.driveFolderId || (hub.folderUrl ? '(URL ไม่ใช่รูปแบบโฟลเดอร์ที่รู้จัก)' : '—');
   const st = dbStats();
   // Stats grid
   document.getElementById('hub-stats').innerHTML = [
@@ -3557,7 +3684,7 @@ function loadDataOffline(data, providedToken) {
     currentCampaignId = loadedCamp.id;
   }
   accessTokens = bundleTokens;
-  if (data.hub) hub = { folderUrl:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
+  if (data.hub) hub = { folderUrl:'', driveFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
   if (Array.isArray(data.manualBackupHistory)) manualBackupHistory = data.manualBackupHistory;
 
   document.getElementById('authOverlay').style.display = 'none';
@@ -3949,11 +4076,18 @@ window.onload = async () => {
 // ============================================================================
 // SELF-TEST SUITE — pure-logic assertions; run via ?test=1 or window.__runTests()
 // ============================================================================
-window.__runTests = function() {
+window.__runTests = async function() {
   const results = [];
+  const pending = [];
   function t(name, fn) {
-    try { fn(); results.push({ name, ok: true }); }
-    catch(e) { results.push({ name, ok: false, err: e.message || String(e) }); }
+    try {
+      const r = fn();
+      if (r && typeof r.then === 'function') {
+        pending.push(r.then(() => results.push({ name, ok: true })).catch(e => results.push({ name, ok: false, err: e.message || String(e) })));
+      } else {
+        results.push({ name, ok: true });
+      }
+    } catch(e) { results.push({ name, ok: false, err: e.message || String(e) }); }
   }
   function eq(a, b, msg) {
     if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || 'eq fail') + ` · expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`);
@@ -4038,15 +4172,53 @@ window.__runTests = function() {
   t('hub integrity container exists', () => ok(document.getElementById('hub-integrity')));
   t('hub folder url input exists', () => ok(document.getElementById('hubFolderUrl')));
   t('sidebar hub link slot exists', () => ok(document.getElementById('sb-hub-link')));
+  t('drive test output element exists', () => ok(document.getElementById('hub-drive-test-out')));
+  t('hub folder id display exists', () => ok(document.getElementById('hub-folder-id-display')));
 
   // ---- Hub data model ----
-  t('hub state object has expected keys', () => { ok(typeof hub === 'object'); ['folderUrl','backupFolderUrl','notes','updatedAt'].forEach(k => ok(k in hub, `hub.${k}`)); });
+  t('hub state object has expected keys', () => { ok(typeof hub === 'object'); ['folderUrl','driveFolderId','backupFolderUrl','notes','updatedAt'].forEach(k => ok(k in hub, `hub.${k}`)); });
   t('manualBackupHistory is array', () => ok(Array.isArray(manualBackupHistory)));
   t('buildDatabasePayload includes hub + history', () => { const p = buildDatabasePayload(); ok(p.hub); ok('manualBackupHistory' in p); });
   t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize'].forEach(k => ok(typeof s[k] === 'number', k)); });
   t('fmtBytes formats sizes', () => { eq(fmtBytes(0), '0 B'); eq(fmtBytes(1500), '1.5 KB'); ok(/MB$/.test(fmtBytes(2*1048576))); });
   t('runIntegrityCheck returns array', () => { const r = runIntegrityCheck(); ok(Array.isArray(r) && r.length > 0); r.forEach(c => ok(['ok','warn','err'].includes(c.level))); });
   t('switchView hub renders', () => { switchView('hub'); ok(document.getElementById('view-hub').classList.contains('active')); switchView('overview'); });
+
+  // ---- Drive folder ID parsing + metadata ----
+  t('parseDriveFolderId from share URL', () => eq(parseDriveFolderId('https://drive.google.com/drive/folders/1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1?usp=sharing'), '1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1'));
+  t('parseDriveFolderId from open?id= URL', () => eq(parseDriveFolderId('https://drive.google.com/open?id=1-oeITeTv9iMT_H9BgGouKo1wO8qEXnJD'), '1-oeITeTv9iMT_H9BgGouKo1wO8qEXnJD'));
+  t('parseDriveFolderId accepts bare ID', () => eq(parseDriveFolderId('1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1'), '1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1'));
+  t('parseDriveFolderId rejects garbage', () => { eq(parseDriveFolderId('hello world'), ''); eq(parseDriveFolderId(''), ''); });
+  t('dbFileMetadata returns name+mimeType', () => { const m = dbFileMetadata(); eq(m.name, 'wakuwaku_database_v4.json'); eq(m.mimeType, 'application/json'); });
+  t('dbFileMetadata adds parents when hub folder set and no fileId', () => {
+    const savedHub = JSON.parse(JSON.stringify(hub)); const savedId = databaseFileId;
+    databaseFileId = null; hub.driveFolderId = 'TESTFOLDER123';
+    const m = dbFileMetadata(); eq(m.parents, ['TESTFOLDER123']);
+    hub = savedHub; databaseFileId = savedId;
+  });
+  t('dbFileMetadata omits parents when fileId exists (overwrite path)', () => {
+    const savedId = databaseFileId; const savedHub = JSON.parse(JSON.stringify(hub));
+    databaseFileId = 'EXISTING'; hub.driveFolderId = 'TESTFOLDER123';
+    const m = dbFileMetadata(); ok(!('parents' in m), 'parents should be absent on PATCH');
+    databaseFileId = savedId; hub = savedHub;
+  });
+
+  // ---- driveError classification (synthetic Response) ----
+  t('driveError classifies api-disabled 403', async () => {
+    const body = JSON.stringify({ error: { code:403, message:'Google Drive API has not been used in project 165279376241 before or it is disabled.', errors:[{reason:'accessNotConfigured'}] } });
+    const r = new Response(body, { status:403, statusText:'Forbidden' });
+    const e = await driveError(r);
+    eq(e.driveCause, 'api-disabled');
+    ok(e.driveHelpUrl.includes('165279376241'), 'help url has project id');
+  });
+  t('driveError classifies 401 token-expired', async () => {
+    const e = await driveError(new Response('{"error":{"code":401,"message":"Invalid Credentials"}}', { status:401, statusText:'Unauthorized' }));
+    eq(e.driveCause, 'token-expired');
+  });
+  t('driveError classifies 404 not-found', async () => {
+    const e = await driveError(new Response('{"error":{"code":404,"message":"File not found"}}', { status:404, statusText:'Not Found' }));
+    eq(e.driveCause, 'not-found');
+  });
 
   // ---- Critical functions defined ----
   ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
@@ -4057,7 +4229,7 @@ window.__runTests = function() {
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
    'renderDataHub','renderHubSidebar','saveHubConfig','openHubFolder','openHubBackupFolder','openMasterDBFile',
-   'runIntegrityCheck','dbStats','fmtBytes'
+   'runIntegrityCheck','dbStats','fmtBytes','parseDriveFolderId','dbFileMetadata','driveError','testDriveConnection'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
 
   // ---- Date picker round-trip ----
@@ -4081,6 +4253,7 @@ window.__runTests = function() {
     probeS.remove(); probeE.remove();
   });
 
+  await Promise.all(pending);
   const pass = results.filter(r => r.ok).length;
   const fail = results.filter(r => !r.ok);
   console.group(`%c[Wakuwaku Self-Test] ${pass}/${results.length} passed`, `font-weight:bold;color:${fail.length?'#DD3A2C':'#2D7A3E'}`);
