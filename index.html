@@ -849,6 +849,24 @@
 
       <div class="section-head">
         <div class="section-num">③</div>
+        <div class="section-title">Section B Media · เก็บไฟล์รูป/วิดีโอไว้ใน Hub folder</div>
+        <div class="section-meta" id="hub-media-meta">—</div>
+      </div>
+      <div class="hub-card">
+        <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
+          <label>☁️ Offload media</label>
+          <pre id="hub-offload-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">กดปุ่มเพื่อยกไฟล์รูป/วิดีโอที่ฝังใน JSON ขึ้นเป็นไฟล์จริงในโฟลเดอร์ Hub</pre>
+          <button class="btn sm gold" onclick="offloadMediaToDrive(true)">Offload now</button>
+        </div>
+        <small class="hint">ไฟล์จะถูกอัปโหลดเข้าซับโฟลเดอร์ <code>wakuwaku-media</code> ภายใน Hub folder · จากนั้น DB JSON จะเล็กลงมาก เซฟเร็วขึ้น · การดู/ดาวน์โหลด/ทำ bundle จะดึงจาก Drive ให้อัตโนมัติ · ต้องตั้ง Hub Folder URL + แชร์ Editor ก่อน</small>
+        <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:8px;">
+          <label>📂 Media folder</label>
+          <span id="hub-media-folder" style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted);">—</span>
+        </div>
+      </div>
+
+      <div class="section-head">
+        <div class="section-num">④</div>
         <div class="section-title">Backup History · ประวัติ Manual Backup</div>
         <div class="section-meta" id="hub-backup-meta">—</div>
       </div>
@@ -857,7 +875,7 @@
       </div>
 
       <div class="section-head">
-        <div class="section-num">④</div>
+        <div class="section-num">⑤</div>
         <div class="section-title">Data Integrity Check · ตรวจสอบความครบถ้วน</div>
       </div>
       <div class="hub-card">
@@ -1325,7 +1343,8 @@ let campaigns = [
 ];
 let currentCampaignId = campaigns[0].id;
 let accessTokens = []; // [{token, name, role, campaignIds:[], expiresAt|null, createdAt}]
-let hub = { folderUrl: '', driveFolderId: '', backupFolderUrl: '', notes: '', updatedAt: '' };
+let hub = { folderUrl: '', driveFolderId: '', mediaFolderId: '', backupFolderUrl: '', notes: '', updatedAt: '' };
+const MEDIA_SUBFOLDER_NAME = 'wakuwaku-media';
 // Parse a Drive folder ID out of a share URL or accept a raw ID
 function parseDriveFolderId(input) {
   if (!input) return '';
@@ -1665,19 +1684,20 @@ function buildDatabasePayload() {
 }
 
 function dbStats() {
-  let totalAssets = 0, totalFiles = 0, totalLogs = 0, mediaBytes = 0;
+  let totalAssets = 0, totalFiles = 0, totalLogs = 0, mediaBytes = 0, embeddedFiles = 0, driveFiles = 0;
   campaigns.forEach(c => {
     totalAssets += c.assets.length;
     totalLogs += (c.log || []).length;
     c.assets.forEach(a => {
       (a.files || []).forEach(f => {
         totalFiles++;
-        mediaBytes += Math.round((f.data ? f.data.length * 0.75 : 0));
+        if (f.driveFileId && !f.data) { driveFiles++; mediaBytes += (+f.size || 0); }
+        else { embeddedFiles++; mediaBytes += Math.round((f.data ? f.data.length * 0.75 : 0)); }
       });
     });
   });
   const jsonSize = JSON.stringify(buildDatabasePayload()).length;
-  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize };
+  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize, embeddedFiles, driveFiles };
 }
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -1818,6 +1838,146 @@ async function ensureDBInHubFolder(notify) {
   }
 }
 
+// ============================================================================
+// MEDIA OFFLOAD — store Section B files as real files inside the Hub folder
+// ============================================================================
+function dataUrlToBlob(dataUrl) {
+  const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return null;
+  const mime = m[1];
+  const bin = atob(m[2]);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('blob read failed'));
+    r.readAsDataURL(blob);
+  });
+}
+
+// Find or create the "wakuwaku-media" subfolder inside the Hub folder
+async function ensureMediaFolder() {
+  if (!hub.driveFolderId) throw new Error('ต้องตั้ง Hub Folder URL ก่อน');
+  if (hub.mediaFolderId) {
+    // Verify it still exists
+    const vr = await authFetch(`https://www.googleapis.com/drive/v3/files/${hub.mediaFolderId}?fields=id,trashed`);
+    if (vr.ok) { const vj = await vr.json(); if (!vj.trashed) return hub.mediaFolderId; }
+  }
+  // Search for existing folder with that name under the Hub folder
+  const q = encodeURIComponent(`name='${MEDIA_SUBFOLDER_NAME}' and '${hub.driveFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const sr = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
+  if (sr.ok) {
+    const sj = await sr.json();
+    if (sj.files && sj.files.length) { hub.mediaFolderId = sj.files[0].id; return hub.mediaFolderId; }
+  }
+  // Create it
+  const cr = await authFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify({ name: MEDIA_SUBFOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [hub.driveFolderId] })
+  });
+  if (!cr.ok) throw await driveError(cr);
+  const cj = await cr.json();
+  hub.mediaFolderId = cj.id;
+  return hub.mediaFolderId;
+}
+
+async function uploadFileToDrive(name, blob, parentId) {
+  const metadata = { name, parents: [parentId] };
+  const boundary = '-------wkmed' + Math.random().toString(36).slice(2);
+  // Build multipart/related with binary part via Blob concatenation
+  const pre = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`;
+  const post = `\r\n--${boundary}--`;
+  const body = new Blob([pre, blob, post]);
+  const resp = await authFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,size,webViewLink', {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  if (!resp.ok) throw await driveError(resp);
+  return resp.json();
+}
+
+// Offload every embedded (base64) asset file into the Hub media folder.
+async function offloadMediaToDrive(notify) {
+  if (blockIfClient('Offload media ได้เฉพาะ Internal')) return;
+  if (isOfflineMode) { showToast('Offline mode — offload ไม่ได้', 'warn'); return; }
+  if (!accessToken) { showToast('ต้อง login ก่อน', 'warn'); return; }
+  if (!hub.driveFolderId) { showToast('ตั้ง Hub Folder URL ก่อน', 'warn'); return; }
+  const out = document.getElementById('hub-offload-out');
+  const setOut = (s) => { if (out) out.textContent = s; };
+  setOut('⏳ เตรียมโฟลเดอร์...');
+  let folderId;
+  try { folderId = await ensureMediaFolder(); }
+  catch(e) { setOut('❌ ' + (e.message || 'create folder failed')); showToast('สร้างโฟลเดอร์ media ไม่ได้: ' + (e.message||''), 'err'); return; }
+
+  // Collect work items
+  const work = [];
+  campaigns.forEach(c => c.assets.forEach(a => (a.files || []).forEach((f, i) => {
+    if (f.data && !f.driveFileId) work.push({ camp:c, asset:a, file:f, idx:i });
+  })));
+  if (work.length === 0) { setOut('✓ ไม่มีไฟล์ที่ต้อง offload (ทุกไฟล์อยู่บน Drive แล้ว หรือไม่มีไฟล์)'); showToast('ไม่มีไฟล์ที่ต้อง offload', 'ok'); return; }
+
+  let done = 0, failed = 0;
+  for (const w of work) {
+    setOut(`⏳ อัปโหลด ${done+1}/${work.length} — ${w.file.name || 'file'}`);
+    try {
+      const blob = dataUrlToBlob(w.file.data);
+      if (!blob) { failed++; continue; }
+      const safeName = `${w.camp.id}__${w.asset.id}__${w.idx+1}__${(w.file.name||'file').replace(/[^\w.\-]+/g,'_')}`;
+      const res = await uploadFileToDrive(safeName, blob, folderId);
+      w.file.driveFileId = res.id;
+      w.file.size = +res.size || blob.size;
+      w.file.webViewLink = res.webViewLink || '';
+      delete w.file.data; // shrink the DB JSON
+      done++;
+    } catch(e) {
+      failed++;
+      console.warn('offload failed for', w.file.name, e);
+      if (e.driveCause === 'api-disabled') { setOut('❌ Drive API ปิดอยู่ — หยุด offload'); break; }
+    }
+  }
+  hub.updatedAt = new Date().toISOString();
+  logAction('OFFLOAD', `Offloaded ${done} media file(s) to Drive${failed?` · ${failed} failed`:''}`);
+  setOut(`✓ Offload สำเร็จ ${done} ไฟล์${failed?` · ล้มเหลว ${failed}`:''} · กำลังเซฟ DB...`);
+  try { await saveToDrive(); } catch(e) {}
+  setOut(`✓ เสร็จ — ${done} ไฟล์อยู่ในโฟลเดอร์ ${MEDIA_SUBFOLDER_NAME} แล้ว · DB JSON เล็กลง`);
+  if (notify) showToast(`✓ Offload ${done} ไฟล์เข้า Hub folder แล้ว`, 'ok');
+  renderDataHub();
+}
+
+// Resolve an asset file to a usable data URL: prefer embedded, else fetch from Drive (cached)
+const _mediaCache = new Map(); // driveFileId -> dataURL
+async function getFileDataUrl(f) {
+  if (f.data) return f.data;
+  if (f.driveFileId) {
+    if (_mediaCache.has(f.driveFileId)) return _mediaCache.get(f.driveFileId);
+    if (!accessToken) throw new Error('ไฟล์นี้อยู่บน Drive — ต้อง login เพื่อโหลด');
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${f.driveFileId}?alt=media`);
+    if (!r.ok) throw await driveError(r);
+    const blob = await r.blob();
+    const url = await blobToDataUrl(blob);
+    _mediaCache.set(f.driveFileId, url);
+    return url;
+  }
+  throw new Error('ไม่มีข้อมูลไฟล์');
+}
+// Synchronous best-effort src (cache or embedded), '' if needs async load
+function fileSrcNow(f) { return f.data || (f.driveFileId && _mediaCache.get(f.driveFileId)) || ''; }
+function fileIsOnDrive(f) { return !f.data && !!f.driveFileId; }
+// Returns base64 (no data: prefix) for zipping; fetches from Drive if needed; null if unavailable
+async function fileToBase64(f) {
+  try {
+    const dataUrl = await getFileDataUrl(f);
+    const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+    return m ? m[2] : null;
+  } catch(e) { console.warn('fileToBase64 failed', f && f.name, e); return null; }
+}
+
 // ---- multipart/related (small files) ----
 async function driveMultipartUpload(metadata, jsonBody) {
   const boundary = '-------wkwaku' + Math.random().toString(36).slice(2);
@@ -1920,7 +2080,7 @@ async function syncDatabaseFromDrive() {
         currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
       }
       if (db.accessTokens) accessTokens = db.accessTokens;
-      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
       if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
       lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
       renderEverything();
@@ -2086,12 +2246,19 @@ function renderDataHub() {
   document.getElementById('hub-stats').innerHTML = [
     ['Campaigns', st.campaigns, ''],
     ['Total assets', st.totalAssets, ''],
-    ['Media files', st.totalFiles, fmtBytes(st.mediaBytes)],
+    ['Media files', st.totalFiles, `${st.driveFiles} on Drive · ${st.embeddedFiles} embedded`],
+    ['Media size', fmtBytes(st.mediaBytes), ''],
     ['Log entries', st.totalLogs, ''],
     ['Database size', fmtBytes(st.jsonSize), st.jsonSize > DRIVE_MULTIPART_LIMIT ? 'resumable upload' : 'multipart'],
     ['Access tokens', accessTokens.length, ''],
     ['Manual backups', manualBackupHistory.length, '']
   ].map(([l, val, sub]) => `<div class="hub-stat"><div class="hub-stat-label">${l}</div><div class="hub-stat-value">${typeof val === 'number' ? `<em>${val}</em>` : val}</div><div class="hub-stat-sub">${sub || '·'}</div></div>`).join('');
+
+  // Media offload section
+  const mMeta = document.getElementById('hub-media-meta');
+  if (mMeta) mMeta.textContent = `${st.driveFiles} on Drive · ${st.embeddedFiles} embedded`;
+  const mFolder = document.getElementById('hub-media-folder');
+  if (mFolder) mFolder.textContent = hub.mediaFolderId ? `${MEDIA_SUBFOLDER_NAME} (id ${hub.mediaFolderId.slice(0,16)}…)` : (hub.driveFolderId ? 'ยังไม่ได้สร้าง — กด Offload now' : 'ตั้ง Hub Folder URL ก่อน');
 
   // Hub status pill
   const statusPill = document.getElementById('hub-status-pill');
@@ -2170,6 +2337,14 @@ function renderDataHub() {
 function runIntegrityCheck() {
   const checks = [];
   const st = dbStats();
+  // Section B media offload health
+  if (st.embeddedFiles > 0 && hub.driveFolderId && st.jsonSize > DRIVE_MULTIPART_LIMIT) {
+    checks.push({ level:'warn', label:`${st.embeddedFiles} media file(s) embedded in DB`, detail:`DB ${fmtBytes(st.jsonSize)} — กด "Offload now" เพื่อย้ายเข้า Hub folder และทำให้ DB เล็กลง` });
+  } else if (st.embeddedFiles > 0 && hub.driveFolderId) {
+    checks.push({ level:'ok', label:`${st.embeddedFiles} embedded · ${st.driveFiles} on Drive`, detail:'จะ offload เพิ่มเติมก็ได้ที่ Section B Media' });
+  } else if (st.driveFiles > 0) {
+    checks.push({ level:'ok', label:`${st.driveFiles} media file(s) stored in Hub folder`, detail:'อยู่ในซับโฟลเดอร์ ' + MEDIA_SUBFOLDER_NAME });
+  }
   if (databaseFileId) checks.push({ level:'ok', label:'Master DB file exists', detail:'Drive file ID ' + databaseFileId.slice(0,20) + '...' });
   else if (isOfflineMode) checks.push({ level:'warn', label:'Offline mode', detail:'ไม่มี cloud DB — พึ่ง manual backup' });
   else checks.push({ level:'err', label:'No master DB file', detail:'กด Sync now ที่ Data Hub' });
@@ -2564,17 +2739,20 @@ function renderAssetFileList() {
   pendingFiles.forEach((f, i) => {
     const div = document.createElement('div');
     div.className = 'media-thumb';
-    const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : 0;
+    const src = fileSrcNow(f);
+    const onDrive = fileIsOnDrive(f);
+    const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : (f.size ? Math.round(f.size/1024) : 0);
     let inner = '';
-    if (isImageType(f.type)) {
-      inner = `<img src="${f.data}" alt="">`;
-    } else if (isVideoType(f.type)) {
-      inner = `<video src="${f.data}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
-    } else {
-      inner = `<div style="font-size:24px;">📄</div>`;
-    }
-    const badge = isVideoType(f.type) ? 'VIDEO' : (isImageType(f.type) ? 'IMG' : 'FILE');
+    if (src && isImageType(f.type)) inner = `<img src="${src}" alt="">`;
+    else if (src && isVideoType(f.type)) inner = `<video src="${src}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
+    else if (onDrive) inner = `<div style="font-size:22px;">☁️</div>`;
+    else inner = `<div style="font-size:24px;">📄</div>`;
+    const badge = onDrive ? 'DRIVE' : (isVideoType(f.type) ? 'VIDEO' : (isImageType(f.type) ? 'IMG' : 'FILE'));
     div.innerHTML = `${inner}<span class="badge">${badge}</span><button class="rm" type="button" title="Remove" onclick="removePendingFile(${i})">×</button><div class="filemeta">${escapeHtml(f.name)} · ${sizeKB}KB</div>`;
+    if (onDrive && !src) {
+      div.style.cursor = 'pointer'; div.title = 'คลิกเพื่อโหลด preview จาก Drive';
+      div.onclick = async () => { try { await getFileDataUrl(f); renderAssetFileList(); } catch(e) { showToast('โหลดไม่ได้: ' + (e.message||''), 'err'); } };
+    }
     wrap.appendChild(div);
   });
 }
@@ -2588,7 +2766,7 @@ function removePendingFile(i) {
 // ============================================================================
 // MEDIA VIEWER (preview / playback / download)
 // ============================================================================
-function openMediaViewer(assetId) {
+async function openMediaViewer(assetId) {
   const camp = getCurrentCampaign();
   const a = camp.assets.find(x => x.id === assetId);
   if (!a) return;
@@ -2596,8 +2774,14 @@ function openMediaViewer(assetId) {
   if (!files.length) { showToast('No media attached', 'warn'); return; }
   mediaViewerCtx = { assetId, files, index: 0 };
   document.getElementById('media-modal-title').textContent = `Media · ${a.h2 || 'Asset'} (${files.length})`;
-  renderMediaViewer();
   document.getElementById('mediaModal').classList.add('show');
+  renderMediaViewer();
+  // Lazily load any Drive-backed files in the background so thumbnails fill in
+  const driveFiles = files.filter(fileIsOnDrive);
+  if (driveFiles.length) {
+    showToast(`กำลังโหลด ${driveFiles.length} ไฟล์จาก Drive...`);
+    for (const f of driveFiles) { try { await getFileDataUrl(f); renderMediaViewer(); } catch(e) { console.warn('load failed', f.name, e); } }
+  }
 }
 
 function closeMediaViewer() {
@@ -2614,29 +2798,41 @@ function renderMediaViewer() {
   const meta = document.getElementById('media-viewer-meta');
   if (!files.length) { stage.innerHTML = '<div style="color:#888;">No media</div>'; return; }
   const f = files[index];
+  const src = fileSrcNow(f);
   let body = '';
-  if (isImageType(f.type)) {
-    body = `<img src="${f.data}" alt="${escapeHtml(f.name)}">`;
-  } else if (isVideoType(f.type)) {
-    body = `<video src="${f.data}" controls playsinline preload="metadata" style="background:#000;"></video>`;
+  if (src && isImageType(f.type)) {
+    body = `<img src="${src}" alt="${escapeHtml(f.name)}">`;
+  } else if (src && isVideoType(f.type)) {
+    body = `<video src="${src}" controls playsinline preload="metadata" style="background:#000;"></video>`;
+  } else if (fileIsOnDrive(f)) {
+    body = `<div style="color:#ddd; text-align:center; padding:32px;">☁️<br><strong>${escapeHtml(f.name)}</strong><br><small>ไฟล์อยู่บน Google Drive</small><br><button class="btn sm" style="margin-top:10px;" onclick="loadCurrentMediaFile()">โหลด preview</button>${f.webViewLink ? `<a class="btn sm" style="margin-top:10px; margin-left:6px;" href="${escapeHtml(f.webViewLink)}" target="_blank">เปิดใน Drive ↗</a>` : ''}</div>`;
   } else {
     body = `<div style="color:#ddd; text-align:center; padding:32px;">📄<br><strong>${escapeHtml(f.name)}</strong><br><small>คลิก Download เพื่อบันทึกไฟล์</small></div>`;
   }
   stage.innerHTML = body;
-  const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : 0;
-  meta.textContent = `${index + 1} / ${files.length} · ${f.name} · ${sizeKB}KB · ${f.type || 'unknown'}`;
+  const sizeKB = f.data ? Math.round((f.data.length * 0.75) / 1024) : (f.size ? Math.round(f.size/1024) : 0);
+  meta.textContent = `${index + 1} / ${files.length} · ${f.name} · ${sizeKB}KB · ${f.type || 'unknown'}${fileIsOnDrive(f) ? ' · ☁ on Drive' : ''}`;
   strip.innerHTML = '';
   files.forEach((ff, i) => {
     const div = document.createElement('div');
     div.className = 'media-thumb' + (i === index ? ' current' : '');
     div.onclick = () => { mediaViewerCtx.index = i; renderMediaViewer(); };
+    const s = fileSrcNow(ff);
     let thumb;
-    if (isImageType(ff.type)) thumb = `<img src="${ff.data}" alt="">`;
-    else if (isVideoType(ff.type)) thumb = `<video src="${ff.data}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
+    if (s && isImageType(ff.type)) thumb = `<img src="${s}" alt="">`;
+    else if (s && isVideoType(ff.type)) thumb = `<video src="${s}" muted preload="metadata"></video><div class="play-icon">▶</div>`;
+    else if (fileIsOnDrive(ff)) thumb = `<div style="font-size:18px;">☁️</div>`;
     else thumb = `<div style="font-size:20px;">📄</div>`;
     div.innerHTML = thumb;
     strip.appendChild(div);
   });
+}
+async function loadCurrentMediaFile() {
+  const { files, index } = mediaViewerCtx;
+  if (!files[index]) return;
+  showToast('กำลังโหลดจาก Drive...');
+  try { await getFileDataUrl(files[index]); renderMediaViewer(); }
+  catch(e) { showToast('โหลดไม่ได้: ' + (e.message || ''), 'err'); }
 }
 
 function mediaViewerNext() {
@@ -2656,24 +2852,31 @@ function downloadDataUrl(dataUrl, filename) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-function mediaViewerDownload() {
+async function mediaViewerDownload() {
   const { files, index } = mediaViewerCtx;
   if (!files[index]) return;
-  downloadDataUrl(files[index].data, files[index].name);
+  try {
+    const url = await getFileDataUrl(files[index]);
+    downloadDataUrl(url, files[index].name);
+  } catch(e) { showToast('Download ไม่ได้: ' + (e.message || ''), 'err'); }
 }
 
 async function mediaViewerDownloadAll() {
   const { files } = mediaViewerCtx;
   if (!files.length) return;
+  showToast('กำลังเตรียมไฟล์...');
   if (typeof JSZip === 'undefined') {
-    files.forEach((f, i) => setTimeout(() => downloadDataUrl(f.data, f.name), i * 200));
+    for (let i = 0; i < files.length; i++) { try { const u = await getFileDataUrl(files[i]); setTimeout(() => downloadDataUrl(u, files[i].name), i * 200); } catch(e) {} }
     return;
   }
   const zip = new JSZip();
-  files.forEach(f => {
-    const m = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
-    if (m) zip.file(f.name || 'file', m[2], { base64: true });
-  });
+  for (const f of files) {
+    try {
+      const dataUrl = await getFileDataUrl(f);
+      const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+      if (m) zip.file(f.name || 'file', m[2], { base64: true });
+    } catch(e) { console.warn('skip', f.name, e); }
+  }
   const blob = await zip.generateAsync({ type: 'blob' });
   const url = URL.createObjectURL(blob);
   downloadDataUrl(url, 'media-bundle.zip');
@@ -3368,15 +3571,18 @@ HUB:
 `);
       const attach = zip.folder('attachments');
       let attachCount = 0;
-      campaigns.forEach(c => {
+      for (const c of campaigns) {
         const folder = attach.folder((c.client || 'client').replace(/[^\w]+/g,'_') + '__' + (c.campaign || 'campaign').replace(/[^\w]+/g,'_'));
-        c.assets.forEach(a => {
-          (a.files || []).forEach((f, i) => {
-            const mm = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
-            if (mm) { folder.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, mm[2], { base64:true }); attachCount++; }
-          });
-        });
-      });
+        for (const a of c.assets) {
+          const fl = a.files || [];
+          for (let i = 0; i < fl.length; i++) {
+            const f = fl[i];
+            exportProgress(`รวมไฟล์ ${attachCount+1}... (${f.name||'file'})`);
+            const b64 = await fileToBase64(f);
+            if (b64) { folder.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, b64, { base64:true }); attachCount++; }
+          }
+        }
+      }
       if (attachCount === 0) attach.file('.placeholder', 'No media in any campaign');
       const blob = await zip.generateAsync({ type:'blob' }, m => exportProgress(`Zipping... ${Math.round(m.percent)}%`));
       downloadBlob(blob, `wakuwaku_FULL_SNAPSHOT_${stamp}.zip`);
@@ -3408,17 +3614,19 @@ HUB:
       if (typeof JSZip === 'undefined') { exportProgress('JSZip not loaded'); return; }
       const zip = new JSZip();
       let count = 0;
-      camp.assets.forEach(a => {
+      for (const a of camp.assets) {
         const list = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
-        list.forEach((f, i) => {
-          const m = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
-          if (m) {
+        for (let i = 0; i < list.length; i++) {
+          const f = list[i];
+          exportProgress(`รวมสื่อ ${count+1}... (${f.name||'file'})`);
+          const b64 = await fileToBase64(f);
+          if (b64) {
             const safe = (f.name || 'file').replace(/[^\w.\-]+/g, '_');
-            zip.file(`${(a.h2||'asset').replace(/[^\w]+/g,'_').slice(0,40)}/${a.id}_${i+1}_${safe}`, m[2], { base64: true });
+            zip.file(`${(a.h2||'asset').replace(/[^\w]+/g,'_').slice(0,40)}/${a.id}_${i+1}_${safe}`, b64, { base64: true });
             count++;
           }
-        });
-      });
+        }
+      }
       if (count === 0) { exportProgress('ไม่มีไฟล์สื่อในแคมเปญนี้'); showToast('No media to export', 'warn'); return; }
       const blob = await zip.generateAsync({ type:'blob' }, m => exportProgress(`Zipping... ${Math.round(m.percent)}%`));
       downloadBlob(blob, `${slug}_media_${stamp}.zip`);
@@ -3562,16 +3770,18 @@ async function buildHandoffBundle() {
 
   folder.file('README.html', generateReadmeHTML(bundleToken));
 
-  // Attachments
+  // Attachments — fetches Drive-backed files so the bundle is self-contained
   const attach = folder.folder('attachments');
   let attachCount = 0;
-  camp.assets.forEach(a => {
+  for (const a of camp.assets) {
     const list = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
-    list.forEach((f, i) => {
-      const m = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
-      if (m) { attach.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, m[2], { base64: true }); attachCount++; }
-    });
-  });
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      if (typeof exportProgress === 'function') exportProgress(`รวมไฟล์แนบ ${attachCount+1}... (${f.name||'file'})`);
+      const b64 = await fileToBase64(f);
+      if (b64) { attach.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, b64, { base64: true }); attachCount++; }
+    }
+  }
   if (attachCount === 0) attach.file('.placeholder', 'No file attachments in this campaign');
 
   return zip;
@@ -3749,7 +3959,7 @@ function loadDataOffline(data, providedToken) {
     currentCampaignId = loadedCamp.id;
   }
   accessTokens = bundleTokens;
-  if (data.hub) hub = { folderUrl:'', driveFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
+  if (data.hub) hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
   if (Array.isArray(data.manualBackupHistory)) manualBackupHistory = data.manualBackupHistory;
 
   document.getElementById('authOverlay').style.display = 'none';
@@ -4239,12 +4449,21 @@ window.__runTests = async function() {
   t('sidebar hub link slot exists', () => ok(document.getElementById('sb-hub-link')));
   t('drive test output element exists', () => ok(document.getElementById('hub-drive-test-out')));
   t('hub folder id display exists', () => ok(document.getElementById('hub-folder-id-display')));
+  t('media offload output element exists', () => ok(document.getElementById('hub-offload-out')));
+  t('media folder display exists', () => ok(document.getElementById('hub-media-folder')));
 
   // ---- Hub data model ----
-  t('hub state object has expected keys', () => { ok(typeof hub === 'object'); ['folderUrl','driveFolderId','backupFolderUrl','notes','updatedAt'].forEach(k => ok(k in hub, `hub.${k}`)); });
+  t('hub state object has expected keys', () => { ok(typeof hub === 'object'); ['folderUrl','driveFolderId','mediaFolderId','backupFolderUrl','notes','updatedAt'].forEach(k => ok(k in hub, `hub.${k}`)); });
+  t('MEDIA_SUBFOLDER_NAME constant', () => eq(MEDIA_SUBFOLDER_NAME, 'wakuwaku-media'));
   t('manualBackupHistory is array', () => ok(Array.isArray(manualBackupHistory)));
   t('buildDatabasePayload includes hub + history', () => { const p = buildDatabasePayload(); ok(p.hub); ok('manualBackupHistory' in p); });
-  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize'].forEach(k => ok(typeof s[k] === 'number', k)); });
+  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize','embeddedFiles','driveFiles'].forEach(k => ok(typeof s[k] === 'number', k)); });
+  t('dataUrlToBlob produces typed blob', () => { const b = dataUrlToBlob('data:text/plain;base64,aGVsbG8='); ok(b instanceof Blob); eq(b.type, 'text/plain'); });
+  t('dataUrlToBlob rejects non-dataurl', () => eq(dataUrlToBlob('not a data url'), null));
+  t('fileSrcNow returns embedded data', () => eq(fileSrcNow({ data:'data:image/png;base64,AAA' }), 'data:image/png;base64,AAA'));
+  t('fileSrcNow empty for uncached Drive file', () => eq(fileSrcNow({ driveFileId:'XYZ' }), ''));
+  t('fileIsOnDrive', () => { ok(fileIsOnDrive({ driveFileId:'X' })); ok(!fileIsOnDrive({ data:'data:..' })); ok(!fileIsOnDrive({})); });
+  t('normalizeAsset preserves driveFileId on files', () => { const a = normalizeAsset({ id:'x', files:[{ name:'a', type:'image/png', driveFileId:'D1', size:123 }] }); eq(a.files[0].driveFileId, 'D1'); eq(a.files[0].size, 123); });
   t('fmtBytes formats sizes', () => { eq(fmtBytes(0), '0 B'); eq(fmtBytes(1500), '1.5 KB'); ok(/MB$/.test(fmtBytes(2*1048576))); });
   t('runIntegrityCheck returns array', () => { const r = runIntegrityCheck(); ok(Array.isArray(r) && r.length > 0); r.forEach(c => ok(['ok','warn','err'].includes(c.level))); });
   t('switchView hub renders', () => { switchView('hub'); ok(document.getElementById('view-hub').classList.contains('active')); switchView('overview'); });
@@ -4295,7 +4514,8 @@ window.__runTests = async function() {
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
    'renderDataHub','renderHubSidebar','saveHubConfig','openHubFolder','openHubBackupFolder','openMasterDBFile',
    'runIntegrityCheck','dbStats','fmtBytes','parseDriveFolderId','dbFileMetadata','driveError','testDriveConnection',
-   'moveDBToHubFolder','ensureDBInHubFolder'
+   'moveDBToHubFolder','ensureDBInHubFolder','offloadMediaToDrive','ensureMediaFolder','uploadFileToDrive',
+   'getFileDataUrl','fileToBase64','dataUrlToBlob','blobToDataUrl','fileSrcNow','fileIsOnDrive','loadCurrentMediaFile'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
   t('SCOPES includes full drive scope', () => ok(/auth\/drive(\s|$)/.test(SCOPES), 'SCOPES = ' + SCOPES));
 
