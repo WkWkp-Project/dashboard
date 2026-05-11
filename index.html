@@ -1202,16 +1202,41 @@ function getCurrentCampaign() {
 // ============================================================================
 // SAVE STATUS
 // ============================================================================
+let _savedFadeTimer = null;
 function setSaveStatus(state, text) {
   const ind = document.getElementById('saveIndicator');
+  if (!ind) return;
   ind.classList.remove('idle', 'saving', 'saved', 'error', 'offline');
   ind.classList.add(state);
   document.getElementById('saveStatusText').textContent = text;
+  if (_savedFadeTimer) { clearTimeout(_savedFadeTimer); _savedFadeTimer = null; }
+  if (state === 'saved') {
+    _savedFadeTimer = setTimeout(() => {
+      // Only fade if we're still in saved state (no newer transition)
+      const cur = document.getElementById('saveIndicator');
+      if (cur && cur.classList.contains('saved')) {
+        cur.classList.remove('saved'); cur.classList.add('idle');
+        document.getElementById('saveStatusText').textContent = 'Up to date';
+      }
+    }, 4000);
+  }
 }
 function handleSaveIndicatorClick() {
   const ind = document.getElementById('saveIndicator');
-  if (ind.classList.contains('error')) { showToast('Retrying save...'); forceSave(); }
-  else if (ind.classList.contains('offline')) { showToast('Offline mode — login to enable cloud sync', 'warn'); }
+  if (!ind) return;
+  if (ind.classList.contains('error')) {
+    showToast('Retrying save...');
+    forceSave();
+  } else if (ind.classList.contains('offline')) {
+    if (isOfflineMode || userRole === 'client') showToast('Offline mode — ใช้ Export เพื่อบันทึก', 'warn');
+    else { handleRealGoogleLogin(); }
+  } else if (ind.classList.contains('saving')) {
+    showToast('กำลังบันทึก...');
+  } else {
+    // idle / saved — show last save time
+    if (lastSaveTime) showToast('Last saved: ' + lastSaveTime.toLocaleString());
+    else if (accessToken) forceSave();
+  }
 }
 
 // ============================================================================
@@ -1230,18 +1255,42 @@ function initGoogleAuth() {
       callback: (resp) => {
         if (resp.access_token) {
           accessToken = resp.access_token;
-          setTimeout(() => refreshToken(), 50 * 60 * 1000);
-          onLoginSuccess();
-        } else if (resp.error) { showToast('Login failed: ' + resp.error, 'err'); }
+          // Schedule the next silent refresh ~5 min before expiry
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => refreshToken(), 50 * 60 * 1000);
+          // Drain any save() calls that were awaiting a fresh token
+          if (_tokenRefreshInFlight) _drainTokenWaiters(resp.access_token);
+          if (_isInitialLogin) { _isInitialLogin = false; onLoginSuccess(); }
+          else { saveSession(); setSaveStatus('idle', 'Connected'); }
+        } else if (resp.error) {
+          _drainTokenWaiters(null);
+          _isInitialLogin = false;
+          showToast('Login failed: ' + resp.error, 'err');
+          setSaveStatus('error', 'Sign-in failed · click to retry');
+        }
       },
+      error_callback: (err) => {
+        _drainTokenWaiters(null);
+        _isInitialLogin = false;
+        console.warn('OAuth error_callback:', err);
+        if (err && err.type === 'popup_closed') return;
+        showToast('Login error: ' + (err && err.type || 'unknown'), 'err');
+      }
     });
   } catch (e) { console.error('Google Auth init failed:', e); }
 }
-function refreshToken() { if (tokenClient && !isOfflineMode) { showToast('Refreshing session...', 'warn'); tokenClient.requestAccessToken({ prompt: '' }); } }
+let refreshTimer = null;
+let _isInitialLogin = false;
+function refreshToken() {
+  if (!tokenClient || isOfflineMode) return;
+  // Silent refresh — no popup
+  tokenClient.requestAccessToken({ prompt: '' });
+}
 function handleRealGoogleLogin() {
   if (CLIENT_ID.includes('YOUR_CLIENT_ID')) { showToast('CLIENT_ID not configured. Use Offline Import instead.', 'err'); return; }
   if (!tokenClient) { showToast('Google services not loaded yet.', 'warn'); return; }
-  tokenClient.requestAccessToken();
+  _isInitialLogin = true;
+  tokenClient.requestAccessToken({ prompt: 'consent' });
 }
 
 async function onLoginSuccess() {
@@ -1370,13 +1419,46 @@ async function tryRestoreSession() {
   return false;
 }
 
-async function authFetch(url, options = {}) {
+// Token refresh queue — saves can wait for a fresh token instead of failing
+let _tokenRefreshWaiters = [];
+let _tokenRefreshInFlight = false;
+function waitForFreshToken() {
+  return new Promise((resolve) => {
+    _tokenRefreshWaiters.push(resolve);
+    if (!_tokenRefreshInFlight) {
+      _tokenRefreshInFlight = true;
+      try { refreshToken(); } catch(e) { /* will time out */ }
+    }
+    // Cap the wait to 25s
+    setTimeout(() => {
+      const i = _tokenRefreshWaiters.indexOf(resolve);
+      if (i >= 0) { _tokenRefreshWaiters.splice(i, 1); resolve(null); }
+    }, 25000);
+  });
+}
+function _drainTokenWaiters(newToken) {
+  _tokenRefreshInFlight = false;
+  const ws = _tokenRefreshWaiters.splice(0);
+  ws.forEach(r => r(newToken || null));
+}
+
+async function authFetch(url, options = {}, _retried) {
   options.headers = { ...options.headers, Authorization: `Bearer ${accessToken}` };
-  const resp = await fetch(url, options);
-  if (resp.status === 401) {
-    showToast('Session expired. Please re-login.', 'warn');
-    setSaveStatus('error', 'Session expired'); refreshToken();
-    throw new Error('Token expired');
+  let resp;
+  try {
+    resp = await fetch(url, options);
+  } catch (e) {
+    throw new Error('Network error · ' + (e.message || 'fetch failed'));
+  }
+  if (resp.status === 401 && !_retried) {
+    setSaveStatus('saving', 'Refreshing session...');
+    const fresh = await waitForFreshToken();
+    if (fresh) {
+      accessToken = fresh;
+      options.headers.Authorization = `Bearer ${accessToken}`;
+      return authFetch(url, options, true);
+    }
+    throw new Error('Session expired — please sign in again');
   }
   return resp;
 }
@@ -1390,7 +1472,12 @@ function scheduleSave() {
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
   setSaveStatus('saving', 'Saving in 2.5s...');
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { saveToDrive().catch(e => showToast('Auto-save failed: ' + e.message, 'err')); }, SAVE_DEBOUNCE_MS);
+  saveTimer = setTimeout(() => {
+    saveToDrive().catch(e => {
+      console.warn('Auto-save failed:', e);
+      showToast('Auto-save failed: ' + (e.message || 'unknown'), 'err');
+    });
+  }, SAVE_DEBOUNCE_MS);
 }
 async function forceSave() {
   if (blockIfClient('Backup เป็นของ Internal เท่านั้น')) return;
@@ -1425,35 +1512,99 @@ function buildDatabasePayload() {
   };
 }
 
+// Drive multipart limit is ~5 MB. Use resumable above that.
+const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
+
 async function saveToDrive() {
   if (isSaving) return;
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
   isSaving = true;
   setSaveStatus('saving', 'Saving...');
-  const dbData = buildDatabasePayload();
-  const metadata = { name: DB_FILENAME, mimeType: 'application/json' };
-  const file = new Blob([JSON.stringify(dbData, null, 2)], { type: 'application/json' });
-  const formData = new FormData();
-  formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  formData.append('file', file);
+  try {
+    const dbData = buildDatabasePayload();
+    const jsonBody = JSON.stringify(dbData);
+    const metadata = { name: DB_FILENAME, mimeType: 'application/json' };
+
+    let result;
+    if (jsonBody.length > DRIVE_MULTIPART_LIMIT) {
+      setSaveStatus('saving', `Uploading ${(jsonBody.length/1048576).toFixed(1)} MB...`);
+      result = await driveResumableUpload(metadata, jsonBody);
+    } else {
+      result = await driveMultipartUpload(metadata, jsonBody);
+    }
+
+    if (result && result.id && !databaseFileId) databaseFileId = result.id;
+    lastSaveTime = new Date();
+    pendingChanges = false;
+    setSaveStatus('saved', 'All changes saved');
+    const metaSaved = document.getElementById('meta-saved');
+    if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    saveSession();
+  } catch(e) {
+    console.error('Save error:', e);
+    setSaveStatus('error', 'Save failed · click to retry');
+    throw e;
+  } finally {
+    isSaving = false;
+  }
+}
+
+// ---- multipart/related (small files) ----
+async function driveMultipartUpload(metadata, jsonBody) {
+  const boundary = '-------wkwaku' + Math.random().toString(36).slice(2);
+  const body =
+    `--${boundary}\r\n` +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(metadata) + '\r\n' +
+    `--${boundary}\r\n` +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    jsonBody + '\r\n' +
+    `--${boundary}--`;
   const url = databaseFileId
     ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=multipart`
     : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+  const resp = await authFetch(url, {
+    method: databaseFileId ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  if (!resp.ok) throw new Error(await readDriveError(resp));
+  return resp.json();
+}
+
+// ---- resumable (large files) ----
+async function driveResumableUpload(metadata, jsonBody) {
+  const initUrl = databaseFileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=resumable`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
+  const initResp = await authFetch(initUrl, {
+    method: databaseFileId ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' },
+    body: JSON.stringify(metadata)
+  });
+  if (!initResp.ok) throw new Error('Resumable init failed · ' + await readDriveError(initResp));
+  const sessionUrl = initResp.headers.get('Location');
+  if (!sessionUrl) throw new Error('Resumable session URL missing');
+
+  const blob = new Blob([jsonBody], { type: 'application/json; charset=UTF-8' });
+  const putResp = await fetch(sessionUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    body: blob
+  });
+  if (!putResp.ok) throw new Error('Resumable upload failed · ' + await readDriveError(putResp));
+  return putResp.json();
+}
+
+async function readDriveError(resp) {
+  let text = '';
+  try { text = await resp.text(); } catch(e) {}
+  let detail = '';
   try {
-    const resp = await authFetch(url, { method: databaseFileId ? 'PATCH' : 'POST', body: formData });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const result = await resp.json();
-    if (!databaseFileId && result.id) databaseFileId = result.id;
-    lastSaveTime = new Date(); pendingChanges = false;
-    setSaveStatus('saved', 'All changes saved');
-    document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    saveSession();
-  } catch(e) {
-    setSaveStatus('error', 'Save failed · click to retry');
-    isSaving = false;
-    throw e;
-  }
-  finally { isSaving = false; }
+    const j = JSON.parse(text);
+    detail = (j.error && j.error.message) || '';
+  } catch(e) { detail = text.slice(0, 200); }
+  return `HTTP ${resp.status} ${resp.statusText}${detail ? ' · ' + detail : ''}`;
 }
 
 async function syncDatabaseFromDrive() {
