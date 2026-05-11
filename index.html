@@ -430,6 +430,7 @@
   .client-disabled, .client-disabled:hover { opacity:0.35 !important; cursor:not-allowed !important; pointer-events:none !important; filter:grayscale(0.5); }
   body.client-mode .save-indicator { display:none !important; }
   body.client-mode .topbar::after { content:'CLIENT VIEW · READ-ONLY'; font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:1.5px; background:var(--gold); color:white; padding:3px 10px; border-radius:3px; margin-left:8px; }
+  body.operator-mode .topbar::after { content:'OPERATOR · เฉพาะ Section B / Overview / Calendar / Export'; font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:1px; background:#7A5BB5; color:white; padding:3px 10px; border-radius:3px; margin-left:8px; }
 
   /* Media thumbnails & viewer */
   .media-thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px; }
@@ -441,6 +442,14 @@
   .media-thumb .play-icon { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:36px; height:36px; border-radius:50%; background:rgba(0,0,0,0.6); color:white; display:grid; place-items:center; pointer-events:none; }
   .media-count-chip { display:inline-flex; align-items:center; gap:4px; background:var(--paper-3); padding:2px 6px; border-radius:3px; font-size:10px; margin-right:4px; cursor:pointer; border:none; font-family:inherit; color:var(--ink); }
   .media-count-chip:hover { background:var(--ink); color:var(--paper); }
+  .creative-prev { position:relative; width:64px; height:64px; border:1px solid var(--line); border-radius:5px; overflow:hidden; background:var(--paper-2); display:grid; place-items:center; cursor:pointer; padding:0; transition:transform 0.15s, box-shadow 0.15s, width 0.15s, height 0.15s; }
+  .creative-prev:hover { transform:scale(1.04); box-shadow:var(--shadow-md); border-color:var(--ink); }
+  .creative-prev img, .creative-prev video { width:100%; height:100%; object-fit:cover; display:block; }
+  .creative-prev .prev-icon { font-size:22px; }
+  .creative-prev .prev-play { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,0.6); color:#fff; display:grid; place-items:center; font-size:10px; pointer-events:none; }
+  .creative-prev .prev-more { position:absolute; bottom:2px; right:2px; background:rgba(0,0,0,0.75); color:#fff; font-size:9px; padding:1px 4px; border-radius:3px; font-family:'Geist Mono',monospace; }
+  .snap-item { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--paper-2); border:1px solid var(--line); border-radius:6px; font-size:12px; }
+  .snap-item strong { font-family:'Fraunces',serif; }
   .media-viewer-stage { background:#0a0d12; border-radius:6px; padding:16px; min-height:340px; display:grid; place-items:center; position:relative; }
   .media-viewer-stage img, .media-viewer-stage video { max-width:100%; max-height:60vh; border-radius:4px; }
   .media-viewer-strip { display:flex; gap:8px; overflow-x:auto; padding:10px 4px; margin-top:10px; }
@@ -501,10 +510,13 @@
         <input type="file" id="handoffFileInput" style="display:none;" accept=".zip,.json" onchange="handleFileSelect(event)" />
       </div>
       <div class="auth-token-row">
-        <label style="display:block; font-family:'Geist Mono',monospace; font-size:10px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; letter-spacing:1px;">Access Token <span style="color:var(--muted-2); text-transform:none; letter-spacing:0;">(ถ้าไฟล์ถูกล็อก)</span></label>
-        <input type="text" id="accessTokenInput" placeholder="วาง token ที่ได้รับจาก Wakuwaku" />
+        <label style="display:block; font-family:'Geist Mono',monospace; font-size:10px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; letter-spacing:1px;">Access Token <span style="color:var(--muted-2); text-transform:none; letter-spacing:0;">(สำหรับ Operator / ปลดล็อก bundle)</span></label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="accessTokenInput" placeholder="วาง token ที่ Wakuwaku Gen ให้ แล้วกด Enter" style="flex:1;" onkeydown="if(event.key==='Enter'){event.preventDefault();loginWithToken();}" />
+          <button class="btn primary" onclick="loginWithToken()">เข้าระบบ →</button>
+        </div>
       </div>
-      <div class="auth-meta">🔒 ทุกอย่างเก็บในเครื่องคุณ ไม่มีการอัปโหลด · รูป/วิดีโอทั้งหมดดาวน์โหลดต่อได้</div>
+      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ยุ่งกับ Token/สร้างแคมเปญ/Connect Drive ไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
     </div>
   </div>
 </div>
@@ -711,7 +723,14 @@
 
       <!-- HISTORY -->
       <div class="history-panel">
-        <div class="history-header"><span>Production Audit Trail</span><span id="historyCount" style="opacity:0.5; font-weight:normal;">0 records</span></div>
+        <div class="history-header">
+          <span>Production Audit Trail</span>
+          <span style="display:flex; align-items:center; gap:8px;">
+            <button class="btn sm" onclick="openSnapshotsModal()" title="เวอร์ชันก่อนหน้า / ย้อนกลับ">📦 Versions</button>
+            <button class="btn sm" onclick="manualSnapshot()" title="บันทึก snapshot ตอนนี้">💾 Snapshot</button>
+            <span id="historyCount" style="opacity:0.5; font-weight:normal;">0 records</span>
+          </span>
+        </div>
         <div class="history-body" id="historyBody"></div>
       </div>
     </div>
@@ -1054,17 +1073,31 @@
       <div class="input-group">
         <label>Role</label>
         <select id="tokenRole">
+          <option value="operator">Operator (ผู้ใช้โปรแกรม · แก้ Section B ได้ · ยุ่งกับ Token ไม่ได้)</option>
           <option value="client">Client (Read-Only · หลังส่งงาน)</option>
-          <option value="internal">Internal (Wakuwaku ทีม)</option>
+          <option value="internal">Internal (Wakuwaku ทีม · เข้าถึงทุกอย่าง)</option>
         </select>
       </div>
       <div class="input-group">
-        <label>Scope — เลือกแคมเปญที่ token นี้เข้าถึงได้</label>
+        <label>Scope — เลือกแคมเปญที่ token นี้เข้าถึงได้ (ไม่เลือก = ทุกแคมเปญ)</label>
         <div id="token-scope-list" style="max-height:160px; overflow-y:auto; border:1px solid var(--line); border-radius:4px; padding:8px;"></div>
       </div>
       <div class="input-group">
-        <label>Expires (วัน · 0 = ไม่หมดอายุ)</label>
-        <input type="number" id="tokenExpires" value="90" min="0" />
+        <label>Valid for · ระยะเวลาที่ใช้งานได้</label>
+        <select id="tokenExpiresPreset" onchange="onTokenExpiresPresetChange()">
+          <option value="7">7 วัน</option>
+          <option value="30">30 วัน</option>
+          <option value="90" selected>90 วัน (3 เดือน)</option>
+          <option value="180">180 วัน (6 เดือน)</option>
+          <option value="365">1 ปี</option>
+          <option value="730">2 ปี</option>
+          <option value="1095">3 ปี</option>
+          <option value="1825">5 ปี</option>
+          <option value="3650">10 ปี</option>
+          <option value="0">ไม่มีวันหมดอายุ (permanent)</option>
+          <option value="custom">กำหนดเอง (วัน)...</option>
+        </select>
+        <input type="number" id="tokenExpires" value="90" min="0" style="margin-top:8px; display:none;" placeholder="จำนวนวัน" />
       </div>
     </div>
     <div class="simple-modal-footer"><button class="btn" onclick="closeAddTokenModal()">Cancel</button><button class="btn primary" onclick="saveNewToken()">Generate</button></div>
@@ -1157,6 +1190,7 @@
       </div>
     </div>
     <div class="simple-modal-footer">
+      <button class="btn" onclick="clearCurrentCampaign()" style="margin-right:8px; color:var(--warn); border-color:var(--warn);">🔄 Reset Campaign</button>
       <button class="btn" onclick="confirmDeleteCampaign()" style="margin-right:auto; color:var(--err); border-color:var(--err);">🗑 Delete Campaign</button>
       <button class="btn" onclick="closeEditModal()">Cancel</button>
       <button class="btn primary" onclick="saveCampaignInfo()">💾 Save Changes</button>
@@ -1182,10 +1216,35 @@
 <div class="simple-overlay" id="confirmModal">
   <div class="simple-modal">
     <div class="simple-modal-head"><h3 id="confirm-title">Confirm Action</h3></div>
-    <div class="simple-modal-body"><p id="confirm-msg" style="font-size:13px; color:var(--ink); line-height:1.6;">Are you sure?</p></div>
+    <div class="simple-modal-body">
+      <p id="confirm-msg" style="font-size:13px; color:var(--ink); line-height:1.6; white-space:pre-wrap;">Are you sure?</p>
+      <div id="confirm-typed-wrap" style="display:none; margin-top:12px;">
+        <label id="confirm-typed-label" style="display:block; font-size:12px; color:var(--err); font-weight:600; margin-bottom:6px;">พิมพ์เพื่อยืนยัน:</label>
+        <input type="text" id="confirm-typed-input" autocomplete="off" oninput="onConfirmTypedInput()" style="width:100%; padding:8px 10px; border:1px solid var(--err); border-radius:5px; font-family:'Geist Mono',monospace; font-size:13px;" />
+      </div>
+    </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeConfirm()">Cancel</button>
       <button class="btn accent" id="confirm-action-btn" onclick="executeConfirm()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Snapshots / Versions Modal -->
+<div class="simple-overlay" id="snapshotsModal">
+  <div class="simple-modal lg">
+    <div class="simple-modal-head">
+      <h3>📦 Campaign Versions · เวอร์ชันก่อนหน้า (เก็บได้ 3)</h3>
+      <button class="close-btn" onclick="closeSnapshotsModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="simple-modal-body">
+      <p style="font-size:12px; color:var(--muted); margin-bottom:12px;">ทุกครั้งที่กด "Snapshot now" / ก่อน Reset / ก่อน Revert ระบบจะเก็บสถานะแคมเปญไว้ (ไม่รวมไฟล์สื่อที่ฝังใน JSON เพื่อประหยัดพื้นที่ — สื่อที่ offload ขึ้น Drive แล้วยังอยู่)</p>
+      <div id="snapshots-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="reset-history-box" style="margin-top:14px; font-size:11px; color:var(--muted); font-family:'Geist Mono',monospace;"></div>
+    </div>
+    <div class="simple-modal-footer">
+      <button class="btn" onclick="closeSnapshotsModal()">Close</button>
+      <button class="btn primary" onclick="manualSnapshot()">💾 Snapshot now</button>
     </div>
   </div>
 </div>
@@ -1481,8 +1540,51 @@ async function onLoginSuccess() {
     logAction('SYSTEM', `User authenticated: ${user.email}`);
     saveSession();
     await syncDatabaseFromDrive();
+    if (_pendingTokenLogin) { const t = _pendingTokenLogin; _pendingTokenLogin = null; applyTokenLogin(t); }
     if (pendingForceSaveAfterLogin) { pendingForceSaveAfterLogin = false; setTimeout(() => saveToDrive(), 200); }
   } catch(e) { showToast('Profile load failed', 'err'); console.error(e); }
+}
+
+// ============================================================================
+// TOKEN LOGIN (Operator / scoped Client via a generated token)
+// ============================================================================
+let _pendingTokenLogin = null;
+let _currentTokenLogin = null;
+function loginWithToken() {
+  const token = (document.getElementById('accessTokenInput').value || '').trim();
+  if (!token) { showToast('กรอก token ก่อน', 'warn'); return; }
+  if (CLIENT_ID.includes('YOUR_CLIENT_ID')) { showToast('CLIENT_ID ยังไม่ตั้งค่า — ใช้ไฟล์ bundle แทน', 'err'); return; }
+  if (!tokenClient) { showToast('Google services ยังโหลดไม่เสร็จ', 'warn'); return; }
+  _pendingTokenLogin = token;
+  _isInitialLogin = true;
+  showToast('กำลังเข้าระบบผ่าน Google เพื่อตรวจสอบ token...');
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+function applyTokenLogin(token) {
+  const match = (accessTokens || []).find(x => x.token === token);
+  if (!match) { showToast('❌ Token ไม่ถูกต้อง — ไม่พบในระบบ', 'err'); setTimeout(performLogout, 1800); return; }
+  if (match.expiresAt && new Date(match.expiresAt).getTime() < Date.now()) { showToast('❌ Token หมดอายุแล้ว (' + new Date(match.expiresAt).toLocaleDateString() + ')', 'err'); setTimeout(performLogout, 1800); return; }
+  if (match.role === 'internal') { showToast('Token นี้เป็น internal — เข้าระบบแบบ admin', 'ok'); return; } // stay internal
+  // Scope to allowed campaigns
+  if (Array.isArray(match.campaignIds) && match.campaignIds.length) {
+    campaigns = campaigns.filter(c => match.campaignIds.includes(c.id));
+    if (campaigns.length === 0) { showToast('❌ Token นี้ไม่มีสิทธิ์เข้าถึงแคมเปญใด', 'err'); setTimeout(performLogout, 1800); return; }
+    if (!campaigns.find(c => c.id === currentCampaignId)) currentCampaignId = campaigns[0].id;
+  }
+  userRole = (match.role === 'client') ? 'client' : 'operator';
+  _currentTokenLogin = token;
+  document.getElementById('sb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
+  document.getElementById('sb-avatar').textContent = userRole === 'operator' ? '🛠' : '👁';
+  document.getElementById('tb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
+  document.getElementById('tb-avatar').textContent = userRole === 'operator' ? '🛠' : '👁';
+  document.getElementById('sb-mode-tag').textContent = userRole === 'operator' ? 'Operator · Token Access' : 'Client · Token (Read-Only)';
+  document.getElementById('sb-mode-tag').style.color = 'var(--gold)';
+  applyRoleRestrictions();
+  renderEverything();
+  switchView('overview');
+  logAction('SYSTEM', `Token login: ${match.name || 'token'} as ${userRole}`);
+  showToast(`✓ เข้าระบบเป็น ${userRole === 'operator' ? 'Operator' : 'Client'}${match.name ? ' · ' + match.name : ''}`, 'ok');
+  saveSession();
 }
 
 // ============================================================================
@@ -1494,11 +1596,13 @@ let pendingForceSaveAfterLogin = false;
 
 function saveSession() {
   try {
+    const googleAuthed = (userRole === 'internal' || userRole === 'operator') && !isOfflineMode && !!accessToken;
     const meta = {
       ts: Date.now(),
       userRole, isOfflineMode,
-      accessToken: userRole === 'internal' ? accessToken : null,
-      tokenExpiresAt: userRole === 'internal' ? (Date.now() + 50*60*1000) : null,
+      accessToken: googleAuthed ? accessToken : null,
+      tokenExpiresAt: googleAuthed ? (Date.now() + 50*60*1000) : null,
+      operatorToken: userRole === 'operator' ? _currentTokenLogin : null,
       databaseFileId,
       currentCampaignId,
       profileName: document.getElementById('sb-name')?.textContent || '',
@@ -1536,7 +1640,7 @@ async function tryRestoreSession() {
     if (!s || !s.ts) return false;
     if (Date.now() - s.ts > 6*60*60*1000) { clearSession(); return false; } // 6hr cap
 
-    if (s.userRole === 'internal' && s.accessToken && Date.now() < (s.tokenExpiresAt || 0)) {
+    if ((s.userRole === 'internal' || s.userRole === 'operator') && s.accessToken && Date.now() < (s.tokenExpiresAt || 0)) {
       accessToken = s.accessToken;
       databaseFileId = s.databaseFileId || null;
       // Verify token by fetching profile
@@ -1545,7 +1649,7 @@ async function tryRestoreSession() {
         if (!r.ok) throw new Error('token invalid');
         const user = await r.json();
         isOfflineMode = false; userRole = 'internal';
-        document.body.classList.remove('client-mode');
+        document.body.classList.remove('client-mode', 'operator-mode');
         document.getElementById('authOverlay').style.display = 'none';
         document.getElementById('mainApp').style.display = 'grid';
         setSaveStatus('idle', 'Connected');
@@ -1556,7 +1660,8 @@ async function tryRestoreSession() {
         document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
         document.getElementById('sb-mode-tag').style.color = "var(--connect)";
         await syncDatabaseFromDrive();
-        showToast('Session restored');
+        if (s.userRole === 'operator' && s.operatorToken) { applyTokenLogin(s.operatorToken); }
+        else showToast('Session restored');
         return true;
       } catch(e) {
         clearSession();
@@ -1579,7 +1684,7 @@ async function tryRestoreSession() {
       document.getElementById('sb-mode-tag').textContent = userRole === 'client' ? 'Client View · Read Only' : 'Offline Preview';
       document.getElementById('sb-mode-tag').style.color = "var(--gold)";
       renderEverything();
-      if (userRole === 'client') applyClientModeRestrictions();
+      if (userRole === 'client' || userRole === 'operator') applyRoleRestrictions();
       if (data._stripped) showToast('Session restored (media ใหญ่เกิน — กรุณา re-import bundle เพื่อโหลดสื่อ)', 'warn');
       else showToast('Session restored');
       return true;
@@ -1649,7 +1754,7 @@ function scheduleSave() {
   }, SAVE_DEBOUNCE_MS);
 }
 async function forceSave() {
-  if (blockIfClient('Backup เป็นของ Internal เท่านั้น')) return;
+  if (blockIfNotInternal('Backup to Cloud เฉพาะทีม Wakuwaku')) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   if (isOfflineMode) {
     showToast('Offline mode — ใช้ "Prepare Handoff" เพื่อ export bundle', 'warn');
@@ -1904,7 +2009,7 @@ async function uploadFileToDrive(name, blob, parentId) {
 
 // Offload every embedded (base64) asset file into the Hub media folder.
 async function offloadMediaToDrive(notify) {
-  if (blockIfClient('Offload media ได้เฉพาะ Internal')) return;
+  if (blockIfNotInternal('Offload media เฉพาะทีม Wakuwaku')) return;
   if (isOfflineMode) { showToast('Offline mode — offload ไม่ได้', 'warn'); return; }
   if (!accessToken) { showToast('ต้อง login ก่อน', 'warn'); return; }
   if (!hub.driveFolderId) { showToast('ตั้ง Hub Folder URL ก่อน', 'warn'); return; }
@@ -2111,8 +2216,117 @@ function normalizeCampaign(c) {
     schema: c.schema || defaultSchema(),
     excelData: c.excelData || null,
     driveLinks: c.driveLinks || [{name:"Product_Info",url:""},{name:"Content_Dir",url:""},{name:"CI_Design",url:""},{name:"Cat_Map",url:""}],
-    linkedFilesCount: c.linkedFilesCount || 0
+    linkedFilesCount: c.linkedFilesCount || 0,
+    snapshots: Array.isArray(c.snapshots) ? c.snapshots : [],
+    lastResetBy: c.lastResetBy || '', lastResetAt: c.lastResetAt || ''
   };
+}
+
+// ============================================================================
+// CAMPAIGN VERSION SNAPSHOTS (keep last 3) + REVERT + RESET
+// ============================================================================
+const MAX_SNAPSHOTS = 3;
+function currentUserName() { return (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Unknown'; }
+function stripMediaForSnapshot(camp) {
+  // Deep clone without the heavy base64 blobs (keep driveFileId so offloaded media survives a revert)
+  const clone = JSON.parse(JSON.stringify({ ...camp, snapshots: undefined }));
+  (clone.assets || []).forEach(a => (a.files || []).forEach(f => { if (f.data) { f._wasEmbedded = true; delete f.data; } }));
+  return clone;
+}
+function takeSnapshot(label) {
+  const camp = getCurrentCampaign();
+  if (!camp) return;
+  camp.snapshots = camp.snapshots || [];
+  camp.snapshots.unshift({ ts: new Date().toISOString(), by: currentUserName(), label: label || 'Manual snapshot', data: stripMediaForSnapshot(camp) });
+  if (camp.snapshots.length > MAX_SNAPSHOTS) camp.snapshots.length = MAX_SNAPSHOTS;
+}
+function manualSnapshot() {
+  if (blockIfClient('Snapshot ได้เฉพาะผู้ใช้ระบบ')) return;
+  takeSnapshot('Manual snapshot · ' + currentUserName());
+  logAction('SNAPSHOT', 'Saved a version snapshot');
+  showToast('✓ Snapshot บันทึกแล้ว (เก็บได้ ' + MAX_SNAPSHOTS + ' เวอร์ชัน)');
+  renderSnapshotsModal();
+  scheduleSave();
+}
+function revertToSnapshot(idx) {
+  if (blockIfClient('Revert ได้เฉพาะผู้ใช้ระบบ')) return;
+  const camp = getCurrentCampaign();
+  if (!camp || !camp.snapshots || !camp.snapshots[idx]) return;
+  const snap = camp.snapshots[idx];
+  showConfirm('ย้อนกลับเวอร์ชัน?', `จะแทนที่ข้อมูลแคมเปญตอนนี้ด้วยเวอร์ชันเมื่อ ${new Date(snap.ts).toLocaleString()} (โดย ${snap.by})\n\nหมายเหตุ: ไฟล์สื่อที่ "ฝังใน JSON" ในเวอร์ชันนั้นจะไม่กลับมา (เฉพาะที่ offload ขึ้น Drive แล้วเท่านั้นที่ยังอยู่) · ระบบจะ snapshot สถานะปัจจุบันไว้ก่อน revert`, () => {
+    const beforeSnaps = camp.snapshots.slice();
+    takeSnapshot('Auto · before revert by ' + currentUserName());
+    const restored = JSON.parse(JSON.stringify(snap.data));
+    // Re-apply onto the campaign object in place, keeping the same id
+    Object.keys(restored).forEach(k => { if (k !== 'snapshots') camp[k] = restored[k]; });
+    camp.snapshots = [camp.snapshots[0], ...beforeSnaps].slice(0, MAX_SNAPSHOTS);
+    // re-normalize files
+    (camp.assets || []).forEach(a => { a.files = (a.files || []).map(f => ({ ...f })); });
+    logAction('REVERT', `Reverted to version from ${new Date(snap.ts).toLocaleString()}`);
+    renderEverything();
+    closeSnapshotsModal();
+    showToast('✓ ย้อนกลับเวอร์ชันแล้ว');
+    scheduleSave();
+  });
+}
+function openSnapshotsModal() { renderSnapshotsModal(); document.getElementById('snapshotsModal').classList.add('show'); }
+function closeSnapshotsModal() { document.getElementById('snapshotsModal').classList.remove('show'); }
+function renderSnapshotsModal() {
+  const camp = getCurrentCampaign();
+  const list = document.getElementById('snapshots-list');
+  if (!list) return;
+  const snaps = (camp && camp.snapshots) || [];
+  if (snaps.length === 0) {
+    list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:18px;">ยังไม่มี snapshot · กด "💾 Snapshot now" เพื่อบันทึกเวอร์ชันแรก</div>';
+  } else {
+    list.innerHTML = snaps.map((s, i) => {
+      const d = s.data || {};
+      const nAssets = (d.assets || []).length;
+      const nLogs = (d.log || []).length;
+      const canRevert = userRole === 'internal' || userRole === 'operator';
+      return `<div class="snap-item">
+        <div>
+          <strong>v${snaps.length - i}</strong> · ${escapeHtml(s.label || 'snapshot')}<br>
+          <small style="color:var(--muted);">${new Date(s.ts).toLocaleString()} · โดย ${escapeHtml(s.by || '?')} · ${nAssets} assets · ${nLogs} log entries</small>
+        </div>
+        <button class="btn sm" ${canRevert?'':'disabled'} onclick="revertToSnapshot(${i})">↩ Revert to this</button>
+      </div>`;
+    }).join('');
+  }
+  const rb = document.getElementById('reset-history-box');
+  if (rb) rb.textContent = camp && camp.lastResetBy ? `🔄 Last reset: ${new Date(camp.lastResetAt).toLocaleString()} by ${camp.lastResetBy}` : '';
+}
+
+function clearCurrentCampaign() {
+  if (blockIfClient('Reset ได้เฉพาะผู้ใช้ระบบ')) return;
+  const camp = getCurrentCampaign();
+  if (!camp) return;
+  showTypedConfirm(
+    '🔄 Reset / ล้างแคมเปญทั้งหมด',
+    `ลบ assets, ไฟล์สื่อ, log, schema, drive links ของแคมเปญ "${camp.campaign}" ทั้งหมด — เหมือนเริ่มใหม่ (เก็บแต่ชื่อ client/campaign)\n\nระบบจะ snapshot ไว้ให้ 1 เวอร์ชันก่อน reset · พิมพ์คำว่า Refresh เพื่อยืนยัน`,
+    'Refresh',
+    () => {
+      takeSnapshot('Auto · before RESET by ' + currentUserName());
+      const keptSnaps = camp.snapshots.slice(0, MAX_SNAPSHOTS);
+      const by = currentUserName(), at = new Date().toISOString();
+      camp.assets = [];
+      camp.schema = defaultSchema();
+      camp.excelData = null;
+      camp.driveLinks = [{name:"Product_Info",url:""},{name:"Content_Dir",url:""},{name:"CI_Design",url:""},{name:"Cat_Map",url:""}];
+      camp.linkedFilesCount = 0;
+      camp.handoffInfo = null;
+      camp.description = ''; camp.stakeholders = ''; camp.tags = [];
+      camp.startPeriod = ''; camp.endPeriod = ''; camp.startDate = ''; camp.endDate = '';
+      camp.status = 'draft';
+      camp.lastResetBy = by; camp.lastResetAt = at;
+      camp.snapshots = keptSnaps;
+      camp.log = [{ time: at, type: 'RESET', desc: `Campaign reset (cleared everything) by ${by}`, user: by }];
+      closeEditModal();
+      renderEverything();
+      showToast('✓ Reset แคมเปญแล้ว · ผู้ล้าง: ' + by);
+      scheduleSave();
+    }
+  );
 }
 
 function normalizeAsset(a) {
@@ -2166,7 +2380,7 @@ function switchView(name) {
 // DATA HUB
 // ============================================================================
 function saveHubConfig() {
-  if (blockIfClient('แก้ไข Hub ได้เฉพาะ Internal')) return;
+  if (blockIfNotInternal('แก้ไข Data Hub เฉพาะทีม Wakuwaku')) return;
   hub.folderUrl = document.getElementById('hubFolderUrl').value.trim();
   hub.backupFolderUrl = document.getElementById('hubBackupFolderUrl').value.trim();
   hub.notes = document.getElementById('hubNotes').value.trim();
@@ -2486,6 +2700,20 @@ function renderAssets() {
     const linkArr = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
     const linksMarkup = linkArr.map((u, i) => `<a href="${escapeHtml(u)}" target="_blank" class="file-chip link-chip" title="${escapeHtml(u)}">🔗 ${linkArr.length > 1 ? (i+1) + '. ' : ''}${escapeHtml(truncate(u, 36))}</a>`).join('');
     const linksHTML = linksMarkup + mediaChip;
+    // Inline creative preview (first image, else first video, else first file)
+    const allFiles = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
+    const previewFile = allFiles.find(f => isImageType(f.type)) || allFiles.find(f => isVideoType(f.type)) || allFiles[0];
+    let previewHTML = '<span style="color:var(--muted-2); font-size:11px;">—</span>';
+    if (previewFile) {
+      const src = fileSrcNow(previewFile);
+      const more = allFiles.length > 1 ? `<span class="prev-more">+${allFiles.length-1}</span>` : '';
+      let body;
+      if (src && isImageType(previewFile.type)) body = `<img src="${src}" alt="">`;
+      else if (src && isVideoType(previewFile.type)) body = `<video src="${src}" muted preload="metadata"></video><span class="prev-play">▶</span>`;
+      else if (fileIsOnDrive(previewFile)) body = `<span class="prev-icon">☁️</span>`;
+      else body = `<span class="prev-icon">📄</span>`;
+      previewHTML = `<button class="creative-prev" onclick="openMediaViewer('${a.id}')" title="ดู/ขยาย creative ที่แนบไว้" data-asset="${a.id}" data-fileidx="${allFiles.indexOf(previewFile)}">${body}${more}</button>`;
+    }
     tr.innerHTML = `
       <td><span class="cat-pill ${a.catClass}">${escapeHtml(a.catLabel || a.catClass.toUpperCase())}</span>${sched ? '<br>'+sched : ''}</td>
       <td class="topic-cell">
@@ -2493,7 +2721,7 @@ function renderAssets() {
         <small><span class="h-tag">H3</span>${escapeHtml(a.h3 || '—')}</small>
         ${promptHTML}
       </td>
-      <td><span class="asset-type ${a.assetType || 'other'}">${(a.assetType || 'other').toUpperCase()}</span></td>
+      <td><div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;"><span class="asset-type ${a.assetType || 'other'}">${(a.assetType || 'other').toUpperCase()}</span>${previewHTML}</div></td>
       <td class="links-cell">${linksHTML || '<span style="color:var(--muted-2); font-size:11px;">—</span>'}</td>
       <td style="font-family:'Geist Mono', monospace; font-size:11px; color:var(--muted);">${dateStr}</td>
       <td>
@@ -2504,6 +2732,23 @@ function renderAssets() {
       </td>`;
     tbody.appendChild(tr);
   });
+  // Lazily resolve Drive-backed preview thumbnails
+  setTimeout(() => {
+    document.querySelectorAll('#asset-tbody .creative-prev .prev-icon').forEach(async iconEl => {
+      const btn = iconEl.closest('.creative-prev');
+      if (!btn || iconEl.textContent !== '☁️') return;
+      const aId = btn.dataset.asset, fi = +btn.dataset.fileidx;
+      const cc = getCurrentCampaign();
+      const aa = cc.assets.find(x => x.id === aId);
+      const ff = aa && aa.files && aa.files[fi];
+      if (!ff || !fileIsOnDrive(ff)) return;
+      try {
+        const url = await getFileDataUrl(ff);
+        if (isImageType(ff.type)) btn.innerHTML = `<img src="${url}" alt="">` + (aa.files.length>1?`<span class="prev-more">+${aa.files.length-1}</span>`:'');
+        else if (isVideoType(ff.type)) btn.innerHTML = `<video src="${url}" muted preload="metadata"></video><span class="prev-play">▶</span>` + (aa.files.length>1?`<span class="prev-more">+${aa.files.length-1}</span>`:'');
+      } catch(e) { /* leave ☁ */ }
+    });
+  }, 50);
 }
 
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -2546,14 +2791,50 @@ function renderHistory() {
 // ============================================================================
 // CONFIRM
 // ============================================================================
+let _typedConfirmWord = null;
 function showConfirm(title, msg, onConfirm) {
+  _typedConfirmWord = null;
   document.getElementById('confirm-title').textContent = title;
   document.getElementById('confirm-msg').textContent = msg;
+  const tc = document.getElementById('confirm-typed-wrap'); if (tc) tc.style.display = 'none';
+  const btn = document.getElementById('confirm-action-btn'); if (btn) { btn.disabled = false; btn.style.opacity = ''; }
   confirmCallback = onConfirm;
   document.getElementById('confirmModal').classList.add('show');
 }
-function executeConfirm() { if (confirmCallback) confirmCallback(); closeConfirm(); }
-function closeConfirm() { document.getElementById('confirmModal').classList.remove('show'); confirmCallback = null; }
+// Variant requiring the user to type a specific word to enable Confirm
+function showTypedConfirm(title, msg, requiredWord, onConfirm) {
+  _typedConfirmWord = requiredWord;
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-msg').textContent = msg;
+  const tc = document.getElementById('confirm-typed-wrap');
+  const inp = document.getElementById('confirm-typed-input');
+  const lbl = document.getElementById('confirm-typed-label');
+  if (lbl) lbl.textContent = `พิมพ์ "${requiredWord}" เพื่อยืนยัน:`;
+  if (inp) inp.value = '';
+  if (tc) tc.style.display = '';
+  const btn = document.getElementById('confirm-action-btn');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; }
+  confirmCallback = onConfirm;
+  document.getElementById('confirmModal').classList.add('show');
+  setTimeout(() => inp && inp.focus(), 100);
+}
+function onConfirmTypedInput() {
+  const inp = document.getElementById('confirm-typed-input');
+  const btn = document.getElementById('confirm-action-btn');
+  if (!inp || !btn) return;
+  const ok = (inp.value.trim() === _typedConfirmWord);
+  btn.disabled = !ok; btn.style.opacity = ok ? '' : '0.4';
+}
+function executeConfirm() {
+  if (_typedConfirmWord) {
+    const inp = document.getElementById('confirm-typed-input');
+    if (!inp || inp.value.trim() !== _typedConfirmWord) { showToast(`พิมพ์ "${_typedConfirmWord}" ให้ถูกต้องก่อน`, 'warn'); return; }
+  }
+  const cb = confirmCallback;
+  closeConfirm();
+  if (cb) cb();
+}
+function closeConfirm() { document.getElementById('confirmModal').classList.remove('show'); confirmCallback = null; _typedConfirmWord = null; }
 
 function confirmDeleteAsset(id) {
   if (blockIfClient('ไม่สามารถลบ asset ได้')) return;
@@ -2604,7 +2885,7 @@ function performLogout() {
 // CAMPAIGN MGMT
 // ============================================================================
 function openAddCampaignModal() {
-  if (blockIfClient()) return;
+  if (blockIfNotInternal('สร้างแคมเปญใหม่ได้เฉพาะทีม Wakuwaku')) return;
   ['newClient','newCampaign','newStart','newEnd'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('addCampaignModal').classList.add('show');
 }
@@ -3225,10 +3506,12 @@ function renderAccessTable() {
 }
 
 function openAddTokenModal() {
-  if (blockIfClient()) return;
+  if (blockIfNotInternal('จัดการ Token ได้เฉพาะทีม Wakuwaku')) return;
   document.getElementById('tokenName').value = '';
-  document.getElementById('tokenRole').value = 'client';
+  document.getElementById('tokenRole').value = 'operator';
+  document.getElementById('tokenExpiresPreset').value = '90';
   document.getElementById('tokenExpires').value = 90;
+  document.getElementById('tokenExpires').style.display = 'none';
   const list = document.getElementById('token-scope-list');
   list.innerHTML = campaigns.map(c => `
     <label style="display:flex; align-items:center; gap:8px; padding:4px; cursor:pointer; font-size:12px;">
@@ -3243,25 +3526,39 @@ function generateTokenString() {
   const seg = () => Math.random().toString(36).slice(2,8).toUpperCase();
   return `WK-${seg()}-${seg()}`;
 }
+function onTokenExpiresPresetChange() {
+  const preset = document.getElementById('tokenExpiresPreset').value;
+  const customInput = document.getElementById('tokenExpires');
+  if (preset === 'custom') { customInput.style.display = ''; customInput.focus(); }
+  else { customInput.style.display = 'none'; customInput.value = preset; }
+}
+function getTokenExpiryDays() {
+  const preset = document.getElementById('tokenExpiresPreset').value;
+  if (preset === 'custom') return Math.max(0, +document.getElementById('tokenExpires').value || 0);
+  return +preset;
+}
 function saveNewToken() {
+  if (blockIfNotInternal('จัดการ Token ได้เฉพาะทีม Wakuwaku')) return;
   const name = document.getElementById('tokenName').value.trim();
   const role = document.getElementById('tokenRole').value;
-  const days = +document.getElementById('tokenExpires').value;
+  const days = getTokenExpiryDays();
   const scope = Array.from(document.querySelectorAll('.scope-cb:checked')).map(cb => cb.value);
   if (!name) { showToast('Recipient name required', 'warn'); return; }
-  if (scope.length === 0) { showToast('Select at least 1 campaign', 'warn'); return; }
+  // Empty scope = all campaigns (operators usually need broad access)
   const t = {
     token: generateTokenString(),
     name, role,
     campaignIds: scope,
     expiresAt: days > 0 ? new Date(Date.now() + days*86400*1000).toISOString() : null,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    createdBy: currentUserName()
   };
   accessTokens.push(t);
   closeAddTokenModal();
   renderAccessTable();
-  logAction('ACCESS', `Generated ${role} token for ${name}`);
-  showToast(`Token generated: ${t.token} · copied to clipboard`);
+  const dur = days > 0 ? `${days} วัน` : 'ไม่หมดอายุ';
+  logAction('ACCESS', `Generated ${role} token for ${name} (${dur})`);
+  showToast(`Token: ${t.token} · ${dur} · copied`, 'ok');
   copyToken(t.token);
 }
 function copyToken(token) {
@@ -3291,25 +3588,58 @@ const CLIENT_DISABLED_SELECTORS = [
   '#configWarning'
 ];
 
-function applyClientModeRestrictions() {
-  document.body.classList.add('client-mode');
-  // Hide Access Control nav for clients
-  const nav = document.getElementById('nav-access'); if (nav) nav.classList.add('hidden');
-  CLIENT_DISABLED_SELECTORS.forEach(sel => {
-    document.querySelectorAll(sel).forEach(el => {
-      if (el.closest('.client-allow') || el.dataset.alwaysOn === '1') return;
-      el.classList.add('client-disabled');
-      el.setAttribute('disabled', 'disabled');
-      el.setAttribute('aria-disabled', 'true');
-      el.title = 'Client view · อ่านอย่างเดียว';
-    });
-  });
-}
+// Operators: can fully use Section B + Overview/Calendar/Export, but NOT
+// token management, new campaigns, Connect Drive, Backup, Data Hub, Handoff.
+const OPERATOR_DISABLED_SELECTORS = [
+  '.add-btn',                            // sidebar campaign +
+  '.nav-item[onclick*="forceSave"]',     // Backup to Cloud
+  '.hero-actions .btn.gold',             // Prepare Handoff
+  '#handoffBanner button',
+  '#configWarning'
+];
 
-// Universal client-mode guard. Returns true if action should be blocked.
+function applyRoleRestrictions() {
+  document.body.classList.remove('client-mode', 'operator-mode');
+  const navAccess = document.getElementById('nav-access');
+  const navHub = document.getElementById('nav-hub');
+  if (navAccess) navAccess.classList.remove('hidden');
+  if (navHub) navHub.classList.remove('hidden');
+  if (userRole === 'client') {
+    document.body.classList.add('client-mode');
+    if (navAccess) navAccess.classList.add('hidden');
+    CLIENT_DISABLED_SELECTORS.forEach(sel => document.querySelectorAll(sel).forEach(el => {
+      if (el.closest('.client-allow') || el.dataset.alwaysOn === '1') return;
+      el.classList.add('client-disabled'); el.setAttribute('disabled', 'disabled'); el.setAttribute('aria-disabled', 'true');
+      el.title = 'Client view · อ่านอย่างเดียว';
+    }));
+  } else if (userRole === 'operator') {
+    document.body.classList.add('operator-mode');
+    if (navAccess) navAccess.classList.add('hidden');
+    if (navHub) navHub.classList.add('hidden');
+    OPERATOR_DISABLED_SELECTORS.forEach(sel => document.querySelectorAll(sel).forEach(el => {
+      el.classList.add('client-disabled'); el.setAttribute('disabled', 'disabled'); el.setAttribute('aria-disabled', 'true');
+      el.title = 'Operator · เฉพาะทีม Wakuwaku เท่านั้น';
+    }));
+    // If we're currently on a hidden view, bounce to overview
+    const active = document.querySelector('.view-container.active');
+    if (active && (active.id === 'view-access' || active.id === 'view-hub')) switchView('overview');
+  }
+}
+// Back-compat alias (tests / older callers)
+function applyClientModeRestrictions() { applyRoleRestrictions(); }
+
+// Guard for read-only client. Returns true if action should be blocked.
 function blockIfClient(actionLabel) {
   if (userRole === 'client') {
     showToast('👁 Client view · ' + (actionLabel || 'อ่านอย่างเดียว — ไม่สามารถแก้ไขได้'), 'warn');
+    return true;
+  }
+  return false;
+}
+// Guard for wakuwaku-only features (token mgmt, new campaign, Connect Drive, Hub, backup).
+function blockIfNotInternal(actionLabel) {
+  if (userRole !== 'internal') {
+    showToast('🔒 เฉพาะทีม Wakuwaku · ' + (actionLabel || 'ใช้ส่วนนี้ไม่ได้'), 'warn');
     return true;
   }
   return false;
@@ -3886,7 +4216,7 @@ async function finalizeHandoff() {
 }
 
 function reopenForRevise() {
-  if (blockIfClient('ไม่สามารถเปิด revise ได้')) return;
+  if (blockIfNotInternal('Re-open handoff เฉพาะทีม Wakuwaku')) return;
   showConfirm('Re-open for revision?', 'Bundle ที่ส่งไปแล้วยังใช้งานได้ — แก้ไขเสร็จสามารถสร้าง bundle ใหม่', () => {
     const camp = getCurrentCampaign();
     camp.status = 'active';
@@ -3972,7 +4302,7 @@ function loadDataOffline(data, providedToken) {
   document.getElementById('sb-mode-tag').style.color = "var(--gold)";
 
   renderEverything();
-  if (userRole === 'client') applyClientModeRestrictions();
+  if (userRole === 'client' || userRole === 'operator') applyRoleRestrictions();
   showToast('✓ Project loaded · ' + (userRole === 'client' ? 'read-only' : 'offline edit'));
   logAction('IMPORT', `Bundle loaded (${userRole} mode)`);
   saveSession();
@@ -4040,7 +4370,7 @@ function saveCampaignInfo() {
 }
 
 function linkDriveFolder(i) {
-  if (blockIfClient('ไม่สามารถ link reference ได้')) return;
+  if (blockIfNotInternal('จัดการ Drive references เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
   if (!camp.driveLinks[i] || !camp.driveLinks[i].url) { showToast('ยังไม่มี link — กรุณาเพิ่มผ่าน Connect Drive ก่อน', 'warn'); return; }
   if (camp.status === 'handed-off') { showToast('Re-open campaign first', 'warn'); return; }
@@ -4082,7 +4412,7 @@ function restoreLinkedDriveCards() {
 }
 
 function openConnectModal() {
-  if (blockIfClient('ไม่สามารถแก้ไข Drive links ได้')) return;
+  if (blockIfNotInternal('Connect Drive เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
   for (let i = 0; i < 4; i++) document.getElementById(`linkInput${i}`).value = camp.driveLinks[i]?.url || '';
   document.getElementById('connectModal').classList.add('show');
@@ -4468,6 +4798,61 @@ window.__runTests = async function() {
   t('runIntegrityCheck returns array', () => { const r = runIntegrityCheck(); ok(Array.isArray(r) && r.length > 0); r.forEach(c => ok(['ok','warn','err'].includes(c.level))); });
   t('switchView hub renders', () => { switchView('hub'); ok(document.getElementById('view-hub').classList.contains('active')); switchView('overview'); });
 
+  // ---- Snapshots / reset / typed confirm ----
+  t('normalizeCampaign has snapshots + lastResetBy', () => { const c = normalizeCampaign({}); ok(Array.isArray(c.snapshots)); eq(c.lastResetBy, ''); eq(c.lastResetAt, ''); });
+  t('MAX_SNAPSHOTS is 3', () => eq(MAX_SNAPSHOTS, 3));
+  t('stripMediaForSnapshot removes file.data', () => {
+    const c = { id:'c1', assets:[{ id:'a1', files:[{ name:'x', type:'image/png', data:'data:image/png;base64,AAA', driveFileId:'D1' }] }], snapshots:[{x:1}] };
+    const s = stripMediaForSnapshot(c);
+    ok(!('snapshots' in s) || s.snapshots === undefined);
+    ok(!s.assets[0].files[0].data, 'data removed');
+    eq(s.assets[0].files[0].driveFileId, 'D1', 'driveFileId kept');
+  });
+  t('takeSnapshot caps at MAX_SNAPSHOTS', () => {
+    const c = getCurrentCampaign(); const saved = (c.snapshots||[]).slice();
+    c.snapshots = [];
+    takeSnapshot('t1'); takeSnapshot('t2'); takeSnapshot('t3'); takeSnapshot('t4');
+    eq(c.snapshots.length, 3);
+    c.snapshots = saved;
+  });
+  t('showTypedConfirm shows the typed input', () => {
+    showTypedConfirm('T', 'm', 'Refresh', () => {});
+    ok(document.getElementById('confirm-typed-wrap').style.display !== 'none');
+    ok(document.getElementById('confirm-action-btn').disabled, 'confirm disabled until typed');
+    closeConfirm();
+  });
+  t('onConfirmTypedInput enables confirm on exact match', () => {
+    showTypedConfirm('T', 'm', 'Refresh', () => {});
+    const inp = document.getElementById('confirm-typed-input'); inp.value = 'wrong'; onConfirmTypedInput();
+    ok(document.getElementById('confirm-action-btn').disabled);
+    inp.value = 'Refresh'; onConfirmTypedInput();
+    ok(!document.getElementById('confirm-action-btn').disabled);
+    closeConfirm();
+  });
+
+  // ---- Roles / token login ----
+  t('blockIfNotInternal blocks operator', () => { const sv = userRole; userRole = 'operator'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === true); });
+  t('blockIfNotInternal passes internal', () => { const sv = userRole; userRole = 'internal'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === false); });
+  t('blockIfClient still blocks client only', () => { const sv = userRole; userRole = 'operator'; const r1 = blockIfClient(); userRole = 'client'; const r2 = blockIfClient(); userRole = sv; ok(r1 === false && r2 === true); });
+  t('applyRoleRestrictions operator hides access+hub nav', () => {
+    const sv = userRole; userRole = 'operator'; applyRoleRestrictions();
+    ok(document.getElementById('nav-access').classList.contains('hidden'));
+    ok(document.getElementById('nav-hub').classList.contains('hidden'));
+    ok(document.body.classList.contains('operator-mode'));
+    userRole = sv; document.body.classList.remove('operator-mode'); applyRoleRestrictions();
+  });
+  t('token expiry presets', () => {
+    const el = document.getElementById('tokenExpiresPreset');
+    el.value = '365'; eq(getTokenExpiryDays(), 365);
+    el.value = '0'; eq(getTokenExpiryDays(), 0);
+    el.value = 'custom'; document.getElementById('tokenExpires').value = '42'; eq(getTokenExpiryDays(), 42);
+    el.value = '90';
+  });
+  t('tokenRole select has operator option', () => { const opts = Array.from(document.getElementById('tokenRole').options).map(o=>o.value); ok(opts.includes('operator')); ok(opts.includes('client')); ok(opts.includes('internal')); });
+  t('snapshots modal exists', () => ok(document.getElementById('snapshotsModal')));
+  t('confirm typed input exists', () => ok(document.getElementById('confirm-typed-input')));
+  t('token expires preset element exists', () => ok(document.getElementById('tokenExpiresPreset')));
+
   // ---- Drive folder ID parsing + metadata ----
   t('parseDriveFolderId from share URL', () => eq(parseDriveFolderId('https://drive.google.com/drive/folders/1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1?usp=sharing'), '1ADvF50RX0gOV-FMC0j-ooYkKmuaav7t1'));
   t('parseDriveFolderId from open?id= URL', () => eq(parseDriveFolderId('https://drive.google.com/open?id=1-oeITeTv9iMT_H9BgGouKo1wO8qEXnJD'), '1-oeITeTv9iMT_H9BgGouKo1wO8qEXnJD'));
@@ -4515,7 +4900,10 @@ window.__runTests = async function() {
    'renderDataHub','renderHubSidebar','saveHubConfig','openHubFolder','openHubBackupFolder','openMasterDBFile',
    'runIntegrityCheck','dbStats','fmtBytes','parseDriveFolderId','dbFileMetadata','driveError','testDriveConnection',
    'moveDBToHubFolder','ensureDBInHubFolder','offloadMediaToDrive','ensureMediaFolder','uploadFileToDrive',
-   'getFileDataUrl','fileToBase64','dataUrlToBlob','blobToDataUrl','fileSrcNow','fileIsOnDrive','loadCurrentMediaFile'
+   'getFileDataUrl','fileToBase64','dataUrlToBlob','blobToDataUrl','fileSrcNow','fileIsOnDrive','loadCurrentMediaFile',
+   'applyRoleRestrictions','blockIfNotInternal','loginWithToken','applyTokenLogin','takeSnapshot','revertToSnapshot',
+   'clearCurrentCampaign','manualSnapshot','openSnapshotsModal','renderSnapshotsModal','showTypedConfirm','onConfirmTypedInput',
+   'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
   t('SCOPES includes full drive scope', () => ok(/auth\/drive(\s|$)/.test(SCOPES), 'SCOPES = ' + SCOPES));
 
