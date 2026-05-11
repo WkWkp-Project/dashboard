@@ -1084,6 +1084,11 @@
           <strong>JSON Data</strong>
           <small>raw data ทั้งก้อน — ใช้ backup, import กลับ, หรือ pipeline ต่อ</small>
         </button>
+        <button class="export-card highlight" onclick="doExport('manual-backup')">
+          <span class="export-ico">💾</span>
+          <strong>Manual Backup</strong>
+          <small>เซฟทั้งระบบ (ทุก campaign + log) ลงเครื่อง · ใช้แทน Drive ตอนเซฟไม่ผ่าน</small>
+        </button>
         <button class="export-card" onclick="doExport('csv')">
           <span class="export-ico">📊</span>
           <strong>CSV Asset List</strong>
@@ -1225,8 +1230,13 @@ function handleSaveIndicatorClick() {
   const ind = document.getElementById('saveIndicator');
   if (!ind) return;
   if (ind.classList.contains('error')) {
-    showToast('Retrying save...');
-    forceSave();
+    // If we've failed repeatedly, jump straight to manual backup
+    if (_consecutiveSaveFailures >= 2) {
+      offerManualBackup();
+    } else {
+      showToast('Retrying save...');
+      forceSave();
+    }
   } else if (ind.classList.contains('offline')) {
     if (isOfflineMode || userRole === 'client') showToast('Offline mode — ใช้ Export เพื่อบันทึก', 'warn');
     else { handleRealGoogleLogin(); }
@@ -1515,6 +1525,7 @@ function buildDatabasePayload() {
 // Drive multipart limit is ~5 MB. Use resumable above that.
 const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 
+let _consecutiveSaveFailures = 0;
 async function saveToDrive() {
   if (isSaving) return;
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
@@ -1536,16 +1547,46 @@ async function saveToDrive() {
     if (result && result.id && !databaseFileId) databaseFileId = result.id;
     lastSaveTime = new Date();
     pendingChanges = false;
+    _consecutiveSaveFailures = 0;
     setSaveStatus('saved', 'All changes saved');
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
   } catch(e) {
     console.error('Save error:', e);
-    setSaveStatus('error', 'Save failed · click to retry');
+    _consecutiveSaveFailures++;
+    setSaveStatus('error', `Save failed (${_consecutiveSaveFailures}x) · click for manual backup`);
+    // After 2 consecutive failures, auto-prompt manual backup so the user
+    // never loses work due to Drive being unreachable.
+    if (_consecutiveSaveFailures >= 2) {
+      offerManualBackup(e);
+    }
     throw e;
   } finally {
     isSaving = false;
+  }
+}
+
+function offerManualBackup(reason) {
+  showConfirm(
+    '⚠️ Drive ยังบันทึกไม่สำเร็จ',
+    `Cloud save ล้มเหลว ${_consecutiveSaveFailures} ครั้งติด${reason ? '\n\nเหตุผล: ' + (reason.message || reason) : ''}\n\nบันทึกเป็นไฟล์ JSON ลงเครื่องไว้ก่อน (ปลอดภัย 100%) · นำกลับเข้าระบบได้ตอนหลังด้วย Quick Handoff Viewer`,
+    () => downloadManualBackup()
+  );
+}
+
+function downloadManualBackup() {
+  try {
+    const data = buildDatabasePayload();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const filename = `wakuwaku_manual_backup_${todayLocalISO()}_${new Date().getHours()}${String(new Date().getMinutes()).padStart(2,'0')}.json`;
+    downloadBlob(blob, filename);
+    pendingChanges = false;
+    setSaveStatus('saved', `Manual backup saved · ${filename}`);
+    showToast('✓ Manual backup เซฟลงเครื่องแล้ว', 'ok');
+    logAction('BACKUP', `Manual JSON backup (${(blob.size/1024).toFixed(1)} KB)`);
+  } catch(e) {
+    showToast('Manual backup failed: ' + (e.message || 'unknown'), 'err');
   }
 }
 
@@ -2437,7 +2478,7 @@ function renderCalendar() {
   const last = new Date(y, m+1, 0);
   const startDOW = first.getDay();
   const daysInMonth = last.getDate();
-  const todayStr = new Date().toISOString().slice(0,10);
+  const todayStr = todayLocalISO();
   let html = '';
   ['SUN','MON','TUE','WED','THU','FRI','SAT'].forEach(d => html += `<div class="cal-dow">${d}</div>`);
   for (let i = 0; i < startDOW; i++) html += `<div class="cal-cell empty"></div>`;
@@ -2785,7 +2826,7 @@ function exportSlug() {
   const camp = getCurrentCampaign();
   return (camp.campaign || 'campaign').replace(/[^\w]/g, '_').toLowerCase();
 }
-function exportStamp() { return new Date().toISOString().slice(0, 10); }
+function exportStamp() { return todayLocalISO(); }
 function exportProgress(msg) { document.getElementById('export-progress').textContent = msg; }
 
 function downloadBlob(blob, filename) {
@@ -2821,6 +2862,10 @@ async function doExport(kind) {
       logAction('EXPORT', 'PDF visual capture');
       exportProgress(`✓ ${slug}_visual_${stamp}.pdf`);
       showToast('✓ Visual PDF exported');
+    } else if (kind === 'manual-backup') {
+      exportProgress('กำลังเซฟทั้งระบบ...');
+      downloadManualBackup();
+      exportProgress(`✓ Manual backup saved · ${campaigns.length} campaign(s)`);
     } else if (kind === 'json') {
       exportProgress('กำลังเตรียม JSON...');
       const data = { exportedAt: new Date().toISOString(), schemaVersion: SCHEMA_VERSION, campaign: camp };
@@ -3076,7 +3121,7 @@ async function downloadBundleZIP() {
     const a = document.createElement('a');
     const camp = getCurrentCampaign();
     a.href = URL.createObjectURL(blob);
-    a.download = `${(camp.campaign||'campaign').replace(/[^\w]/g,'_')}_Bundle_${new Date().toISOString().slice(0,10)}.zip`;
+    a.download = `${(camp.campaign||'campaign').replace(/[^\w]/g,'_')}_Bundle_${todayLocalISO()}.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     logAction('EXPORT', `Downloaded handoff bundle (${camp.assets.length} assets)`);
@@ -3098,7 +3143,7 @@ async function finalizeHandoff() {
         const camp = getCurrentCampaign();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `${(camp.campaign||'campaign').replace(/[^\w]/g,'_')}_FINAL_${new Date().toISOString().slice(0,10)}.zip`;
+        a.download = `${(camp.campaign||'campaign').replace(/[^\w]/g,'_')}_FINAL_${todayLocalISO()}.zip`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
         camp.status = 'handed-off';
@@ -3240,8 +3285,8 @@ function updateEditPeriodSummary() {
 }
 
 function monthYearLabel(ds) {
-  const d = new Date(ds + 'T00:00:00');
-  if (isNaN(d)) return ds;
+  const d = parseISODateLocal(ds);
+  if (!d) return ds || '';
   return d.toLocaleDateString('en-US', { month:'short', year:'numeric' });
 }
 
@@ -3363,10 +3408,30 @@ document.addEventListener('keydown', e => {
 let dpState = { mode: 'single', targetId: null, startId: null, endId: null, viewDate: new Date(), selected: null, rangeStart: null, rangeEnd: null, rangeStep: 'start' };
 const DP_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
+// LOCAL-time ISO date helpers — DO NOT use Date.toISOString().slice(0,10)
+// which gives UTC and breaks in Asia/Bangkok between 00:00–07:00 local.
+function toLocalISODate(d) {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    // Accept already-ISO strings as-is
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    d = new Date(d);
+  }
+  if (!(d instanceof Date) || isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function todayLocalISO() { return toLocalISODate(new Date()); }
+function parseISODateLocal(ds) {
+  if (!ds || !/^\d{4}-\d{2}-\d{2}/.test(ds)) return null;
+  const [y, m, d] = ds.slice(0, 10).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return isNaN(dt) ? null : dt;
+}
+
 function fmtDate(ds) {
   if (!ds) return '';
-  const d = new Date(ds + 'T00:00:00');
-  if (isNaN(d)) return ds;
+  const d = parseISODateLocal(ds);
+  if (!d) return String(ds);
   return d.toLocaleDateString('th-TH', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
 }
 
@@ -3460,14 +3525,13 @@ function renderDatePicker() {
   document.getElementById('dp-title').textContent = title;
   const first = new Date(year, month, 1).getDay();
   const last = new Date(year, month + 1, 0).getDate();
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const todayStr = todayLocalISO();
   const grid = document.getElementById('dp-grid');
   let html = '';
   ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(n => html += `<div class="dp-dow">${n.slice(0,3)}</div>`);
   for (let i = 0; i < first; i++) html += '<button type="button" class="dp-cell empty" disabled></button>';
   for (let day = 1; day <= last; day++) {
-    const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const ds = toLocalISODate(new Date(year, month, day));
     const dow = new Date(year, month, day).getDay();
     const cls = ['dp-cell'];
     if (ds === todayStr) cls.push('today');
@@ -3486,11 +3550,7 @@ function renderDatePicker() {
 
 function dpPrevMonth() { dpState.viewDate.setDate(1); dpState.viewDate.setMonth(dpState.viewDate.getMonth() - 1); renderDatePicker(); }
 function dpNextMonth() { dpState.viewDate.setDate(1); dpState.viewDate.setMonth(dpState.viewDate.getMonth() + 1); renderDatePicker(); }
-function dpToday() {
-  const t = new Date();
-  const ds = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
-  dpPick(ds);
-}
+function dpToday() { dpPick(todayLocalISO()); }
 function dpClear() {
   if (dpState.mode === 'single') {
     const input = document.getElementById(dpState.targetId);
@@ -3565,6 +3625,136 @@ window.onload = async () => {
   initGoogleAuth();
   const restored = await tryRestoreSession();
   if (!restored) renderEverything();
+  // Auto-run self-tests when ?test=1
+  if (location.search.includes('test=1')) setTimeout(() => window.__runTests(), 200);
+};
+
+// ============================================================================
+// SELF-TEST SUITE — pure-logic assertions; run via ?test=1 or window.__runTests()
+// ============================================================================
+window.__runTests = function() {
+  const results = [];
+  function t(name, fn) {
+    try { fn(); results.push({ name, ok: true }); }
+    catch(e) { results.push({ name, ok: false, err: e.message || String(e) }); }
+  }
+  function eq(a, b, msg) {
+    if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || 'eq fail') + ` · expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`);
+  }
+  function ok(v, msg) { if (!v) throw new Error(msg || 'truthy fail'); }
+
+  // ---- Date helpers ----
+  t('toLocalISODate handles Date', () => eq(toLocalISODate(new Date(2026, 4, 1)), '2026-05-01'));
+  t('toLocalISODate handles ISO string passthrough', () => eq(toLocalISODate('2026-05-01'), '2026-05-01'));
+  t('toLocalISODate handles invalid', () => eq(toLocalISODate(null), ''));
+  t('todayLocalISO matches local day not UTC', () => {
+    const expected = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}-${String(new Date().getDate()).padStart(2,'0')}`;
+    eq(todayLocalISO(), expected);
+  });
+  t('parseISODateLocal round-trip', () => {
+    const d = parseISODateLocal('2026-12-31');
+    ok(d instanceof Date); eq(d.getFullYear(), 2026); eq(d.getMonth(), 11); eq(d.getDate(), 31);
+  });
+  t('parseISODateLocal rejects garbage', () => eq(parseISODateLocal('garbage'), null));
+  t('monthYearLabel formats', () => ok(/^[A-Za-z]{3} \d{4}$/.test(monthYearLabel('2026-05-15'))));
+  t('monthYearLabel handles empty', () => eq(monthYearLabel(''), ''));
+  t('fmtDate handles empty', () => eq(fmtDate(''), ''));
+  t('fmtDate handles ISO string', () => ok(fmtDate('2026-05-01').length > 5));
+
+  // ---- Asset normalize ----
+  t('normalizeAsset migrates legacy single link to links[]', () => {
+    const a = normalizeAsset({ id:'x', link:'https://x.com' });
+    eq(a.links, ['https://x.com']);
+  });
+  t('normalizeAsset migrates legacy fileData to files[]', () => {
+    const a = normalizeAsset({ id:'x', fileName:'a.png', fileData:'data:image/png;base64,AAA' });
+    eq(a.files.length, 1);
+    eq(a.files[0].name, 'a.png');
+    eq(a.files[0].type, 'image/png');
+  });
+  t('normalizeAsset preserves existing files[]/links[]', () => {
+    const a = normalizeAsset({ id:'x', files:[{ name:'b', type:'image/jpeg', data:'data:image/jpeg;base64,XX' }], links:['https://a','https://b'] });
+    eq(a.files.length, 1); eq(a.links.length, 2);
+  });
+
+  // ---- Type guards ----
+  t('isImageType', () => { ok(isImageType('image/png')); ok(isImageType('image/jpeg')); ok(!isImageType('video/mp4')); ok(!isImageType('')); });
+  t('isVideoType', () => { ok(isVideoType('video/mp4')); ok(!isVideoType('image/png')); });
+  t('guessMimeFromDataUrl', () => { eq(guessMimeFromDataUrl('data:image/png;base64,AAA'), 'image/png'); eq(guessMimeFromDataUrl(''), 'application/octet-stream'); });
+
+  // ---- normalizeCampaign defaults ----
+  t('normalizeCampaign defaults all fields', () => {
+    const c = normalizeCampaign({});
+    ok(c.id); eq(c.assets, []); eq(c.log, []); eq(c.tags, []); eq(c.description, '');
+    ok(c.driveLinks && c.driveLinks.length === 4);
+  });
+  t('normalizeCampaign keeps existing data', () => {
+    const c = normalizeCampaign({ client:'X', campaign:'Y', tags:['a','b'], assets:[{id:'1',link:'https://e.com'}] });
+    eq(c.client, 'X'); eq(c.tags, ['a','b']); eq(c.assets[0].links, ['https://e.com']);
+  });
+
+  // ---- CSV ----
+  t('csvEscape quotes commas', () => eq(csvEscape('a,b'), '"a,b"'));
+  t('csvEscape escapes inner quotes', () => eq(csvEscape('say "hi"'), '"say ""hi"""'));
+  t('csvEscape passes simple', () => eq(csvEscape('abc'), 'abc'));
+  t('csvEscape null/undefined safe', () => { eq(csvEscape(null), ''); eq(csvEscape(undefined), ''); });
+
+  // ---- Database payload ----
+  t('buildDatabasePayload contains required fields', () => {
+    const p = buildDatabasePayload();
+    ok(p.schemaVersion); ok(p.savedAt); ok(Array.isArray(p.campaigns));
+  });
+
+  // ---- Drive upload size routing ----
+  t('DRIVE_MULTIPART_LIMIT sensible', () => { ok(DRIVE_MULTIPART_LIMIT > 1024*1024); ok(DRIVE_MULTIPART_LIMIT < 10*1024*1024); });
+
+  // ---- DOM smoke tests ----
+  t('saveIndicator element exists', () => ok(document.getElementById('saveIndicator')));
+  t('asset modal exists', () => ok(document.getElementById('assetModal')));
+  t('date picker popup exists', () => ok(document.getElementById('datePickerPopup')));
+  t('export modal exists', () => ok(document.getElementById('exportModal')));
+  t('edit info modal exists', () => ok(document.getElementById('editInfoModal')));
+  t('media viewer modal exists', () => ok(document.getElementById('mediaModal')));
+  t('toast element exists', () => ok(document.getElementById('toast')));
+
+  // ---- Critical functions defined ----
+  ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
+   'downloadManualBackup','offerManualBackup','openExportModal','doExport','captureOverviewAsCanvas',
+   'openDateRangePicker','openDatePicker','dpPick','renderDatePicker',
+   'normalizeAsset','normalizeCampaign','blockIfClient','applyClientModeRestrictions',
+   'performLogout','confirmLogout','saveSession','tryRestoreSession','clearSession',
+   'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
+   'updateEditPeriodSummary','saveCampaignInfo','openEditModal'
+  ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
+
+  // ---- Date picker round-trip ----
+  t('renderDatePicker writes grid for current month', () => {
+    dpState = { mode:'single', targetId:'__test', viewDate:new Date(2026,4,1), selected:null, rangeStart:null, rangeEnd:null, rangeStep:'start' };
+    // Need a hidden input + popup; popup exists, input may not
+    const probe = document.createElement('input'); probe.type='hidden'; probe.id='__test'; document.body.appendChild(probe);
+    renderDatePicker();
+    const cells = document.querySelectorAll('#dp-grid .dp-cell:not(.empty)');
+    eq(cells.length, 31, 'May 2026 should render 31 day cells');
+    probe.remove();
+  });
+  t('range mode highlights start/end', () => {
+    const probeS = document.createElement('input'); probeS.type='hidden'; probeS.id='__ts'; probeS.value='2026-05-10'; document.body.appendChild(probeS);
+    const probeE = document.createElement('input'); probeE.type='hidden'; probeE.id='__te'; probeE.value='2026-05-15'; document.body.appendChild(probeE);
+    dpState = { mode:'range', targetId:null, startId:'__ts', endId:'__te', viewDate:new Date(2026,4,1), selected:null, rangeStart:'2026-05-10', rangeEnd:'2026-05-15', rangeStep:'end' };
+    renderDatePicker();
+    ok(document.querySelector('.dp-cell.range-start'), 'range-start cell rendered');
+    ok(document.querySelector('.dp-cell.range-end'), 'range-end cell rendered');
+    ok(document.querySelectorAll('.dp-cell.in-range').length >= 4, 'in-range cells rendered');
+    probeS.remove(); probeE.remove();
+  });
+
+  const pass = results.filter(r => r.ok).length;
+  const fail = results.filter(r => !r.ok);
+  console.group(`%c[Wakuwaku Self-Test] ${pass}/${results.length} passed`, `font-weight:bold;color:${fail.length?'#DD3A2C':'#2D7A3E'}`);
+  results.forEach(r => console.log(`${r.ok?'✓':'✗'} ${r.name}` + (r.ok ? '' : ` — ${r.err}`)));
+  console.groupEnd();
+  window.__testResults = { pass, total: results.length, failed: fail };
+  return window.__testResults;
 };
 </script>
 </body>
