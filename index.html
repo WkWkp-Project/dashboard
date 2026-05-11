@@ -99,6 +99,8 @@
   .camp-list-item small { font-size:9px; color:var(--muted-2); font-family:'Geist Mono',monospace; letter-spacing:0.5px; }
 
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--ink-2); }
+  .sidebar-footer a { color: var(--gold); text-decoration: none; font-family: 'Geist Mono', monospace; font-size: 10px; }
+  .sidebar-footer a:hover { text-decoration: underline; }
   .sb-meta { font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--muted-2); letter-spacing: 1px; padding: 0 8px; }
 
   /* Main */
@@ -361,6 +363,25 @@
   .info-card-meta { font-size:11px; color:var(--muted); margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); white-space:pre-wrap; font-family:'Geist Mono',monospace; }
   .info-card-meta:empty { display:none; }
 
+  /* Data Hub */
+  .hub-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:24px; }
+  .hub-stat { background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:14px 16px; }
+  .hub-stat-label { font-family:'Geist Mono',monospace; font-size:9px; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase; margin-bottom:4px; }
+  .hub-stat-value { font-family:'Fraunces',serif; font-size:24px; font-weight:500; color:var(--ink); line-height:1.1; }
+  .hub-stat-value em { font-style:italic; color:var(--gold); }
+  .hub-stat-sub { font-size:10px; color:var(--muted); margin-top:4px; font-family:'Geist Mono',monospace; }
+  .hub-card { background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:18px 20px; margin-bottom:18px; }
+  .hub-row { display:grid; grid-template-columns: 160px 1fr auto auto; gap:8px; align-items:center; }
+  .hub-row label { font-family:'Geist Mono',monospace; font-size:11px; letter-spacing:0.5px; color:var(--ink); font-weight:600; text-transform:none; }
+  .hub-row input, .hub-row textarea { padding:8px 10px; border:1px solid var(--line); border-radius:4px; font-size:12px; font-family:'Geist Mono',monospace; resize:vertical; }
+  .hub-integrity-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:4px; background:var(--paper-2); font-size:12px; }
+  .hub-integrity-row.ok { border-left:3px solid var(--ok); }
+  .hub-integrity-row.warn { border-left:3px solid var(--warn); }
+  .hub-integrity-row.err { border-left:3px solid var(--err); }
+  .hub-integrity-row .ico { font-size:14px; }
+  .hub-backup-item { padding:8px 10px; background:var(--paper-2); border-radius:4px; display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .hub-backup-item:hover { background:var(--paper-3); }
+
   /* Reference link list */
   .ref-link-list { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
   .ref-link-list:empty { display:none; }
@@ -527,6 +548,10 @@
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>
         Access Control
       </div>
+      <div class="nav-item" data-view="hub" onclick="switchView('hub')" id="nav-hub">
+        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        Data Hub
+      </div>
     </div>
 
     <div class="nav-section">
@@ -549,6 +574,7 @@
     </div>
 
     <div class="sidebar-footer">
+      <div class="sb-meta" id="sb-hub-link" style="display:none; margin-bottom:4px;"></div>
       <div class="sb-meta" id="sb-version">v4.0 · Multi-Campaign</div>
     </div>
   </aside>
@@ -749,6 +775,85 @@
           <p style="margin-bottom:8px;"><strong>Client (ลูกค้า):</strong> ใช้ Quick Handoff Viewer + Access Token → เห็นเฉพาะแคมเปญที่ token ครอบคลุม, อ่านอย่างเดียว</p>
           <p style="margin-bottom:8px;"><strong>หลังหมดสัญญา:</strong> generate token แบบ <em>permanent</em> ให้ลูกค้า แล้วส่ง bundle ZIP ที่มี token ฝังไว้ — ลูกค้าเปิดใช้งานได้ตลอดโดยไม่ต้อง login</p>
           <p><strong>1:1 Sharing:</strong> 1 token = 1 lookup scope. ถ้ามีลูกค้าหลายคน, generate token แยกกัน. Token สามารถ revoke ได้ทุกเมื่อ</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ DATA HUB VIEW ============ -->
+    <div class="page view-container" id="view-hub">
+      <div class="hero">
+        <div>
+          <div class="hero-eyebrow">Storage · Master Hub</div>
+          <h1>Data <em>Hub</em></h1>
+          <p>ภาพรวมข้อมูลทั้งระบบ — รู้ว่า master file อยู่ตรงไหน, ขนาดเท่าไหร่, มี campaign กี่อัน, backup ล่าสุดเมื่อไหร่ · ป้องกันข้อมูลหายตอน handoff</p>
+        </div>
+        <div class="hero-actions">
+          <button class="btn" onclick="forceSave()">☁️ Sync now</button>
+          <button class="btn" onclick="downloadManualBackup()">💾 Manual backup</button>
+          <button class="btn gold" onclick="doExport('full-snapshot')">📦 Full Snapshot ZIP</button>
+        </div>
+      </div>
+
+      <div class="hub-grid" id="hub-stats"></div>
+
+      <div class="section-head">
+        <div class="section-num">①</div>
+        <div class="section-title">Master Hub Folder · จุดเก็บข้อมูลกลาง</div>
+        <div class="section-meta" id="hub-status-pill"></div>
+      </div>
+      <div class="hub-card">
+        <div class="hub-row">
+          <label>🌐 Hub Folder URL</label>
+          <input type="url" id="hubFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
+          <button class="btn sm" onclick="saveHubConfig()">Save</button>
+          <button class="btn sm" onclick="openHubFolder()">Open ↗</button>
+        </div>
+        <small class="hint">โฟลเดอร์ Google Drive ที่เก็บทุกอย่างของระบบ — Database, Backup, Attachments. แชร์โฟลเดอร์นี้กับทีมเพื่อ collaborate</small>
+        <div class="hub-row" style="margin-top:14px;">
+          <label>💾 Backup Folder URL</label>
+          <input type="url" id="hubBackupFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
+          <button class="btn sm" onclick="saveHubConfig()">Save</button>
+          <button class="btn sm" onclick="openHubBackupFolder()">Open ↗</button>
+        </div>
+        <small class="hint">โฟลเดอร์สำหรับวาง manual backup .json — แนะนำให้แชร์ "view only" กับลูกค้าหลัง handoff</small>
+        <div class="hub-row" style="margin-top:14px; align-items:flex-start;">
+          <label style="padding-top:6px;">📝 Hub Notes</label>
+          <textarea id="hubNotes" rows="2" placeholder="คำอธิบาย, password, ขั้นตอนการ access — ที่ทีมและลูกค้าควรรู้"></textarea>
+          <button class="btn sm" onclick="saveHubConfig()">Save</button>
+        </div>
+      </div>
+
+      <div class="section-head">
+        <div class="section-num">②</div>
+        <div class="section-title">Master Database File · ไฟล์ JSON บน Drive</div>
+        <div class="section-meta" id="hub-db-meta">—</div>
+      </div>
+      <div class="hub-card" id="hub-db-card"></div>
+
+      <div class="section-head">
+        <div class="section-num">③</div>
+        <div class="section-title">Backup History · ประวัติ Manual Backup</div>
+        <div class="section-meta" id="hub-backup-meta">—</div>
+      </div>
+      <div class="hub-card">
+        <div id="hub-backup-history" style="font-family:'Geist Mono',monospace; font-size:11px;"></div>
+      </div>
+
+      <div class="section-head">
+        <div class="section-num">④</div>
+        <div class="section-title">Data Integrity Check · ตรวจสอบความครบถ้วน</div>
+      </div>
+      <div class="hub-card">
+        <div id="hub-integrity" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+
+      <div class="history-panel" style="margin-top:24px;">
+        <div class="history-header"><span>วิธีดูแลข้อมูลให้ปลอดภัย · Data Stewardship</span></div>
+        <div class="history-body" style="padding:16px 24px; font-size:12px; line-height:1.7; color:var(--ink);">
+          <p>🔵 <strong>ทำเป็นประจำ:</strong> ทุก ๆ การแก้ไขจะ auto-sync ขึ้น Drive ภายใน 2.5 วินาที — ดูสถานะที่มุมขวาบน (saveIndicator)</p>
+          <p>🟢 <strong>ก่อน handoff:</strong> กด <em>Full Snapshot ZIP</em> ที่ Data Hub เพื่อ export ทั้งระบบ (ทุก campaign + tokens + hub + media) เก็บไว้ในโฟลเดอร์ backup</p>
+          <p>🟡 <strong>ถ้า Drive sync fail 2 ครั้งติด:</strong> ระบบจะเปิด dialog ให้ download Manual Backup ลงเครื่องอัตโนมัติ — ห้ามปิดเครื่องก่อนเซฟ</p>
+          <p>🔴 <strong>กู้คืน:</strong> ถ้า DB file หาย — เปิด Quick Handoff Viewer แล้วลาก manual_backup_*.json เข้าระบบ ข้อมูลทุก campaign จะกลับมาครบ</p>
         </div>
       </div>
     </div>
@@ -1087,6 +1192,11 @@
           <strong>Manual Backup</strong>
           <small>เซฟทั้งระบบ (ทุก campaign + log) ลงเครื่อง · ใช้แทน Drive ตอนเซฟไม่ผ่าน</small>
         </button>
+        <button class="export-card highlight" onclick="doExport('full-snapshot')">
+          <span class="export-ico">🗄</span>
+          <strong>Full Snapshot ZIP</strong>
+          <small>ZIP ครบทุก campaign + tokens + hub + media + logs · ไฟล์เดียวกู้คืนทั้งระบบ</small>
+        </button>
         <button class="export-card" onclick="doExport('csv')">
           <span class="export-ico">📊</span>
           <strong>CSV Asset List</strong>
@@ -1196,6 +1306,8 @@ let campaigns = [
 ];
 let currentCampaignId = campaigns[0].id;
 let accessTokens = []; // [{token, name, role, campaignIds:[], expiresAt|null, createdAt}]
+let hub = { folderUrl: '', backupFolderUrl: '', notes: '', updatedAt: '' };
+let manualBackupHistory = []; // [{ts, filename, sizeKB}]
 let editingTokenId = null;
 
 function getCurrentCampaign() {
@@ -1516,8 +1628,32 @@ function buildDatabasePayload() {
     savedAt: new Date().toISOString(),
     campaigns: campaigns,
     currentCampaignId: currentCampaignId,
-    accessTokens: accessTokens
+    accessTokens: accessTokens,
+    hub: hub,
+    manualBackupHistory: manualBackupHistory
   };
+}
+
+function dbStats() {
+  let totalAssets = 0, totalFiles = 0, totalLogs = 0, mediaBytes = 0;
+  campaigns.forEach(c => {
+    totalAssets += c.assets.length;
+    totalLogs += (c.log || []).length;
+    c.assets.forEach(a => {
+      (a.files || []).forEach(f => {
+        totalFiles++;
+        mediaBytes += Math.round((f.data ? f.data.length * 0.75 : 0));
+      });
+    });
+  });
+  const jsonSize = JSON.stringify(buildDatabasePayload()).length;
+  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize };
+}
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
 }
 
 // Drive multipart limit is ~5 MB. Use resumable above that.
@@ -1583,6 +1719,9 @@ function downloadManualBackup() {
     setSaveStatus('saved', `Manual backup saved · ${filename}`);
     showToast('✓ Manual backup เซฟลงเครื่องแล้ว', 'ok');
     logAction('BACKUP', `Manual JSON backup (${(blob.size/1024).toFixed(1)} KB)`);
+    manualBackupHistory.unshift({ ts: new Date().toISOString(), filename, sizeKB: Math.round(blob.size/1024) });
+    if (manualBackupHistory.length > 20) manualBackupHistory.length = 20;
+    if (typeof renderDataHub === 'function') renderDataHub();
   } catch(e) {
     showToast('Manual backup failed: ' + (e.message || 'unknown'), 'err');
   }
@@ -1660,6 +1799,8 @@ async function syncDatabaseFromDrive() {
         currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
       }
       if (db.accessTokens) accessTokens = db.accessTokens;
+      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+      if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
       lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
       renderEverything();
       setSaveStatus('saved', 'Loaded from cloud');
@@ -1737,6 +1878,150 @@ function switchView(name) {
   if (navItem) navItem.classList.add('active');
   if (name === 'calendar') renderCalendar();
   if (name === 'access') renderAccessTable();
+  if (name === 'hub') renderDataHub();
+}
+
+// ============================================================================
+// DATA HUB
+// ============================================================================
+function saveHubConfig() {
+  if (blockIfClient('แก้ไข Hub ได้เฉพาะ Internal')) return;
+  hub.folderUrl = document.getElementById('hubFolderUrl').value.trim();
+  hub.backupFolderUrl = document.getElementById('hubBackupFolderUrl').value.trim();
+  hub.notes = document.getElementById('hubNotes').value.trim();
+  hub.updatedAt = new Date().toISOString();
+  logAction('UPDATE', 'Hub config updated');
+  showToast('✓ Hub saved');
+  renderDataHub();
+  renderHubSidebar();
+}
+function openHubFolder() {
+  if (hub.folderUrl) window.open(hub.folderUrl, '_blank');
+  else showToast('ยังไม่ได้ตั้ง Hub folder URL', 'warn');
+}
+function openHubBackupFolder() {
+  if (hub.backupFolderUrl) window.open(hub.backupFolderUrl, '_blank');
+  else showToast('ยังไม่ได้ตั้ง Backup folder URL', 'warn');
+}
+function openMasterDBFile() {
+  if (databaseFileId) window.open('https://drive.google.com/file/d/' + databaseFileId + '/view', '_blank');
+  else showToast('Master DB file ยังไม่ถูกสร้าง — กด Sync now ก่อน', 'warn');
+}
+
+function renderDataHub() {
+  const v = document.getElementById('view-hub');
+  if (!v) return;
+  // Populate hub config inputs
+  document.getElementById('hubFolderUrl').value = hub.folderUrl || '';
+  document.getElementById('hubBackupFolderUrl').value = hub.backupFolderUrl || '';
+  document.getElementById('hubNotes').value = hub.notes || '';
+  const st = dbStats();
+  // Stats grid
+  document.getElementById('hub-stats').innerHTML = [
+    ['Campaigns', st.campaigns, ''],
+    ['Total assets', st.totalAssets, ''],
+    ['Media files', st.totalFiles, fmtBytes(st.mediaBytes)],
+    ['Log entries', st.totalLogs, ''],
+    ['Database size', fmtBytes(st.jsonSize), st.jsonSize > DRIVE_MULTIPART_LIMIT ? 'resumable upload' : 'multipart'],
+    ['Access tokens', accessTokens.length, ''],
+    ['Manual backups', manualBackupHistory.length, '']
+  ].map(([l, val, sub]) => `<div class="hub-stat"><div class="hub-stat-label">${l}</div><div class="hub-stat-value">${typeof val === 'number' ? `<em>${val}</em>` : val}</div><div class="hub-stat-sub">${sub || '·'}</div></div>`).join('');
+
+  // Hub status pill
+  const statusPill = document.getElementById('hub-status-pill');
+  if (hub.folderUrl && hub.backupFolderUrl) statusPill.innerHTML = '✓ FULLY CONFIGURED';
+  else if (hub.folderUrl || hub.backupFolderUrl) statusPill.innerHTML = '⚠ PARTIALLY SET';
+  else statusPill.innerHTML = '⚠ NOT SET — ตั้ง URL ด้านล่าง';
+
+  // Master DB card
+  const dbCard = document.getElementById('hub-db-card');
+  const dbMeta = document.getElementById('hub-db-meta');
+  if (databaseFileId) {
+    dbCard.innerHTML = `
+      <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
+        <label>📄 DB File</label>
+        <code style="font-family:'Geist Mono',monospace; font-size:11px; background:var(--paper-2); padding:6px 8px; border-radius:4px; word-break:break-all;">${DB_FILENAME}</code>
+        <button class="btn sm" onclick="openMasterDBFile()">Open in Drive ↗</button>
+      </div>
+      <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:10px;">
+        <label>🆔 Drive File ID</label>
+        <code style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">${escapeHtml(databaseFileId)}</code>
+      </div>
+      <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
+        <label>🕒 Last saved</label>
+        <span style="font-family:'Geist Mono',monospace; font-size:11px;">${lastSaveTime ? lastSaveTime.toLocaleString() : '—'}</span>
+      </div>`;
+    dbMeta.textContent = `${fmtBytes(st.jsonSize)} · Google Drive`;
+  } else if (isOfflineMode) {
+    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">Offline mode — ไม่มี master DB file<br><small>ใช้ Manual Backup หรือ Full Snapshot แทน</small></div>';
+    dbMeta.textContent = 'OFFLINE';
+  } else {
+    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">ยังไม่ได้สร้าง master DB · กด <strong>Sync now</strong> ด้านบนเพื่อสร้างไฟล์</div>';
+    dbMeta.textContent = 'NOT CREATED';
+  }
+
+  // Backup history
+  const histEl = document.getElementById('hub-backup-history');
+  const histMeta = document.getElementById('hub-backup-meta');
+  if (manualBackupHistory.length === 0) {
+    histEl.innerHTML = '<div style="color:var(--muted); text-align:center; padding:14px;">ยังไม่มี manual backup · กด <strong>💾 Manual backup</strong> ด้านบนเพื่อบันทึก</div>';
+    histMeta.textContent = '0 backups';
+  } else {
+    histEl.innerHTML = manualBackupHistory.map(b => `<div class="hub-backup-item"><span>📄 ${escapeHtml(b.filename)}</span><span style="color:var(--muted);">${new Date(b.ts).toLocaleString()} · ${b.sizeKB} KB</span></div>`).join('');
+    histMeta.textContent = `${manualBackupHistory.length} backups · ล่าสุด ${new Date(manualBackupHistory[0].ts).toLocaleString()}`;
+  }
+
+  // Integrity check
+  document.getElementById('hub-integrity').innerHTML = runIntegrityCheck().map(c => `<div class="hub-integrity-row ${c.level}"><span class="ico">${c.level==='ok'?'✓':c.level==='warn'?'⚠':'✕'}</span><div><strong>${escapeHtml(c.label)}</strong><div style="color:var(--muted); font-size:11px;">${escapeHtml(c.detail)}</div></div></div>`).join('');
+}
+
+function runIntegrityCheck() {
+  const checks = [];
+  const st = dbStats();
+  if (databaseFileId) checks.push({ level:'ok', label:'Master DB file exists', detail:'Drive file ID ' + databaseFileId.slice(0,20) + '...' });
+  else if (isOfflineMode) checks.push({ level:'warn', label:'Offline mode', detail:'ไม่มี cloud DB — พึ่ง manual backup' });
+  else checks.push({ level:'err', label:'No master DB file', detail:'กด Sync now ที่ Data Hub' });
+
+  if (lastSaveTime) {
+    const minsAgo = Math.round((Date.now() - lastSaveTime.getTime()) / 60000);
+    if (minsAgo < 5) checks.push({ level:'ok', label:'Last save fresh', detail:`${minsAgo} min ago` });
+    else if (minsAgo < 60) checks.push({ level:'warn', label:'Last save aging', detail:`${minsAgo} min ago — กด Sync now` });
+    else checks.push({ level:'err', label:'Stale save', detail:`${minsAgo} min ago — กด Sync now ด่วน` });
+  } else { checks.push({ level:'warn', label:'Never saved this session', detail:'กด Sync now เพื่อยืนยันว่าเซฟได้' }); }
+
+  if (pendingChanges) checks.push({ level:'warn', label:'Pending unsaved changes', detail:'รอ auto-sync หรือกด Backup to Cloud' });
+  else checks.push({ level:'ok', label:'All changes saved', detail:'No pending work' });
+
+  if (_consecutiveSaveFailures > 0) checks.push({ level:'err', label:`Save failing ${_consecutiveSaveFailures}x`, detail:'แนะนำ Manual backup ทันที' });
+
+  if (st.jsonSize > DRIVE_MULTIPART_LIMIT) checks.push({ level:'warn', label:'Large database', detail:`${fmtBytes(st.jsonSize)} — ใช้ resumable upload (อาจใช้เวลานาน)` });
+
+  campaigns.forEach(c => {
+    if (!c.client || !c.campaign) checks.push({ level:'warn', label:`Campaign incomplete: ${c.campaign || c.id}`, detail:'Missing client หรือ campaign name' });
+  });
+
+  if (hub.folderUrl) checks.push({ level:'ok', label:'Hub folder linked', detail:hub.folderUrl });
+  else checks.push({ level:'warn', label:'No Hub folder URL', detail:'ตั้งค่าด้านบนเพื่อ collaborate' });
+
+  if (manualBackupHistory.length > 0) {
+    const last = manualBackupHistory[0];
+    const daysAgo = Math.round((Date.now() - new Date(last.ts).getTime()) / 86400000);
+    if (daysAgo < 7) checks.push({ level:'ok', label:'Recent manual backup', detail:`${daysAgo}d ago · ${last.filename}` });
+    else checks.push({ level:'warn', label:'Manual backup stale', detail:`${daysAgo}d ago — แนะนำ backup ใหม่` });
+  } else { checks.push({ level:'warn', label:'No manual backup yet', detail:'กด 💾 Manual backup เพื่อสำเนาไฟล์ลงเครื่อง' }); }
+
+  return checks;
+}
+
+function renderHubSidebar() {
+  const sb = document.getElementById('sb-hub-link');
+  if (!sb) return;
+  if (hub.folderUrl) {
+    sb.innerHTML = `<a href="${escapeHtml(hub.folderUrl)}" target="_blank" title="${escapeHtml(hub.folderUrl)}">🌐 Hub folder ↗</a>`;
+    sb.style.display = '';
+  } else {
+    sb.style.display = 'none';
+  }
 }
 
 // ============================================================================
@@ -1748,6 +2033,7 @@ function renderEverything() {
   renderAssets();
   renderHistory();
   restoreLinkedDriveCards();
+  if (typeof renderHubSidebar === 'function') renderHubSidebar();
 }
 
 function renderCampaignNav() {
@@ -2864,6 +3150,47 @@ async function doExport(kind) {
       exportProgress('กำลังเซฟทั้งระบบ...');
       downloadManualBackup();
       exportProgress(`✓ Manual backup saved · ${campaigns.length} campaign(s)`);
+    } else if (kind === 'full-snapshot') {
+      exportProgress('กำลังรวมทั้งระบบเป็น ZIP...');
+      if (typeof JSZip === 'undefined') throw new Error('JSZip not loaded');
+      const zip = new JSZip();
+      const dbPayload = buildDatabasePayload();
+      zip.file('database.json', JSON.stringify(dbPayload, null, 2));
+      zip.file('README.txt',
+`Wakuwaku Studio · Full System Snapshot
+Generated: ${new Date().toLocaleString()}
+
+INCLUDED:
+  database.json    — Complete state (${campaigns.length} campaigns, ${accessTokens.length} tokens, hub config, manual backup history, full activity logs)
+  attachments/     — All media files from every campaign (${dbStats().totalFiles} files · ${fmtBytes(dbStats().mediaBytes)})
+
+RECOVERY:
+  1. Open Wakuwaku Studio
+  2. Drag database.json into "Quick Handoff Viewer" on the Client tab
+  3. All campaigns, tokens, hub config, and history are restored
+
+HUB:
+  Folder:        ${hub.folderUrl || '(not set)'}
+  Backup folder: ${hub.backupFolderUrl || '(not set)'}
+  Notes:         ${hub.notes || '(none)'}
+`);
+      const attach = zip.folder('attachments');
+      let attachCount = 0;
+      campaigns.forEach(c => {
+        const folder = attach.folder((c.client || 'client').replace(/[^\w]+/g,'_') + '__' + (c.campaign || 'campaign').replace(/[^\w]+/g,'_'));
+        c.assets.forEach(a => {
+          (a.files || []).forEach((f, i) => {
+            const mm = String(f.data || '').match(/^data:([^;]+);base64,(.+)$/);
+            if (mm) { folder.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, mm[2], { base64:true }); attachCount++; }
+          });
+        });
+      });
+      if (attachCount === 0) attach.file('.placeholder', 'No media in any campaign');
+      const blob = await zip.generateAsync({ type:'blob' }, m => exportProgress(`Zipping... ${Math.round(m.percent)}%`));
+      downloadBlob(blob, `wakuwaku_FULL_SNAPSHOT_${stamp}.zip`);
+      logAction('EXPORT', `Full snapshot (${campaigns.length} campaigns, ${attachCount} files)`);
+      exportProgress(`✓ wakuwaku_FULL_SNAPSHOT_${stamp}.zip · ${campaigns.length} campaigns · ${attachCount} media files`);
+      showToast('✓ Full snapshot exported');
     } else if (kind === 'json') {
       exportProgress('กำลังเตรียม JSON...');
       const data = { exportedAt: new Date().toISOString(), schemaVersion: SCHEMA_VERSION, campaign: camp };
@@ -3221,9 +3548,17 @@ function loadDataOffline(data, providedToken) {
     userRole = 'client';
   }
 
-  campaigns = [loadedCamp];
-  currentCampaignId = loadedCamp.id;
+  // Full snapshot bundles ship all campaigns + hub; per-campaign bundles ship one
+  if (Array.isArray(data.campaigns) && data.campaigns.length > 0) {
+    campaigns = data.campaigns.map(normalizeCampaign);
+    currentCampaignId = data.currentCampaignId && campaigns.find(c => c.id === data.currentCampaignId) ? data.currentCampaignId : campaigns[0].id;
+  } else {
+    campaigns = [loadedCamp];
+    currentCampaignId = loadedCamp.id;
+  }
   accessTokens = bundleTokens;
+  if (data.hub) hub = { folderUrl:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
+  if (Array.isArray(data.manualBackupHistory)) manualBackupHistory = data.manualBackupHistory;
 
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
@@ -3698,6 +4033,20 @@ window.__runTests = function() {
   t('edit info modal exists', () => ok(document.getElementById('editInfoModal')));
   t('media viewer modal exists', () => ok(document.getElementById('mediaModal')));
   t('toast element exists', () => ok(document.getElementById('toast')));
+  t('data hub view exists', () => ok(document.getElementById('view-hub')));
+  t('hub stats container exists', () => ok(document.getElementById('hub-stats')));
+  t('hub integrity container exists', () => ok(document.getElementById('hub-integrity')));
+  t('hub folder url input exists', () => ok(document.getElementById('hubFolderUrl')));
+  t('sidebar hub link slot exists', () => ok(document.getElementById('sb-hub-link')));
+
+  // ---- Hub data model ----
+  t('hub state object has expected keys', () => { ok(typeof hub === 'object'); ['folderUrl','backupFolderUrl','notes','updatedAt'].forEach(k => ok(k in hub, `hub.${k}`)); });
+  t('manualBackupHistory is array', () => ok(Array.isArray(manualBackupHistory)));
+  t('buildDatabasePayload includes hub + history', () => { const p = buildDatabasePayload(); ok(p.hub); ok('manualBackupHistory' in p); });
+  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize'].forEach(k => ok(typeof s[k] === 'number', k)); });
+  t('fmtBytes formats sizes', () => { eq(fmtBytes(0), '0 B'); eq(fmtBytes(1500), '1.5 KB'); ok(/MB$/.test(fmtBytes(2*1048576))); });
+  t('runIntegrityCheck returns array', () => { const r = runIntegrityCheck(); ok(Array.isArray(r) && r.length > 0); r.forEach(c => ok(['ok','warn','err'].includes(c.level))); });
+  t('switchView hub renders', () => { switchView('hub'); ok(document.getElementById('view-hub').classList.contains('active')); switchView('overview'); });
 
   // ---- Critical functions defined ----
   ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
@@ -3706,7 +4055,9 @@ window.__runTests = function() {
    'normalizeAsset','normalizeCampaign','blockIfClient','applyClientModeRestrictions',
    'performLogout','confirmLogout','saveSession','tryRestoreSession','clearSession',
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
-   'updateEditPeriodSummary','saveCampaignInfo','openEditModal'
+   'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
+   'renderDataHub','renderHubSidebar','saveHubConfig','openHubFolder','openHubBackupFolder','openMasterDBFile',
+   'runIntegrityCheck','dbStats','fmtBytes'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
 
   // ---- Date picker round-trip ----
