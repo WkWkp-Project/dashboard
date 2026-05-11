@@ -1263,7 +1263,9 @@
 // CONFIG
 // ============================================================================
 const CLIENT_ID = '165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+// Full Drive scope so the database file can be created/moved inside a
+// folder the user picked (drive.file alone only reaches app-created files).
+const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const SAVE_DEBOUNCE_MS = 2500;
 const DB_FILENAME = 'wakuwaku_database_v4.json';
 const SCHEMA_VERSION = 4;
@@ -1706,7 +1708,8 @@ async function saveToDrive() {
       result = await driveMultipartUpload(metadata, jsonBody);
     }
 
-    if (result && result.id && !databaseFileId) databaseFileId = result.id;
+    const wasNewFile = result && result.id && !databaseFileId;
+    if (wasNewFile) databaseFileId = result.id;
     lastSaveTime = new Date();
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
@@ -1715,6 +1718,8 @@ async function saveToDrive() {
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
+    // Make sure the file lives inside the configured Hub folder
+    if (hub && hub.driveFolderId) ensureDBInHubFolder(wasNewFile);
     if (typeof renderDataHub === 'function' && document.getElementById('view-hub')?.classList.contains('active')) renderDataHub();
   } catch(e) {
     console.error('Save error:', e);
@@ -1779,6 +1784,38 @@ function dbFileMetadata() {
   const md = { name: DB_FILENAME, mimeType: 'application/json' };
   if (!databaseFileId && hub && hub.driveFolderId) md.parents = [hub.driveFolderId];
   return md;
+}
+
+// Move the existing database file into the configured Hub folder.
+// Returns { moved:bool, from, to } or throws a classified driveError.
+async function moveDBToHubFolder() {
+  if (!databaseFileId || !hub || !hub.driveFolderId) return { moved:false };
+  // Current parents
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=parents`);
+  if (!r.ok) throw await driveError(r);
+  const j = await r.json();
+  const current = j.parents || [];
+  if (current.length === 1 && current[0] === hub.driveFolderId) return { moved:false, from:current, to:hub.driveFolderId };
+  const removeParents = current.join(',');
+  const pr = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?addParents=${encodeURIComponent(hub.driveFolderId)}${removeParents ? '&removeParents=' + encodeURIComponent(removeParents) : ''}&fields=id,parents`, { method: 'PATCH' });
+  if (!pr.ok) throw await driveError(pr);
+  return { moved:true, from:current, to:hub.driveFolderId };
+}
+
+// Call after a save; quietly move the DB into the Hub folder if needed.
+async function ensureDBInHubFolder(notify) {
+  if (!databaseFileId || !hub || !hub.driveFolderId) return;
+  try {
+    const res = await moveDBToHubFolder();
+    if (res.moved && notify) showToast('✓ ย้ายไฟล์ database เข้า Hub folder แล้ว', 'ok');
+  } catch(e) {
+    console.warn('move-to-hub failed:', e);
+    if (notify) {
+      if (e.driveCause === 'api-disabled') showToast('ย้ายไม่ได้ — Drive API ปิดอยู่', 'err');
+      else if (e.driveCause === 'insufficient-scope' || e.driveStatus === 403) showToast('ย้ายไม่ได้ — แชร์โฟลเดอร์ให้บัญชีนี้แบบ Editor ก่อน หรือ login ใหม่', 'err');
+      else showToast('ย้ายไฟล์ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+    }
+  }
 }
 
 // ---- multipart/related (small files) ----
@@ -1979,10 +2016,12 @@ function saveHubConfig() {
   hub.driveFolderId = fid || '';
   hub.updatedAt = new Date().toISOString();
   logAction('UPDATE', 'Hub config updated' + (fid ? ` · folder ${fid.slice(0,12)}…` : ''));
-  showToast(fid ? `✓ Hub saved · ไฟล์ใหม่จะถูกสร้างในโฟลเดอร์นี้` : '✓ Hub saved');
+  showToast(fid ? `✓ Hub saved · ไฟล์ database จะถูกย้ายเข้าโฟลเดอร์นี้` : '✓ Hub saved');
   scheduleSave();
   renderDataHub();
   renderHubSidebar();
+  // If we already have a DB file on Drive, move it into the folder now
+  if (fid && databaseFileId && accessToken) ensureDBInHubFolder(true).then(() => renderDataHub());
 }
 
 // Lightweight Drive reachability test — reports the exact problem
@@ -2064,6 +2103,9 @@ function renderDataHub() {
   const dbCard = document.getElementById('hub-db-card');
   const dbMeta = document.getElementById('hub-db-meta');
   if (databaseFileId) {
+    const hubBtn = hub.driveFolderId
+      ? `<button class="btn sm" onclick="ensureDBInHubFolder(true).then(()=>renderDataHub())">Move into Hub folder ↘</button>`
+      : `<span style="font-size:11px; color:var(--muted-2);">ตั้ง Hub Folder URL เพื่อย้ายไฟล์เข้าโฟลเดอร์</span>`;
     dbCard.innerHTML = `
       <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
         <label>📄 DB File</label>
@@ -2075,10 +2117,33 @@ function renderDataHub() {
         <code style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">${escapeHtml(databaseFileId)}</code>
       </div>
       <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
+        <label>📁 Lives in</label>
+        <span id="hub-db-parent" style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted);">ตรวจสอบ...</span>
+      </div>
+      <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
         <label>🕒 Last saved</label>
         <span style="font-family:'Geist Mono',monospace; font-size:11px;">${lastSaveTime ? lastSaveTime.toLocaleString() : '—'}</span>
+      </div>
+      <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:10px;">
+        <label></label>
+        <div>${hubBtn}</div>
       </div>`;
     dbMeta.textContent = `${fmtBytes(st.jsonSize)} · Google Drive`;
+    // Async fetch the actual parent folder name
+    if (accessToken) {
+      authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=parents`).then(r => r.ok ? r.json() : null).then(j => {
+        const pEl = document.getElementById('hub-db-parent');
+        if (!pEl || !j) return;
+        const parents = j.parents || [];
+        if (parents.length === 0) { pEl.innerHTML = '<span style="color:var(--warn);">Drive root (ไม่อยู่ในโฟลเดอร์ไหน)</span>'; return; }
+        const pid = parents[0];
+        const inHub = hub.driveFolderId && pid === hub.driveFolderId;
+        authFetch(`https://www.googleapis.com/drive/v3/files/${pid}?fields=id,name,webViewLink`).then(rr => rr.ok ? rr.json() : null).then(fj => {
+          if (!fj) { pEl.textContent = pid; return; }
+          pEl.innerHTML = `${inHub ? '✓ ' : ''}<a href="${escapeHtml(fj.webViewLink || ('https://drive.google.com/drive/folders/'+pid))}" target="_blank">${escapeHtml(fj.name)}</a>${inHub ? ' (= Hub folder)' : ' <span style="color:var(--warn);">≠ Hub folder</span>'}`;
+        }).catch(()=>{ pEl.textContent = pid; });
+      }).catch(()=>{ const pEl = document.getElementById('hub-db-parent'); if (pEl) pEl.textContent = '—'; });
+    }
   } else if (isOfflineMode) {
     dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">Offline mode — ไม่มี master DB file<br><small>ใช้ Manual Backup หรือ Full Snapshot แทน</small></div>';
     dbMeta.textContent = 'OFFLINE';
@@ -4229,8 +4294,10 @@ window.__runTests = async function() {
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
    'renderDataHub','renderHubSidebar','saveHubConfig','openHubFolder','openHubBackupFolder','openMasterDBFile',
-   'runIntegrityCheck','dbStats','fmtBytes','parseDriveFolderId','dbFileMetadata','driveError','testDriveConnection'
+   'runIntegrityCheck','dbStats','fmtBytes','parseDriveFolderId','dbFileMetadata','driveError','testDriveConnection',
+   'moveDBToHubFolder','ensureDBInHubFolder'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
+  t('SCOPES includes full drive scope', () => ok(/auth\/drive(\s|$)/.test(SCOPES), 'SCOPES = ' + SCOPES));
 
   // ---- Date picker round-trip ----
   t('renderDatePicker writes grid for current month', () => {
