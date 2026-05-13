@@ -1209,6 +1209,15 @@
         <label>👥 Stakeholders / Contacts <small class="hint-label">(optional)</small></label>
         <textarea id="editStakeholders" rows="2" placeholder="Account Director: ...&#10;Creative Lead: ...&#10;Client contact: ..."></textarea>
       </div>
+
+      <div class="input-group">
+        <label>📁 Campaign Folder URL <small class="hint-label">(ใน Hub folder)</small></label>
+        <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
+          <input type="url" id="editDriveFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
+          <button type="button" class="btn" onclick="openEditDriveFolder()">Open ↗</button>
+        </div>
+        <small class="hint">วาง URL โฟลเดอร์ของแคมเปญ <strong>ที่อยู่ใน Hub folder</strong> (สร้างเองใน Drive) · ระบบจะสร้าง <code>media/</code> ในนั้นให้อัตโนมัติเมื่ออัปไฟล์ · เปลี่ยน URL ภายหลังได้ ไฟล์เก่ายังอยู่ที่ folder เดิมและใช้งานได้ปกติ</small>
+      </div>
     </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="clearCurrentCampaign()" style="margin-right:8px; color:var(--warn); border-color:var(--warn);">🔄 Reset Campaign</button>
@@ -2117,6 +2126,44 @@ async function ensureMediaFolder() {
   return hub.mediaFolderId;
 }
 
+// Per-campaign media folder. We always nest a "media" sub-folder inside the
+// user-provided Campaign Folder so different file kinds (exports, references,
+// etc) can live next to it cleanly. Cached on the campaign record so we hit
+// Drive once per session per campaign. Never deletes or moves anything —
+// switching Campaign Folder URL just invalidates the cache; old files keep
+// loading because asset.files[k].driveFileId is folder-agnostic.
+async function ensureCampaignMediaFolder(camp) {
+  if (!camp || !camp.driveFolderId) throw new Error('ต้องกรอก Campaign Folder URL ของแคมเปญนี้ก่อน');
+  if (camp.mediaFolderId) {
+    try {
+      const vr = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.mediaFolderId}?fields=id,trashed,parents`);
+      if (vr.ok) {
+        const vj = await vr.json();
+        // If the cached folder is still inside the current campaign folder
+        // and not trashed, reuse it. Otherwise fall through and re-resolve.
+        if (!vj.trashed && Array.isArray(vj.parents) && vj.parents.includes(camp.driveFolderId)) {
+          return camp.mediaFolderId;
+        }
+      }
+    } catch(e) { /* fall through to re-resolve */ }
+  }
+  const q = encodeURIComponent(`name='${MEDIA_SUBFOLDER_NAME}' and '${camp.driveFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const sr = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
+  if (sr.ok) {
+    const sj = await sr.json();
+    if (sj.files && sj.files.length) { camp.mediaFolderId = sj.files[0].id; return camp.mediaFolderId; }
+  }
+  const cr = await authFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify({ name: MEDIA_SUBFOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [camp.driveFolderId] })
+  });
+  if (!cr.ok) throw await driveError(cr);
+  const cj = await cr.json();
+  camp.mediaFolderId = cj.id;
+  return camp.mediaFolderId;
+}
+
 async function uploadFileToDrive(name, blob, parentId) {
   const metadata = { name, parents: [parentId] };
   const boundary = '-------wkmed' + Math.random().toString(36).slice(2);
@@ -2153,6 +2200,17 @@ async function offloadMediaToDrive(notify) {
   })));
   if (work.length === 0) { setOut('✓ ไม่มีไฟล์ที่ต้อง offload (ทุกไฟล์อยู่บน Drive แล้ว หรือไม่มีไฟล์)'); showToast('ไม่มีไฟล์ที่ต้อง offload', 'ok'); return; }
 
+  // Block: every campaign with pending uploads must have its own folder set.
+  // Routing media to the wrong campaign's folder would mix client data and
+  // we'd rather make the user fix the missing URL than silently fall back.
+  const missing = [...new Set(work.filter(w => !w.camp.driveFolderId).map(w => w.camp.campaign || w.camp.id))];
+  if (missing.length) {
+    const list = missing.slice(0, 3).join(', ') + (missing.length > 3 ? `, +${missing.length - 3}` : '');
+    setOut(`❌ ต้องตั้ง Campaign Folder URL ก่อน · แคมเปญที่ขาด: ${list}`);
+    showToast(`กรอก Campaign Folder URL ที่ Edit Campaign ของ: ${list}`, 'warn');
+    return;
+  }
+
   let done = 0, failed = 0;
   for (const w of work) {
     setOut(`⏳ อัปโหลด ${done+1}/${work.length} — ${w.file.name || 'file'}`);
@@ -2160,7 +2218,22 @@ async function offloadMediaToDrive(notify) {
       const blob = dataUrlToBlob(w.file.data);
       if (!blob) { failed++; continue; }
       const safeName = `${w.camp.id}__${w.asset.id}__${w.idx+1}__${(w.file.name||'file').replace(/[^\w.\-]+/g,'_')}`;
-      const res = await uploadFileToDrive(safeName, blob, folderId);
+      // Route each file to its campaign's own Drive folder when configured;
+      // legacy Hub-level wakuwaku-media/ is used as fallback only for
+      // campaigns that don't have a Campaign Folder URL set yet.
+      const dest = (w.camp.driveFolderId)
+        ? await ensureCampaignMediaFolder(w.camp)
+        : folderId;
+      const res = await uploadFileToDrive(safeName, blob, dest);
+      // Safety: only discard the embedded base64 once we're certain we got
+      // a usable Drive file id back. A 200 OK with no id (rare but seen on
+      // flaky networks) used to leave the asset with neither data nor a
+      // valid pointer — silent data loss. Now we keep f.data on any doubt.
+      if (!res || typeof res.id !== 'string' || !res.id) {
+        failed++;
+        console.warn('Upload returned no id; keeping embedded data for', w.file.name);
+        continue;
+      }
       w.file.driveFileId = res.id;
       w.file.size = +res.size || blob.size;
       w.file.webViewLink = res.webViewLink || '';
@@ -2581,7 +2654,14 @@ function normalizeCampaign(c) {
     driveLinks: c.driveLinks || [{name:"Product_Info",url:""},{name:"Content_Dir",url:""},{name:"CI_Design",url:""},{name:"Cat_Map",url:""}],
     linkedFilesCount: c.linkedFilesCount || 0,
     snapshots: Array.isArray(c.snapshots) ? c.snapshots : [],
-    lastResetBy: c.lastResetBy || '', lastResetAt: c.lastResetAt || ''
+    lastResetBy: c.lastResetBy || '', lastResetAt: c.lastResetAt || '',
+    // Per-campaign destination inside the team Hub. User pastes the URL and
+    // the app parses out the folder id; mediaFolderId is a cache for the
+    // auto-created "media/" subfolder. Default empty keeps legacy campaigns
+    // working — they fall back to the Hub-level wakuwaku-media/ folder.
+    driveFolderUrl: c.driveFolderUrl || '',
+    driveFolderId: c.driveFolderId || '',
+    mediaFolderId: c.mediaFolderId || ''
   };
 }
 
@@ -3291,7 +3371,8 @@ function saveNewCampaign() {
     assets: [], log: [],
     schema: defaultSchema(), excelData: null,
     driveLinks: [{name:"Product_Info",url:""},{name:"Content_Dir",url:""},{name:"CI_Design",url:""},{name:"Cat_Map",url:""}],
-    linkedFilesCount: 0
+    linkedFilesCount: 0,
+    driveFolderUrl: '', driveFolderId: '', mediaFolderId: ''
   };
   campaigns.push(c);
   currentCampaignId = c.id;
@@ -4712,8 +4793,15 @@ function openEditModal() {
   document.getElementById('editStakeholders').value = camp.stakeholders || '';
   document.getElementById('editTags').value = (camp.tags || []).join(', ');
   document.getElementById('editStatus').value = camp.status === 'handed-off' ? 'completed' : camp.status;
+  document.getElementById('editDriveFolderUrl').value = camp.driveFolderUrl || '';
   updateEditDescCount();
   document.getElementById('editInfoModal').classList.add('show');
+}
+
+function openEditDriveFolder() {
+  const url = (document.getElementById('editDriveFolderUrl').value || '').trim();
+  if (url) window.open(url, '_blank');
+  else showToast('ยังไม่ได้กรอก Campaign Folder URL', 'warn');
 }
 function closeEditModal() { document.getElementById('editInfoModal').classList.remove('show'); }
 
@@ -4751,6 +4839,23 @@ function saveCampaignInfo() {
   camp.stakeholders = document.getElementById('editStakeholders').value.trim();
   camp.tags = document.getElementById('editTags').value.split(',').map(s=>s.trim()).filter(Boolean);
   camp.status = document.getElementById('editStatus').value;
+  // Per-campaign Drive folder. Parse the URL, store both URL and folder id.
+  // CRITICAL: when the URL changes we only invalidate the cached
+  // mediaFolderId. We never touch existing asset.files[*].driveFileId —
+  // those keep pointing at the old folder so previously offloaded media
+  // still renders. New uploads go to the new folder's "media/" subfolder.
+  const newDriveUrl = document.getElementById('editDriveFolderUrl').value.trim();
+  const oldFolderId = camp.driveFolderId || '';
+  if (newDriveUrl !== (camp.driveFolderUrl || '')) {
+    camp.driveFolderUrl = newDriveUrl;
+    const fid = newDriveUrl ? parseDriveFolderId(newDriveUrl) : '';
+    camp.driveFolderId = fid || '';
+    if ((camp.driveFolderId || '') !== oldFolderId) {
+      camp.mediaFolderId = ''; // re-resolve next time we need to upload
+      if (oldFolderId) showToast('🔁 เปลี่ยนปลายทางแคมเปญแล้ว · ไฟล์เก่ายังอยู่ folder เดิม ใช้งานได้ปกติ', 'ok');
+    }
+    if (newDriveUrl && !fid) showToast('⚠ URL ไม่ใช่รูปแบบโฟลเดอร์ Drive ที่รู้จัก — ตรวจอีกครั้ง', 'warn');
+  }
   updateCampaignUI(); renderCampaignNav(); closeEditModal();
   logAction('EDIT', `Updated info: ${newCampaign}`);
   showToast('✓ Saved');
@@ -5302,7 +5407,8 @@ window.__runTests = async function() {
    'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName',
    'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup',
    'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter',
-   'connectToTeamDB','readHubFolderHint','writeHubFolderHint','clearHubFolderHint'
+   'connectToTeamDB','readHubFolderHint','writeHubFolderHint','clearHubFolderHint',
+   'ensureCampaignMediaFolder','openEditDriveFolder'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
   t('silent remote sync preserves local current campaign', async () => {
     // Two campaigns in the shared DB; local user is on A; remote DB says B.
@@ -5372,6 +5478,67 @@ window.__runTests = async function() {
     ok(document.querySelector('.dp-cell.range-end'), 'range-end cell rendered');
     ok(document.querySelectorAll('.dp-cell.in-range').length >= 4, 'in-range cells rendered');
     probeS.remove(); probeE.remove();
+  });
+
+  // ---- Per-campaign Drive folder ----
+  t('normalizeCampaign defaults driveFolderUrl/Id/mediaFolderId to empty', () => {
+    const c = normalizeCampaign({ id:'tmp', client:'x', campaign:'y' });
+    eq(c.driveFolderUrl, '');
+    eq(c.driveFolderId, '');
+    eq(c.mediaFolderId, '');
+  });
+  t('normalizeCampaign preserves Drive folder fields when present', () => {
+    const c = normalizeCampaign({ id:'tmp', client:'x', campaign:'y',
+      driveFolderUrl:'https://drive.google.com/drive/folders/ABC',
+      driveFolderId:'ABC', mediaFolderId:'MED' });
+    eq(c.driveFolderUrl, 'https://drive.google.com/drive/folders/ABC');
+    eq(c.driveFolderId, 'ABC');
+    eq(c.mediaFolderId, 'MED');
+  });
+  t('saveCampaignInfo invalidates mediaFolderId when folder URL changes', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId };
+    const c = normalizeCampaign({ id:'cTest', client:'A', campaign:'A',
+      driveFolderUrl:'https://drive.google.com/drive/folders/OLD',
+      driveFolderId:'OLD', mediaFolderId:'OLDMEDIA' });
+    campaigns = [c]; currentCampaignId = 'cTest';
+    document.getElementById('editClient').value = 'A';
+    document.getElementById('editCampaign').value = 'A';
+    document.getElementById('editStart').value = '';
+    document.getElementById('editEnd').value = '';
+    document.getElementById('editStartISO').value = '';
+    document.getElementById('editEndISO').value = '';
+    document.getElementById('editDescription').value = '';
+    document.getElementById('editStakeholders').value = '';
+    document.getElementById('editTags').value = '';
+    document.getElementById('editStatus').value = 'active';
+    document.getElementById('editDriveFolderUrl').value = 'https://drive.google.com/drive/folders/NEW123';
+    saveCampaignInfo();
+    eq(c.driveFolderId, 'NEW123', 'parsed new folder id');
+    eq(c.mediaFolderId, '', 'cache invalidated on URL change');
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+  });
+  t('saveCampaignInfo does NOT touch asset.files driveFileId when folder URL changes', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId };
+    const c = normalizeCampaign({ id:'cKeep', client:'A', campaign:'A',
+      driveFolderUrl:'https://drive.google.com/drive/folders/OLD',
+      driveFolderId:'OLD',
+      assets:[{ id:'a1', catId:'CATCH-01', catClass:'catch', title:'t', topic:'x',
+        files:[{ name:'p.png', type:'image/png', driveFileId:'OLDFILE123' }] }] });
+    campaigns = [c]; currentCampaignId = 'cKeep';
+    document.getElementById('editClient').value = 'A';
+    document.getElementById('editCampaign').value = 'A';
+    document.getElementById('editStart').value = '';
+    document.getElementById('editEnd').value = '';
+    document.getElementById('editStartISO').value = '';
+    document.getElementById('editEndISO').value = '';
+    document.getElementById('editDescription').value = '';
+    document.getElementById('editStakeholders').value = '';
+    document.getElementById('editTags').value = '';
+    document.getElementById('editStatus').value = 'active';
+    document.getElementById('editDriveFolderUrl').value = 'https://drive.google.com/drive/folders/NEW999';
+    saveCampaignInfo();
+    eq(c.assets[0].files[0].driveFileId, 'OLDFILE123', 'old file pointer preserved');
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
   });
 
   // ---- Per-campaign Drive links isolation ----
