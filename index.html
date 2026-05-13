@@ -1361,6 +1361,12 @@ let saveTimer = null;
 let isSaving = false;
 let lastSaveTime = null;
 let pendingChanges = false;
+// Shared-state sync: poll Drive for remote edits by other Wkwk teammates so
+// everyone sees the same data. Tracks the DB file's Drive modifiedTime so we
+// only re-fetch when it actually changed.
+let remoteModifiedTime = null;
+let remotePollTimer = null;
+const REMOTE_POLL_MS = 45000;
 let confirmCallback = null;
 let editingAssetId = null;
 let pendingFileAttachment = null; // legacy, unused
@@ -1914,6 +1920,7 @@ async function saveToDrive() {
 
     const wasNewFile = result && result.id && !databaseFileId;
     if (wasNewFile) databaseFileId = result.id;
+    if (result && result.modifiedTime) remoteModifiedTime = result.modifiedTime;
     lastSaveTime = new Date();
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
@@ -2176,8 +2183,8 @@ async function driveMultipartUpload(metadata, jsonBody) {
     jsonBody + '\r\n' +
     `--${boundary}--`;
   const url = databaseFileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=multipart`
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+    ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=multipart&fields=id,modifiedTime`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime';
   const resp = await authFetch(url, {
     method: databaseFileId ? 'PATCH' : 'POST',
     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
@@ -2190,8 +2197,8 @@ async function driveMultipartUpload(metadata, jsonBody) {
 // ---- resumable (large files) ----
 async function driveResumableUpload(metadata, jsonBody) {
   const initUrl = databaseFileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=resumable`
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
+    ? `https://www.googleapis.com/upload/drive/v3/files/${databaseFileId}?uploadType=resumable&fields=id,modifiedTime`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,modifiedTime';
   const initResp = await authFetch(initUrl, {
     method: databaseFileId ? 'PATCH' : 'POST',
     headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' },
@@ -2252,13 +2259,15 @@ async function driveError(resp) {
 // Back-compat shim
 async function readDriveError(resp) { return (await driveError(resp)).message; }
 
-async function syncDatabaseFromDrive() {
-  setSaveStatus('saving', 'Loading...');
+async function syncDatabaseFromDrive(opts) {
+  const silent = !!(opts && opts.silent);
+  if (!silent) setSaveStatus('saving', 'Loading...');
   try {
-    const searchResp = await authFetch(`https://www.googleapis.com/drive/v3/files?q=name='${DB_FILENAME}' and trashed=false`);
+    const searchResp = await authFetch(`https://www.googleapis.com/drive/v3/files?q=name='${DB_FILENAME}' and trashed=false&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`);
     const searchResult = await searchResp.json();
     if (searchResult.files && searchResult.files.length > 0) {
       databaseFileId = searchResult.files[0].id;
+      if (searchResult.files[0].modifiedTime) remoteModifiedTime = searchResult.files[0].modifiedTime;
       const contentResp = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?alt=media`);
       const db = await contentResp.json();
       if (db.campaigns && Array.isArray(db.campaigns) && db.campaigns.length > 0) {
@@ -2270,14 +2279,41 @@ async function syncDatabaseFromDrive() {
       if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
       lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
       renderEverything();
-      setSaveStatus('saved', 'Loaded from cloud');
+      setSaveStatus('saved', silent ? 'Synced with team' : 'Loaded from cloud');
       if (lastSaveTime) document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      showToast(`Loaded ${campaigns.length} campaign(s)`);
+      if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
+      else showToast('↻ อัปเดตจากเพื่อนร่วมทีม');
     } else {
       setSaveStatus('idle', 'New project · ready to start');
       renderEverything();
     }
-  } catch (err) { console.error(err); setSaveStatus('error', 'Load failed · click to retry'); }
+    startRemotePolling();
+  } catch (err) { console.error(err); if (!silent) setSaveStatus('error', 'Load failed · click to retry'); }
+}
+
+// Lightweight check: has the DB file changed on Drive since our last sync?
+// If yes and we have no pending local edits, pull silently so all Wkwk
+// teammates converge on the same data.
+async function pollRemoteChanges() {
+  if (!accessToken || isOfflineMode || !databaseFileId) return;
+  if (isSaving || saveTimer) return; // a local save is in flight / pending
+  try {
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=modifiedTime`);
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j.modifiedTime || j.modifiedTime === remoteModifiedTime) return;
+    if (pendingChanges) return; // don't clobber local edits; saveToDrive will reconcile next
+    await syncDatabaseFromDrive({ silent: true });
+  } catch(e) { /* network blip — try again next tick */ }
+}
+
+function startRemotePolling() {
+  if (remotePollTimer) return;
+  if (userRole === 'client' || isOfflineMode || !accessToken) return;
+  remotePollTimer = setInterval(pollRemoteChanges, REMOTE_POLL_MS);
+}
+function stopRemotePolling() {
+  if (remotePollTimer) { clearInterval(remotePollTimer); remotePollTimer = null; }
 }
 
 function normalizeCampaign(c) {
