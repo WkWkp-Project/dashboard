@@ -5232,6 +5232,49 @@ window.__runTests = async function() {
     probeS.remove(); probeE.remove();
   });
 
+  // ---- Per-campaign Drive links isolation ----
+  t('normalizeCampaign gives a fresh empty driveLinks array', () => {
+    const c = normalizeCampaign({ id:'tmp', client:'x', campaign:'y' });
+    ok(Array.isArray(c.driveLinks) && c.driveLinks.length === 4);
+    ok(c.driveLinks.every(d => d && d.name && d.url === ''), 'all url empty by default');
+  });
+  t('saveDriveLinks writes only to current campaign, not siblings', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId };
+    const a = normalizeCampaign({ id:'camp-a', client:'A', campaign:'A' });
+    const b = normalizeCampaign({ id:'camp-b', client:'B', campaign:'B' });
+    campaigns = [a, b]; currentCampaignId = 'camp-a';
+    // Render inputs needed by saveDriveLinks
+    ['0','1','2','3'].forEach(i => {
+      let el = document.getElementById('linkInput'+i);
+      if (!el) { el = document.createElement('input'); el.id = 'linkInput'+i; document.body.appendChild(el); }
+      el.value = i === '0' ? 'https://drive.google.com/A1' : '';
+    });
+    // saveDriveLinks calls restoreLinkedDriveCards which needs cards; skip via stubs
+    const origRestore = window.restoreLinkedDriveCards;
+    window.restoreLinkedDriveCards = () => {};
+    const origClose = window.closeConnectModal;
+    window.closeConnectModal = () => {};
+    saveDriveLinks();
+    eq(a.driveLinks[0].url, 'https://drive.google.com/A1', 'A got the new link');
+    eq(b.driveLinks[0].url, '', 'B was NOT touched');
+    window.restoreLinkedDriveCards = origRestore;
+    window.closeConnectModal = origClose;
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+  });
+  t('switching current campaign points at that campaign\'s own links', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId };
+    const a = normalizeCampaign({ id:'camp-a2', client:'A', campaign:'A',
+      driveLinks: [{name:'Product_Info',url:'https://A/p'},{name:'Content_Dir',url:''},{name:'CI_Design',url:''},{name:'Cat_Map',url:''}] });
+    const b = normalizeCampaign({ id:'camp-b2', client:'B', campaign:'B',
+      driveLinks: [{name:'Product_Info',url:'https://B/p'},{name:'Content_Dir',url:''},{name:'CI_Design',url:''},{name:'Cat_Map',url:''}] });
+    campaigns = [a, b];
+    currentCampaignId = 'camp-a2';
+    eq(getCurrentCampaign().driveLinks[0].url, 'https://A/p');
+    currentCampaignId = 'camp-b2';
+    eq(getCurrentCampaign().driveLinks[0].url, 'https://B/p');
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+  });
+
   // ---- Presence / shared-session ----
   t('presence payload included in buildDatabasePayload', () => {
     const p = buildDatabasePayload();
