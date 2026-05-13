@@ -516,7 +516,7 @@
           <button class="btn primary" onclick="loginWithToken()">เข้าระบบ →</button>
         </div>
       </div>
-      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ใช้ Connect Drive ร่วมกับทีมได้ · ยุ่งกับ Token/สร้างแคมเปญไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
+      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ใช้ Connect Drive / Data Hub ร่วมกับทีมได้ · ยุ่งกับ Token/สร้างแคมเปญ/Backup-Offload ไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
     </div>
   </div>
 </div>
@@ -2461,7 +2461,7 @@ function switchView(name) {
 // DATA HUB
 // ============================================================================
 function saveHubConfig() {
-  if (blockIfNotInternal('แก้ไข Data Hub เฉพาะทีม Wakuwaku')) return;
+  if (blockIfClient('แก้ไข Data Hub เฉพาะทีม Wakuwaku')) return;
   hub.folderUrl = document.getElementById('hubFolderUrl').value.trim();
   hub.backupFolderUrl = document.getElementById('hubBackupFolderUrl').value.trim();
   hub.notes = document.getElementById('hubNotes').value.trim();
@@ -3709,14 +3709,13 @@ function applyRoleRestrictions() {
   } else if (userRole === 'operator') {
     document.body.classList.add('operator-mode');
     if (navAccess) navAccess.classList.add('hidden');
-    if (navHub) navHub.classList.add('hidden');
     OPERATOR_DISABLED_SELECTORS.forEach(sel => document.querySelectorAll(sel).forEach(el => {
       el.classList.add('client-disabled'); el.setAttribute('disabled', 'disabled'); el.setAttribute('aria-disabled', 'true');
       el.title = 'Operator · เฉพาะทีม Wakuwaku เท่านั้น';
     }));
     // If we're currently on a hidden view, bounce to overview
     const active = document.querySelector('.view-container.active');
-    if (active && (active.id === 'view-access' || active.id === 'view-hub')) switchView('overview');
+    if (active && active.id === 'view-access') switchView('overview');
   }
 }
 // Back-compat alias (tests / older callers)
@@ -4937,10 +4936,10 @@ window.__runTests = async function() {
   t('blockIfNotInternal blocks operator', () => { const sv = userRole; userRole = 'operator'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === true); });
   t('blockIfNotInternal passes internal', () => { const sv = userRole; userRole = 'internal'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === false); });
   t('blockIfClient still blocks client only', () => { const sv = userRole; userRole = 'operator'; const r1 = blockIfClient(); userRole = 'client'; const r2 = blockIfClient(); userRole = sv; ok(r1 === false && r2 === true); });
-  t('applyRoleRestrictions operator hides access+hub nav', () => {
+  t('applyRoleRestrictions operator hides access nav but keeps hub visible', () => {
     const sv = userRole; userRole = 'operator'; applyRoleRestrictions();
     ok(document.getElementById('nav-access').classList.contains('hidden'));
-    ok(document.getElementById('nav-hub').classList.contains('hidden'));
+    ok(!document.getElementById('nav-hub').classList.contains('hidden'));
     ok(document.body.classList.contains('operator-mode'));
     userRole = sv; document.body.classList.remove('operator-mode'); applyRoleRestrictions();
   });
