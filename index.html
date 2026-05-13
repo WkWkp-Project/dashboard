@@ -98,6 +98,15 @@
   .camp-list-item strong { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;}
   .camp-list-item small { font-size:9px; color:var(--muted-2); font-family:'Geist Mono',monospace; letter-spacing:0.5px; }
 
+  /* Online presence (Wkwk team) */
+  .presence-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; font-size: 12px; color: rgba(250,250,247,0.85); margin-bottom: 1px; }
+  .presence-item:hover { background: var(--ink-2); }
+  .presence-avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--ink-3); display: grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--paper); flex-shrink: 0; position: relative; }
+  .presence-avatar.self { background: var(--gold); color: var(--ink); }
+  .presence-avatar::after { content: ''; position: absolute; bottom: -1px; right: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); border: 2px solid var(--ink); }
+  .presence-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .presence-name small { color: var(--gold); font-size: 10px; margin-left: 4px; }
+  .presence-role { font-family: 'Geist Mono', monospace; font-size: 8px; letter-spacing: 1px; color: var(--muted-2); padding: 1px 4px; border: 1px solid var(--ink-3); border-radius: 2px; }
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--ink-2); }
   .sidebar-footer a { color: var(--gold); text-decoration: none; font-family: 'Geist Mono', monospace; font-size: 10px; }
   .sidebar-footer a:hover { text-decoration: underline; }
@@ -578,6 +587,11 @@
       </div>
     </div>
 
+    <div class="nav-section" id="presence-section" style="display:none;">
+      <div class="nav-label"><span>Online · ทีม Wkwk</span><span id="presence-count" style="margin-left:6px; color:var(--gold);"></span></div>
+      <div id="presence-list"></div>
+    </div>
+
     <div class="nav-section" style="margin-top:auto;">
       <div class="nav-item" onclick="confirmLogout()">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -587,6 +601,7 @@
 
     <div class="sidebar-footer">
       <div class="sb-meta" id="sb-hub-link" style="display:none; margin-bottom:4px;"></div>
+      <div class="sb-meta" id="sb-db-id" style="display:none; margin-bottom:4px;"></div>
       <div class="sb-meta" id="sb-version">v4.0 · Multi-Campaign</div>
     </div>
   </aside>
@@ -1367,6 +1382,15 @@ let pendingChanges = false;
 let remoteModifiedTime = null;
 let remotePollTimer = null;
 const REMOTE_POLL_MS = 45000;
+// Presence: list of teammates currently active on the same shared DB. Each
+// entry is {key, name, role, avatar, loginAt, lastSeen, app}. Pruned past
+// PRESENCE_TIMEOUT_MS so closing the tab quietly drops you off the list.
+let presence = [];
+let presenceKey = null;
+let presenceHeartbeatTimer = null;
+const PRESENCE_TIMEOUT_MS = 5 * 60 * 1000;
+const PRESENCE_HEARTBEAT_MS = 90000;
+const APP_VERSION = 'v4.0';
 let confirmCallback = null;
 let editingAssetId = null;
 let pendingFileAttachment = null; // legacy, unused
@@ -1567,6 +1591,10 @@ async function onLoginSuccess() {
   // 2) Load DB — failure here must NOT throw away the session
   try { await syncDatabaseFromDrive(); }
   catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
+  // 2b) Announce presence on the shared DB so other Wkwk teammates see us
+  // in their sidebar. Done after sync so the join log mentions the right
+  // databaseFileId.
+  joinSharedSession('internal', userEmail);
   // 3) If Drive had no DB but a local backup exists, offer to restore it
   maybeOfferLocalRestore();
   // 4) Pending follow-ups
@@ -1614,6 +1642,9 @@ function applyTokenLogin(token) {
   logAction('SYSTEM', `Token login: ${match.name || 'token'} as ${userRole}`);
   showToast(`✓ เข้าระบบเป็น ${userRole === 'operator' ? 'Operator' : 'Client'}${match.name ? ' · ' + match.name : ''}`, 'ok');
   saveSession();
+  // Operators are Wkwk team — announce them on the shared presence list
+  // (clients are excluded by renderPresenceSidebar).
+  if (userRole === 'operator') joinSharedSession('operator', token);
 }
 
 // ============================================================================
@@ -1745,7 +1776,7 @@ async function tryRestoreSession() {
         document.getElementById('sb-mode-tag').style.color = "var(--connect)";
         await syncDatabaseFromDrive();
         if (s.userRole === 'operator' && s.operatorToken) { applyTokenLogin(s.operatorToken); }
-        else showToast('Session restored');
+        else { joinSharedSession('internal', user.email || ''); showToast('Session restored'); }
         return true;
       } catch(e) {
         clearSession();
@@ -1862,6 +1893,7 @@ async function forceSave() {
 }
 
 function buildDatabasePayload() {
+  prunePresence();
   return {
     schemaVersion: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
@@ -1869,7 +1901,8 @@ function buildDatabasePayload() {
     currentCampaignId: currentCampaignId,
     accessTokens: accessTokens,
     hub: hub,
-    manualBackupHistory: manualBackupHistory
+    manualBackupHistory: manualBackupHistory,
+    presence: presence
   };
 }
 
@@ -2277,8 +2310,14 @@ async function syncDatabaseFromDrive(opts) {
       if (db.accessTokens) accessTokens = db.accessTokens;
       if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
       if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
+      if (Array.isArray(db.presence)) presence = db.presence;
       lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
       renderEverything();
+      // Keep our own presence entry alive across remote refreshes, then
+      // refresh the sidebar widget so we see who else is online.
+      if (presenceKey) upsertPresence();
+      renderPresenceSidebar();
+      updateDbIdFooter();
       setSaveStatus('saved', silent ? 'Synced with team' : 'Loaded from cloud');
       if (lastSaveTime) document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
@@ -2314,6 +2353,98 @@ function startRemotePolling() {
 }
 function stopRemotePolling() {
   if (remotePollTimer) { clearInterval(remotePollTimer); remotePollTimer = null; }
+}
+
+// ---- Presence (online Wkwk teammates) -------------------------------------
+function prunePresence() {
+  const cutoff = Date.now() - PRESENCE_TIMEOUT_MS;
+  presence = (presence || []).filter(p => {
+    if (!p || !p.lastSeen) return false;
+    const t = Date.parse(p.lastSeen);
+    return !isNaN(t) && t > cutoff;
+  });
+}
+
+function upsertPresence() {
+  if (!presenceKey) return;
+  const name = currentUserName();
+  const avatar = (document.getElementById('sb-avatar')?.textContent || (name || '?')[0]).slice(0, 2);
+  const now = new Date().toISOString();
+  const existing = (presence || []).find(p => p.key === presenceKey);
+  if (existing) {
+    existing.lastSeen = now;
+    existing.name = name;
+    existing.role = userRole;
+    existing.avatar = avatar;
+    existing.app = APP_VERSION;
+  } else {
+    presence.push({ key: presenceKey, name, role: userRole, avatar, loginAt: now, lastSeen: now, app: APP_VERSION });
+  }
+  prunePresence();
+}
+
+function renderPresenceSidebar() {
+  const section = document.getElementById('presence-section');
+  const list = document.getElementById('presence-list');
+  const countEl = document.getElementById('presence-count');
+  if (!section || !list) return;
+  if (userRole === 'client' || isOfflineMode) { section.style.display = 'none'; return; }
+  prunePresence();
+  // Only show Wkwk team (internal + operator), not clients
+  const team = (presence || []).filter(p => p.role === 'internal' || p.role === 'operator');
+  if (team.length === 0) { section.style.display = 'none'; return; }
+  team.sort((a, b) => (a.loginAt || '').localeCompare(b.loginAt || ''));
+  section.style.display = '';
+  if (countEl) countEl.textContent = `${team.length}`;
+  list.innerHTML = team.map(p => {
+    const isSelf = p.key === presenceKey;
+    const av = escapeHtml((p.avatar || (p.name || '?')[0] || '?').slice(0, 2));
+    const tip = `${p.name} · login ${new Date(p.loginAt).toLocaleString()} · app ${p.app || '?'}`;
+    return `<div class="presence-item" title="${escapeHtml(tip)}">
+      <div class="presence-avatar${isSelf ? ' self' : ''}">${av}</div>
+      <div class="presence-name">${escapeHtml(p.name || '—')}${isSelf ? ' <small>(คุณ)</small>' : ''}</div>
+      <div class="presence-role">${p.role === 'internal' ? 'INT' : 'OP'}</div>
+    </div>`;
+  }).join('');
+}
+
+function startPresenceHeartbeat() {
+  if (presenceHeartbeatTimer) return;
+  if (userRole === 'client' || isOfflineMode || !accessToken) return;
+  presenceHeartbeatTimer = setInterval(() => {
+    upsertPresence();
+    renderPresenceSidebar();
+    scheduleSave();
+  }, PRESENCE_HEARTBEAT_MS);
+}
+
+function stopPresenceHeartbeat() {
+  if (presenceHeartbeatTimer) { clearInterval(presenceHeartbeatTimer); presenceHeartbeatTimer = null; }
+}
+
+function joinSharedSession(role, identifier, label) {
+  // identifier: email for internal, token for operator. Used to build a stable
+  // key that survives reloads so the same human doesn't appear twice.
+  const id = identifier || ('anon-' + Math.random().toString(36).slice(2, 8));
+  presenceKey = (role === 'internal' ? 'g:' : 'op:') + id;
+  upsertPresence();
+  renderPresenceSidebar();
+  startPresenceHeartbeat();
+  // Log the join AFTER syncDatabaseFromDrive has set databaseFileId, so the
+  // log entry includes which shared DB file we're on — verifiable across
+  // teammates who can confirm they see the same id.
+  const dbTag = databaseFileId ? ' · DB ' + databaseFileId.slice(0, 8) + '…' : '';
+  logAction('SYSTEM', `LOGIN: ${currentUserName()} (${role})${dbTag} · ${APP_VERSION}`);
+  scheduleSave();
+}
+
+function updateDbIdFooter() {
+  const el = document.getElementById('sb-db-id');
+  if (!el) return;
+  if (!databaseFileId || userRole === 'client' || isOfflineMode) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.textContent = 'DB ' + databaseFileId.slice(0, 10) + '…';
+  el.title = 'Shared database file id: ' + databaseFileId;
 }
 
 function normalizeCampaign(c) {
@@ -2993,6 +3124,15 @@ function confirmLogout() {
 
 function performLogout() {
   try { persistLocalBackup(); } catch(e) {}
+  // Remove our presence entry and flush so teammates' sidebars update right
+  // away instead of waiting for the 5-min timeout. Fire-and-forget — we don't
+  // block logout on the network.
+  stopPresenceHeartbeat();
+  stopRemotePolling();
+  if (presenceKey && Array.isArray(presence)) {
+    presence = presence.filter(p => p.key !== presenceKey);
+    if (accessToken && databaseFileId) { logAction('SYSTEM', `LOGOUT: ${currentUserName()}`); try { saveToDrive(); } catch(e) {} }
+  }
   try {
     if (accessToken && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
       google.accounts.oauth2.revoke(accessToken, () => {});
