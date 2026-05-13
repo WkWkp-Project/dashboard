@@ -857,6 +857,11 @@
           <button class="btn sm" onclick="openHubFolder()">Open ↗</button>
         </div>
         <small class="hint">วาง URL โฟลเดอร์ Google Drive — ระบบจะดึง folder ID อัตโนมัติ แล้ว <strong>สร้างไฟล์ database ในโฟลเดอร์นี้</strong> (การเซฟครั้งถัดไปจะ overwrite ไฟล์เดิมเสมอ) · ต้องแชร์โฟลเดอร์ให้บัญชีที่ login แบบ Editor</small>
+        <div class="hub-row" style="grid-template-columns:160px 1fr auto; margin-top:10px;">
+          <label>🔁 Team DB</label>
+          <small class="hint" style="margin:0;">ถ้าทีมแต่ละคนมี DB ของตัวเอง (เห็น DB id ต่างกันใน sidebar) กดปุ่มนี้เพื่อสลับมาใช้ไฟล์เดียวกันใน Hub folder ด้านบน</small>
+          <button class="btn sm" onclick="connectToTeamDB()">Connect to team DB</button>
+        </div>
         <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
           <label>🆔 Folder ID</label>
           <code id="hub-folder-id-display" style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">—</code>
@@ -2296,38 +2301,126 @@ async function syncDatabaseFromDrive(opts) {
   const silent = !!(opts && opts.silent);
   if (!silent) setSaveStatus('saving', 'Loading...');
   try {
-    const searchResp = await authFetch(`https://www.googleapis.com/drive/v3/files?q=name='${DB_FILENAME}' and trashed=false&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`);
+    // Ask for parents + ownedByMe so we can pick the canonical team DB when
+    // several copies exist (each first-time login creates one in My Drive).
+    const searchResp = await authFetch(`https://www.googleapis.com/drive/v3/files?q=name='${DB_FILENAME}' and trashed=false&fields=files(id,modifiedTime,parents,ownedByMe)&orderBy=modifiedTime desc`);
     const searchResult = await searchResp.json();
-    if (searchResult.files && searchResult.files.length > 0) {
-      databaseFileId = searchResult.files[0].id;
-      if (searchResult.files[0].modifiedTime) remoteModifiedTime = searchResult.files[0].modifiedTime;
-      const contentResp = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?alt=media`);
-      const db = await contentResp.json();
-      if (db.campaigns && Array.isArray(db.campaigns) && db.campaigns.length > 0) {
-        campaigns = db.campaigns.map(c => normalizeCampaign(c));
-        currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
-      }
-      if (db.accessTokens) accessTokens = db.accessTokens;
-      if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
-      if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
-      if (Array.isArray(db.presence)) presence = db.presence;
-      lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
-      renderEverything();
-      // Keep our own presence entry alive across remote refreshes, then
-      // refresh the sidebar widget so we see who else is online.
-      if (presenceKey) upsertPresence();
-      renderPresenceSidebar();
-      updateDbIdFooter();
-      setSaveStatus('saved', silent ? 'Synced with team' : 'Loaded from cloud');
-      if (lastSaveTime) document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
-      else showToast('↻ อัปเดตจากเพื่อนร่วมทีม');
-    } else {
+    const files = (searchResult.files || []);
+    if (files.length === 0) {
       setSaveStatus('idle', 'New project · ready to start');
       renderEverything();
+      startRemotePolling();
+      return;
     }
+    // Pick the right file across multiple matches:
+    //  1) prefer a file inside the locally-cached Hub folder hint
+    //  2) prefer a file that's shared with us (ownedByMe=false) over our
+    //     own private copy — the team DB is usually shared
+    //  3) fallback to most recently modified
+    const hint = readHubFolderHint();
+    let chosen = null;
+    if (hint) chosen = files.find(f => Array.isArray(f.parents) && f.parents.includes(hint));
+    if (!chosen) chosen = files.find(f => f.ownedByMe === false);
+    if (!chosen) chosen = files[0];
+    databaseFileId = chosen.id;
+    if (chosen.modifiedTime) remoteModifiedTime = chosen.modifiedTime;
+    const contentResp = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?alt=media`);
+    const db = await contentResp.json();
+    if (db.campaigns && Array.isArray(db.campaigns) && db.campaigns.length > 0) {
+      campaigns = db.campaigns.map(c => normalizeCampaign(c));
+      currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
+    }
+    if (db.accessTokens) accessTokens = db.accessTokens;
+    if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+    if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
+    if (Array.isArray(db.presence)) presence = db.presence;
+    lastSaveTime = db.savedAt ? new Date(db.savedAt) : null;
+    // Once we know the DB's hub.driveFolderId, persist it as a local hint so
+    // the next sync converges on the same file before even reading content.
+    if (hub.driveFolderId) writeHubFolderHint(hub.driveFolderId);
+    // If after load we discover the team DB actually lives in hub.driveFolderId
+    // but we picked a different file (e.g. our own private copy from before
+    // the hub was configured), switch over and reload.
+    if (hub.driveFolderId && files.length > 1) {
+      const better = files.find(f => Array.isArray(f.parents) && f.parents.includes(hub.driveFolderId));
+      if (better && better.id !== databaseFileId) {
+        databaseFileId = better.id;
+        remoteModifiedTime = better.modifiedTime || null;
+        const r2 = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?alt=media`);
+        const db2 = await r2.json();
+        if (db2.campaigns && Array.isArray(db2.campaigns) && db2.campaigns.length > 0) {
+          campaigns = db2.campaigns.map(c => normalizeCampaign(c));
+          currentCampaignId = db2.currentCampaignId && campaigns.find(c=>c.id===db2.currentCampaignId) ? db2.currentCampaignId : campaigns[0].id;
+        }
+        if (db2.accessTokens) accessTokens = db2.accessTokens;
+        if (db2.hub && typeof db2.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db2.hub };
+        if (Array.isArray(db2.manualBackupHistory)) manualBackupHistory = db2.manualBackupHistory;
+        if (Array.isArray(db2.presence)) presence = db2.presence;
+        lastSaveTime = db2.savedAt ? new Date(db2.savedAt) : null;
+        if (!silent) showToast('🔁 สลับไปใช้ DB กลางของทีมแล้ว');
+      }
+    }
+    renderEverything();
+    if (presenceKey) upsertPresence();
+    renderPresenceSidebar();
+    updateDbIdFooter();
+    // Warn if we ended up on a file outside the configured Hub folder — that
+    // means we're probably split-brained from the team copy.
+    if (hub.driveFolderId && Array.isArray(chosen.parents) && !chosen.parents.includes(hub.driveFolderId) && databaseFileId === chosen.id) {
+      showToast('⚠ DB ของคุณอยู่นอก Hub folder — ทีมอาจไม่ได้ใช้ไฟล์เดียวกัน · ไปที่ Data Hub แล้วกด "Connect to team DB"', 'warn');
+    }
+    setSaveStatus('saved', silent ? 'Synced with team' : 'Loaded from cloud');
+    if (lastSaveTime) document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
+    else showToast('↻ อัปเดตจากเพื่อนร่วมทีม');
     startRemotePolling();
   } catch (err) { console.error(err); if (!silent) setSaveStatus('error', 'Load failed · click to retry'); }
+}
+
+// Hub folder id is also persisted to localStorage so the next sync can pick
+// the right DB file before it has read any DB content (chicken-egg).
+const HUB_HINT_KEY = 'wakuwaku_hub_folder_hint';
+function readHubFolderHint() { try { return localStorage.getItem(HUB_HINT_KEY) || ''; } catch(e) { return ''; } }
+function writeHubFolderHint(id) { try { if (id) localStorage.setItem(HUB_HINT_KEY, id); } catch(e) {} }
+function clearHubFolderHint() { try { localStorage.removeItem(HUB_HINT_KEY); } catch(e) {} }
+
+// Explicit "switch to the team's shared DB" — used to consolidate when each
+// teammate accidentally created their own DB before any Hub folder was set.
+async function connectToTeamDB() {
+  if (blockIfClient('Connect to team DB เฉพาะทีม Wakuwaku')) return;
+  if (!accessToken) { showToast('ต้อง login Google ก่อน', 'warn'); return; }
+  const url = (document.getElementById('hubFolderUrl').value || '').trim() || hub.folderUrl;
+  const fid = parseDriveFolderId(url);
+  if (!fid) { showToast('วาง Hub Folder URL ที่ถูกต้องก่อน', 'warn'); return; }
+  setSaveStatus('saving', 'Searching team DB...');
+  try {
+    const q = encodeURIComponent(`name='${DB_FILENAME}' and '${fid}' in parents and trashed=false`);
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,parents)&orderBy=modifiedTime desc`);
+    if (!r.ok) { const e = await driveError(r); showToast('ค้นไม่ได้: ' + e.message, 'err'); return; }
+    const j = await r.json();
+    const files = j.files || [];
+    if (files.length === 0) {
+      showToast('ไม่พบไฟล์ ' + DB_FILENAME + ' ในโฟลเดอร์นี้ — เซฟครั้งถัดไปจะสร้างใหม่ใน Hub folder', 'warn');
+      hub.folderUrl = url; hub.driveFolderId = fid; writeHubFolderHint(fid);
+      saveHubConfig();
+      return;
+    }
+    const target = files[0];
+    if (target.id === databaseFileId) {
+      showToast('✓ ใช้ DB ของทีมอยู่แล้ว · DB ' + target.id.slice(0, 10) + '…', 'ok');
+      hub.folderUrl = url; hub.driveFolderId = fid; writeHubFolderHint(fid);
+      return;
+    }
+    // Switch over: discard our in-memory state and reload from the team file.
+    databaseFileId = target.id;
+    remoteModifiedTime = target.modifiedTime || null;
+    writeHubFolderHint(fid);
+    logAction('SYSTEM', `Switched to team DB · file ${target.id.slice(0, 8)}…`);
+    await syncDatabaseFromDrive({ silent: false });
+    showToast('✓ เชื่อมเข้า DB ของทีมแล้ว — รีเฟรชหน้าจอ', 'ok');
+  } catch(e) {
+    showToast('Connect ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+  }
 }
 
 // Lightweight check: has the DB file changed on Drive since our last sync?
@@ -2649,6 +2742,9 @@ function saveHubConfig() {
   const fid = parseDriveFolderId(hub.folderUrl);
   hub.driveFolderId = fid || '';
   hub.updatedAt = new Date().toISOString();
+  // Persist the hub folder id locally so the next login can pick the right
+  // DB file before reading any DB content (resolves split-brain across users).
+  if (fid) writeHubFolderHint(fid); else clearHubFolderHint();
   logAction('UPDATE', 'Hub config updated' + (fid ? ` · folder ${fid.slice(0,12)}…` : ''));
   showToast(fid ? `✓ Hub saved · ไฟล์ database จะถูกย้ายเข้าโฟลเดอร์นี้` : '✓ Hub saved');
   scheduleSave();
@@ -5195,8 +5291,17 @@ window.__runTests = async function() {
    'clearCurrentCampaign','manualSnapshot','openSnapshotsModal','renderSnapshotsModal','showTypedConfirm','onConfirmTypedInput',
    'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName',
    'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup',
-   'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter'
+   'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter',
+   'connectToTeamDB','readHubFolderHint','writeHubFolderHint','clearHubFolderHint'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
+  t('hub folder hint round-trips through localStorage', () => {
+    const save = readHubFolderHint();
+    writeHubFolderHint('abc123XYZ');
+    eq(readHubFolderHint(), 'abc123XYZ');
+    clearHubFolderHint();
+    eq(readHubFolderHint(), '');
+    if (save) writeHubFolderHint(save);
+  });
   t('LOCAL_BACKUP_KEY defined', () => ok(typeof LOCAL_BACKUP_KEY === 'string' && LOCAL_BACKUP_KEY.length));
   t('persistLocalBackup writes & readLocalBackup reads', () => {
     persistLocalBackup();
