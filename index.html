@@ -516,7 +516,7 @@
           <button class="btn primary" onclick="loginWithToken()">เข้าระบบ →</button>
         </div>
       </div>
-      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ยุ่งกับ Token/สร้างแคมเปญ/Connect Drive ไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
+      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ใช้ Connect Drive ร่วมกับทีมได้ · ยุ่งกับ Token/สร้างแคมเปญไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
     </div>
   </div>
 </div>
@@ -4464,7 +4464,7 @@ function saveCampaignInfo() {
 }
 
 function linkDriveFolder(i) {
-  if (blockIfNotInternal('จัดการ Drive references เฉพาะทีม Wakuwaku')) return;
+  if (blockIfClient('จัดการ Drive references เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
   if (!camp.driveLinks[i] || !camp.driveLinks[i].url) { showToast('ยังไม่มี link — กรุณาเพิ่มผ่าน Connect Drive ก่อน', 'warn'); return; }
   if (camp.status === 'handed-off') { showToast('Re-open campaign first', 'warn'); return; }
@@ -4506,20 +4506,29 @@ function restoreLinkedDriveCards() {
 }
 
 function openConnectModal() {
-  if (blockIfNotInternal('Connect Drive เฉพาะทีม Wakuwaku')) return;
+  if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
   for (let i = 0; i < 4; i++) document.getElementById(`linkInput${i}`).value = camp.driveLinks[i]?.url || '';
   document.getElementById('connectModal').classList.add('show');
 }
 function closeConnectModal() { document.getElementById('connectModal').classList.remove('show'); }
 function saveDriveLinks() {
+  if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
-  for (let i = 0; i < 4; i++) camp.driveLinks[i].url = document.getElementById(`linkInput${i}`).value;
-  // count linked
+  const before = camp.driveLinks.map(d => (d && d.url) || '');
+  const changed = [];
+  for (let i = 0; i < 4; i++) {
+    const newUrl = (document.getElementById(`linkInput${i}`).value || '').trim();
+    if (newUrl !== before[i]) changed.push(camp.driveLinks[i].name);
+    camp.driveLinks[i].url = newUrl;
+  }
   camp.linkedFilesCount = camp.driveLinks.filter(d => d.url && d.url.trim()).length;
-  for (let i = 0; i < 4; i++) if (camp.driveLinks[i].url) linkDriveFolder(i);
   restoreLinkedDriveCards();
   closeConnectModal();
+  if (changed.length) {
+    logAction('UPDATE', `Drive links updated: ${changed.join(', ')}`);
+    showToast('✓ Drive links saved — syncing to Drive', 'ok');
+  }
 }
 function openDriveLink(index) {
   const camp = getCurrentCampaign();
