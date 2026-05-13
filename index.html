@@ -2328,7 +2328,14 @@ async function syncDatabaseFromDrive(opts) {
     const db = await contentResp.json();
     if (db.campaigns && Array.isArray(db.campaigns) && db.campaigns.length > 0) {
       campaigns = db.campaigns.map(c => normalizeCampaign(c));
-      currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
+      // currentCampaignId is per-user UI navigation — on a silent remote poll
+      // (someone else's save triggered this), keep whichever campaign the
+      // local user is currently viewing instead of jumping to whatever the
+      // teammate had selected when they saved.
+      const keepLocal = silent && currentCampaignId && campaigns.find(c => c.id === currentCampaignId);
+      if (!keepLocal) {
+        currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
+      }
     }
     if (db.accessTokens) accessTokens = db.accessTokens;
     if (db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
@@ -2350,7 +2357,10 @@ async function syncDatabaseFromDrive(opts) {
         const db2 = await r2.json();
         if (db2.campaigns && Array.isArray(db2.campaigns) && db2.campaigns.length > 0) {
           campaigns = db2.campaigns.map(c => normalizeCampaign(c));
-          currentCampaignId = db2.currentCampaignId && campaigns.find(c=>c.id===db2.currentCampaignId) ? db2.currentCampaignId : campaigns[0].id;
+          const keepLocal2 = silent && currentCampaignId && campaigns.find(c => c.id === currentCampaignId);
+          if (!keepLocal2) {
+            currentCampaignId = db2.currentCampaignId && campaigns.find(c=>c.id===db2.currentCampaignId) ? db2.currentCampaignId : campaigns[0].id;
+          }
         }
         if (db2.accessTokens) accessTokens = db2.accessTokens;
         if (db2.hub && typeof db2.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db2.hub };
@@ -5294,6 +5304,33 @@ window.__runTests = async function() {
    'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter',
    'connectToTeamDB','readHubFolderHint','writeHubFolderHint','clearHubFolderHint'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
+  t('silent remote sync preserves local current campaign', async () => {
+    // Two campaigns in the shared DB; local user is on A; remote DB says B.
+    // After a silent poll-driven sync we should still be on A.
+    const save = { campaigns: campaigns.slice(), currentCampaignId, databaseFileId, accessToken };
+    campaigns = [
+      normalizeCampaign({ id:'cA', client:'A', campaign:'A' }),
+      normalizeCampaign({ id:'cB', client:'B', campaign:'B' })
+    ];
+    currentCampaignId = 'cA';
+    // Stub network: search returns a single file id; content returns DB w/ B selected.
+    const origFetch = window.authFetch;
+    window.authFetch = (url) => {
+      if (url.includes('?q=')) return Promise.resolve(new Response(JSON.stringify({ files: [{ id:'F1', modifiedTime:'2026-05-13T00:00:00Z', parents:[], ownedByMe:true }] })));
+      return Promise.resolve(new Response(JSON.stringify({
+        campaigns: [
+          { id:'cA', client:'A', campaign:'A', assets:[], log:[], driveLinks:[], snapshots:[] },
+          { id:'cB', client:'B', campaign:'B', assets:[], log:[], driveLinks:[], snapshots:[] }
+        ],
+        currentCampaignId: 'cB'
+      })));
+    };
+    databaseFileId = null; accessToken = 'fake';
+    await syncDatabaseFromDrive({ silent: true });
+    eq(currentCampaignId, 'cA', 'kept local view on A despite remote currentCampaignId=cB');
+    window.authFetch = origFetch;
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId; databaseFileId = save.databaseFileId; accessToken = save.accessToken;
+  });
   t('hub folder hint round-trips through localStorage', () => {
     const save = readHubFolderHint();
     writeHubFolderHint('abc123XYZ');
