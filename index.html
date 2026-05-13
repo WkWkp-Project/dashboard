@@ -2411,7 +2411,12 @@ function renderPresenceSidebar() {
 function startPresenceHeartbeat() {
   if (presenceHeartbeatTimer) return;
   if (userRole === 'client' || isOfflineMode || !accessToken) return;
-  presenceHeartbeatTimer = setInterval(() => {
+  presenceHeartbeatTimer = setInterval(async () => {
+    // Pull any remote teammate updates first so the heartbeat-driven save
+    // folds them in rather than clobbering them with our stale view. Poll
+    // skips itself when there's a save in flight or pending local edits,
+    // which is the only case we'd want to skip the pull anyway.
+    try { await pollRemoteChanges(); } catch(e) {}
     upsertPresence();
     renderPresenceSidebar();
     scheduleSave();
@@ -2426,7 +2431,14 @@ function joinSharedSession(role, identifier, label) {
   // identifier: email for internal, token for operator. Used to build a stable
   // key that survives reloads so the same human doesn't appear twice.
   const id = identifier || ('anon-' + Math.random().toString(36).slice(2, 8));
-  presenceKey = (role === 'internal' ? 'g:' : 'op:') + id;
+  const nextKey = (role === 'internal' ? 'g:' : 'op:') + id;
+  // If we previously joined under a different key in this session
+  // (e.g. internal user entered an operator token mid-session), drop the
+  // stale entry so teammates don't see us twice in their sidebar.
+  if (presenceKey && presenceKey !== nextKey) {
+    presence = (presence || []).filter(p => p.key !== presenceKey);
+  }
+  presenceKey = nextKey;
   upsertPresence();
   renderPresenceSidebar();
   startPresenceHeartbeat();
@@ -5182,7 +5194,8 @@ window.__runTests = async function() {
    'applyRoleRestrictions','blockIfNotInternal','loginWithToken','applyTokenLogin','takeSnapshot','revertToSnapshot',
    'clearCurrentCampaign','manualSnapshot','openSnapshotsModal','renderSnapshotsModal','showTypedConfirm','onConfirmTypedInput',
    'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName',
-   'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup'
+   'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup',
+   'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
   t('LOCAL_BACKUP_KEY defined', () => ok(typeof LOCAL_BACKUP_KEY === 'string' && LOCAL_BACKUP_KEY.length));
   t('persistLocalBackup writes & readLocalBackup reads', () => {
@@ -5217,6 +5230,71 @@ window.__runTests = async function() {
     ok(document.querySelector('.dp-cell.range-end'), 'range-end cell rendered');
     ok(document.querySelectorAll('.dp-cell.in-range').length >= 4, 'in-range cells rendered');
     probeS.remove(); probeE.remove();
+  });
+
+  // ---- Presence / shared-session ----
+  t('presence payload included in buildDatabasePayload', () => {
+    const p = buildDatabasePayload();
+    ok('presence' in p, 'payload exposes presence');
+    ok(Array.isArray(p.presence), 'presence is an array');
+  });
+  t('upsertPresence inserts then refreshes (no duplicate)', () => {
+    const save = { presence, presenceKey, userRole };
+    presence = []; presenceKey = 'g:test@wkwk.com'; userRole = 'internal';
+    upsertPresence(); upsertPresence();
+    eq(presence.length, 1, 'one entry for same key');
+    ok(presence[0].loginAt && presence[0].lastSeen, 'has timestamps');
+    presence = save.presence; presenceKey = save.presenceKey; userRole = save.userRole;
+  });
+  t('prunePresence drops entries past timeout', () => {
+    const save = presence;
+    const stale = new Date(Date.now() - (PRESENCE_TIMEOUT_MS + 10000)).toISOString();
+    const fresh = new Date().toISOString();
+    presence = [
+      { key: 'g:old@x', name: 'Old', role: 'internal', lastSeen: stale, loginAt: stale },
+      { key: 'g:new@x', name: 'New', role: 'internal', lastSeen: fresh, loginAt: fresh }
+    ];
+    prunePresence();
+    eq(presence.length, 1);
+    eq(presence[0].key, 'g:new@x');
+    presence = save;
+  });
+  t('joinSharedSession dedupes when role switches mid-session', () => {
+    const save = { presence, presenceKey, userRole };
+    presence = []; presenceKey = null;
+    userRole = 'internal'; joinSharedSession('internal', 'op@wkwk.com');
+    const firstKey = presenceKey;
+    userRole = 'operator'; joinSharedSession('operator', 'tok-xyz');
+    const internalEntries = presence.filter(p => p.key === firstKey);
+    eq(internalEntries.length, 0, 'old internal entry was dropped');
+    eq(presence.filter(p => p.key === presenceKey).length, 1, 'new operator entry exists');
+    presence = save.presence; presenceKey = save.presenceKey; userRole = save.userRole;
+  });
+  t('renderPresenceSidebar hides section for client / offline', () => {
+    const save = { userRole, isOfflineMode };
+    userRole = 'client'; renderPresenceSidebar();
+    eq(document.getElementById('presence-section').style.display, 'none');
+    userRole = save.userRole; isOfflineMode = save.isOfflineMode; renderPresenceSidebar();
+  });
+  t('renderPresenceSidebar excludes client entries from Wkwk team view', () => {
+    const save = { presence, userRole, isOfflineMode };
+    userRole = 'internal'; isOfflineMode = false;
+    presence = [
+      { key:'g:a@x', name:'A', role:'internal', avatar:'A', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() },
+      { key:'c:tok1', name:'ClientGuest', role:'client', avatar:'C', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() }
+    ];
+    renderPresenceSidebar();
+    const list = document.getElementById('presence-list').innerHTML;
+    ok(list.includes('A'), 'internal A shown');
+    ok(!list.includes('ClientGuest'), 'client hidden from Wkwk roster');
+    presence = save.presence; userRole = save.userRole; isOfflineMode = save.isOfflineMode; renderPresenceSidebar();
+  });
+  t('pollRemoteChanges skips when no DB file id', async () => {
+    const save = databaseFileId; databaseFileId = null;
+    let called = 0; const origFetch = window.authFetch; window.authFetch = () => { called++; return Promise.resolve(new Response('{}')); };
+    await pollRemoteChanges();
+    eq(called, 0, 'no network call');
+    databaseFileId = save; window.authFetch = origFetch;
   });
 
   await Promise.all(pending);
