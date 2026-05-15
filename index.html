@@ -3725,11 +3725,17 @@ document.addEventListener('change', e => {
 
 function saveAssetFromModal() {
   const camp = getCurrentCampaign();
+  if (!camp) { showToast('ไม่พบแคมเปญ — refresh แล้วลองอีกครั้ง', 'err'); return; }
   const cat = document.getElementById('asset-cat').value;
   const sch = camp.schema[cat];
   const h2 = document.getElementById('asset-h2').value.trim();
   const h3 = document.getElementById('asset-h3').value.trim();
   if (!h2) { showToast('กรอก H2 อย่างน้อย', 'warn'); return; }
+  // Look the existing asset up ONCE up front. A silent poll-sync that ran
+  // while the modal was open can replace campaigns[], and with it the asset
+  // we were editing — `find` returns undefined and `.createdAt` would throw,
+  // crashing the save and leaving the user with a "stuck" modal.
+  const existing = editingAssetId ? camp.assets.find(x => x.id === editingAssetId) : null;
   const data = {
     id: editingAssetId || ('asset-' + Date.now() + Math.random().toString(36).slice(2,7)),
     catClass: cat,
@@ -3743,12 +3749,20 @@ function saveAssetFromModal() {
     files: pendingFiles.map(f => ({ name:f.name, type:f.type, data:f.data })),
     fileName: pendingFiles[0] ? pendingFiles[0].name : '',
     fileData: pendingFiles[0] ? pendingFiles[0].data : '',
-    createdAt: editingAssetId ? camp.assets.find(x=>x.id===editingAssetId).createdAt : new Date().toISOString()
+    createdAt: (existing && existing.createdAt) || new Date().toISOString()
   };
   if (editingAssetId) {
     const i = camp.assets.findIndex(x => x.id === editingAssetId);
-    camp.assets[i] = data;
-    logAction('UPDATE', `Edited asset: ${h2}`);
+    if (i >= 0) {
+      camp.assets[i] = data;
+      logAction('UPDATE', `Edited asset: ${h2}`);
+    } else {
+      // Remote dropped this asset while we were editing — treat the edit as
+      // a re-add so user input is never silently lost (camp.assets[-1] = ...
+      // used to assign to property "-1" which isn't an array slot at all).
+      camp.assets.unshift(data);
+      logAction('CREATE', `Re-added asset (remote had removed): ${h2}`);
+    }
   } else {
     camp.assets.unshift(data);
     logAction('CREATE', `Added asset: ${h2}`);
@@ -5503,6 +5517,50 @@ window.__runTests = async function() {
     ok(document.querySelector('.dp-cell.range-end'), 'range-end cell rendered');
     ok(document.querySelectorAll('.dp-cell.in-range').length >= 4, 'in-range cells rendered');
     probeS.remove(); probeE.remove();
+  });
+
+  // ---- Section B add/edit safety against background sync ----
+  t('saveAssetFromModal re-adds when remote dropped the edited asset', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, editingAssetId, pendingFiles: pendingFiles.slice(), pendingLinks: pendingLinks.slice() };
+    const c = normalizeCampaign({ id:'cEdit', client:'X', campaign:'X' });
+    // Local has no assets but the modal thinks we're editing one that
+    // a teammate's edit removed via background sync.
+    campaigns = [c]; currentCampaignId = 'cEdit'; editingAssetId = 'ghost-id';
+    pendingFiles = []; pendingLinks = [];
+    // Stub DOM the function reads from
+    const stubs = {};
+    ['asset-cat','asset-h2','asset-h3','asset-prompt','asset-date','asset-type'].forEach(id => {
+      let el = document.getElementById(id);
+      if (!el) { el = document.createElement('input'); el.id = id; document.body.appendChild(el); stubs[id] = el; }
+    });
+    document.getElementById('asset-cat').value = 'catch';
+    document.getElementById('asset-h2').value = 'Recovered topic';
+    document.getElementById('asset-h3').value = '';
+    document.getElementById('asset-prompt').value = '';
+    document.getElementById('asset-date').value = '';
+    document.getElementById('asset-type').value = 'image';
+    saveAssetFromModal();
+    eq(c.assets.length, 1, 'asset re-added, not silently lost to index -1');
+    eq(c.assets[0].h2, 'Recovered topic');
+    Object.values(stubs).forEach(el => el.remove());
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId; editingAssetId = save.editingAssetId; pendingFiles = save.pendingFiles; pendingLinks = save.pendingLinks;
+  });
+  t('saveAssetFromModal does not crash when asset disappeared mid-edit', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, editingAssetId };
+    const c = normalizeCampaign({ id:'cEdit2', client:'X', campaign:'X' });
+    campaigns = [c]; currentCampaignId = 'cEdit2'; editingAssetId = 'gone-id';
+    const stubs = {};
+    ['asset-cat','asset-h2','asset-h3','asset-prompt','asset-date','asset-type'].forEach(id => {
+      let el = document.getElementById(id);
+      if (!el) { el = document.createElement('input'); el.id = id; document.body.appendChild(el); stubs[id] = el; }
+    });
+    document.getElementById('asset-cat').value = 'catch';
+    document.getElementById('asset-h2').value = 'Still works';
+    let threw = false;
+    try { saveAssetFromModal(); } catch(e) { threw = true; }
+    ok(!threw, 'no exception when find() returns undefined');
+    Object.values(stubs).forEach(el => el.remove());
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId; editingAssetId = save.editingAssetId;
   });
 
   // ---- Login-race protection: don't upload before first sync ----
