@@ -1890,6 +1890,12 @@ function scheduleSave() {
   setSaveStatus('saving', 'Saving in 2.5s...');
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    // CRITICAL: reset saveTimer the moment the timeout fires. The variable
+    // is also read by pollRemoteChanges as "save is pending" — if we leave
+    // a stale id in it, polls bail forever and teammates' edits never
+    // reach this user. The 90s presence heartbeat re-schedules this
+    // timer every cycle, so a stale id stays truthy in steady state.
+    saveTimer = null;
     saveToDrive().catch(e => {
       console.warn('Auto-save failed:', e);
       showToast('Auto-save failed: ' + (e.message || 'unknown'), 'err');
@@ -5561,6 +5567,26 @@ window.__runTests = async function() {
     ok(!threw, 'no exception when find() returns undefined');
     Object.values(stubs).forEach(el => el.remove());
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId; editingAssetId = save.editingAssetId;
+  });
+
+  // ---- Poll resumes after each save (no stale saveTimer) ----
+  t('scheduleSave callback nulls saveTimer when it fires (pollRemoteChanges can run)', () => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    const save = { _readyToSave, accessToken, isOfflineMode, isSaving, pendingChanges };
+    isSaving = false; pendingChanges = false; _readyToSave = true; accessToken = 'fake'; isOfflineMode = false;
+    // Patch setTimeout to capture the callback synchronously
+    const origSetTimeout = window.setTimeout;
+    let captured = null;
+    window.setTimeout = (fn) => { captured = fn; return 999; };
+    const origSave = window.saveToDrive;
+    window.saveToDrive = async () => {};
+    scheduleSave();
+    eq(saveTimer, 999, 'scheduleSave stored the timer id');
+    captured(); // simulate the timeout firing
+    ok(saveTimer === null, 'callback resets saveTimer so the poll guard releases');
+    window.setTimeout = origSetTimeout;
+    window.saveToDrive = origSave;
+    _readyToSave = save._readyToSave; accessToken = save.accessToken; isOfflineMode = save.isOfflineMode; isSaving = save.isSaving; pendingChanges = save.pendingChanges;
   });
 
   // ---- Login-race protection: don't upload before first sync ----
