@@ -1390,6 +1390,12 @@ let saveTimer = null;
 let isSaving = false;
 let lastSaveTime = null;
 let pendingChanges = false;
+// Becomes true only after the first successful syncDatabaseFromDrive (or after
+// we've confirmed Drive has no DB yet for this account). Until then,
+// scheduleSave is a no-op for the network — uploading the in-memory initial
+// state would clobber the team's real DB on Drive. Local backup still runs
+// so nothing is lost client-side.
+let _readyToSave = false;
 // Shared-state sync: poll Drive for remote edits by other Wkwk teammates so
 // everyone sees the same data. Tracks the DB file's Drive modifiedTime so we
 // only re-fetch when it actually changed.
@@ -1874,6 +1880,13 @@ function scheduleSave() {
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
+  // Block uploads until the first sync finished. Without this, a logAction
+  // that runs during the login flow (or any pre-sync activity) starts a 2.5s
+  // timer that fires before the Drive read finishes — uploading the empty
+  // in-memory state and clobbering everyone's data. scheduleSave will be
+  // called again from the end of syncDatabaseFromDrive to flush any deferred
+  // edits once we know the real state.
+  if (!_readyToSave) { setSaveStatus('saving', 'รอโหลด DB ก่อนเซฟ...'); return; }
   setSaveStatus('saving', 'Saving in 2.5s...');
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -1950,6 +1963,11 @@ let _consecutiveSaveFailures = 0;
 async function saveToDrive() {
   if (isSaving) return;
   if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
+  // Last-line defense against the login-race: if we haven't successfully
+  // read Drive yet, do NOT upload — we'd be writing the in-memory initial
+  // state on top of the real shared DB. scheduleSave already guards this,
+  // but forceSave and the heartbeat-driven save can call us directly.
+  if (!_readyToSave) { setSaveStatus('saving', 'รอโหลด DB ก่อนเซฟ...'); pendingChanges = true; return; }
   isSaving = true;
   setSaveStatus('saving', 'Saving...');
   try {
@@ -2382,6 +2400,9 @@ async function syncDatabaseFromDrive(opts) {
     if (files.length === 0) {
       setSaveStatus('idle', 'New project · ready to start');
       renderEverything();
+      // Drive has no DB yet — it's safe to create one on the next save.
+      _readyToSave = true;
+      if (pendingChanges) scheduleSave();
       startRemotePolling();
       return;
     }
@@ -2456,6 +2477,10 @@ async function syncDatabaseFromDrive(opts) {
     if (lastSaveTime) document.getElementById('meta-saved').textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
     else showToast('↻ อัปเดตจากเพื่อนร่วมทีม');
+    // Real DB state now in memory — uploads are safe. Flush any save that
+    // scheduleSave had to defer while we were loading.
+    _readyToSave = true;
+    if (pendingChanges) scheduleSave();
     startRemotePolling();
   } catch (err) { console.error(err); if (!silent) setSaveStatus('error', 'Load failed · click to retry'); }
 }
@@ -5478,6 +5503,30 @@ window.__runTests = async function() {
     ok(document.querySelector('.dp-cell.range-end'), 'range-end cell rendered');
     ok(document.querySelectorAll('.dp-cell.in-range').length >= 4, 'in-range cells rendered');
     probeS.remove(); probeE.remove();
+  });
+
+  // ---- Login-race protection: don't upload before first sync ----
+  t('scheduleSave defers timer when _readyToSave is false', () => {
+    const save = { _readyToSave, saveTimer, accessToken, isOfflineMode, pendingChanges };
+    if (saveTimer) { clearTimeout(saveTimer); }
+    saveTimer = null; _readyToSave = false;
+    accessToken = 'fake'; isOfflineMode = false; pendingChanges = false;
+    scheduleSave();
+    ok(saveTimer === null, 'no setTimeout fired pre-sync');
+    ok(pendingChanges === true, 'pendingChanges still marked so we remember');
+    _readyToSave = save._readyToSave; saveTimer = save.saveTimer; accessToken = save.accessToken; isOfflineMode = save.isOfflineMode; pendingChanges = save.pendingChanges;
+  });
+  t('saveToDrive bails before first sync even when called directly', async () => {
+    const save = { _readyToSave, isSaving, accessToken, pendingChanges };
+    _readyToSave = false; isSaving = false; accessToken = 'fake'; pendingChanges = false;
+    let called = 0;
+    const origFetch = window.authFetch;
+    window.authFetch = () => { called++; return Promise.resolve(new Response('{}')); };
+    await saveToDrive();
+    eq(called, 0, 'no upload network call made');
+    ok(pendingChanges === true, 'kept marked dirty so later sync flushes');
+    window.authFetch = origFetch;
+    _readyToSave = save._readyToSave; isSaving = save.isSaving; accessToken = save.accessToken; pendingChanges = save.pendingChanges;
   });
 
   // ---- Per-campaign Drive folder ----
