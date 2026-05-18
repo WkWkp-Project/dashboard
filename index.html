@@ -5530,6 +5530,7 @@ function linkDriveFolder(i) {
 
 function restoreLinkedDriveCards() {
   const camp = getCurrentCampaign();
+  if (!camp) return; // nothing to render when no member/campaign selected
   // Reset all
   for (let i = 0; i < 4; i++) {
     const card = document.getElementById(`input-card-${i}`);
