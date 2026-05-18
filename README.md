@@ -25,9 +25,9 @@ Firebase Console → **Firestore Database → Create database** → Production m
 Firebase Console → **Firestore Database → Rules** → paste the contents of [`firestore.rules`](./firestore.rules) → **Publish**.
 
 The rules enforce:
-- `@wakuwaku.co.th` emails = **admin** (read/write everything).
+- `@team.wkwkp.com` emails = **admin** (read/write everything).
 - Other emails = read-only access to campaigns they are listed in (`members[]`).
-- Edit the `wakuwaku.co.th` domain in `firestore.rules` if your team uses a different one.
+- Edit the `team.wkwkp.com` domain in `firestore.rules` if your team uses a different one.
 
 ### 4. Add members to a campaign
 
@@ -99,7 +99,7 @@ If your CLIENT_ID is hardcoded in the file, anyone can see it. While CLIENT_ID i
 **Option B — Public repo, restrict OAuth (free, recommended):** 
 - Keep the repo public
 - In Google Cloud Console, OAuth Consent Screen, set **User Type: Internal** (only allows users in your Google Workspace organization)
-- Or restrict by domain: only `@wakuwaku.co.th` emails can login
+- Or restrict by domain: only `@team.wkwkp.com` emails can login
 
 ---
 

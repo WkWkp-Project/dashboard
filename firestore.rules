@@ -12,8 +12,8 @@ service cloud.firestore {
         : '';
     }
     function isAdmin() {
-      // wkwk team — change the domain if your team uses a different one
-      return signedIn() && email().matches('.*@wakuwaku[.]co[.]th');
+      // wkwk team — admins are anyone with an @team.wkwkp.com email
+      return signedIn() && email().matches('.*@team[.]wkwkp[.]com');
     }
     function isMemberOf(camp) {
       return signedIn()
