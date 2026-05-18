@@ -3150,6 +3150,7 @@ function isVideoType(t) { return /^video\//.test(t || ''); }
 // ============================================================================
 function logAction(type, desc) {
   const c = getCurrentCampaign();
+  if (!c) return; // no campaign context yet — silently skip
   c.log.unshift({
     time: new Date().toISOString(), type, desc,
     user: document.getElementById('sb-name').textContent || 'Guest'
