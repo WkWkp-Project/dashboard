@@ -3422,24 +3422,26 @@ function renderEverything() {
 // Admin sees this until they pick a member from the sidebar; client never
 // sees this because we auto-pin them to themselves on login.
 function updateMainEmptyState() {
-  const main = document.querySelector('.main') || document.querySelector('main') || document.querySelector('.app > :not(.sidebar)');
+  const main = document.querySelector('main.main');
+  if (!main) return;
   let overlay = document.getElementById('memberEmptyState');
   const camp = getCurrentCampaign();
   const shouldShow = !camp;
   if (shouldShow) {
-    if (!overlay && main) {
+    if (!overlay) {
       overlay = document.createElement('div');
       overlay.id = 'memberEmptyState';
-      overlay.style.cssText = 'position:absolute; inset:0; background:var(--paper); display:flex; align-items:center; justify-content:center; z-index:50; pointer-events:auto;';
+      // Anchor to <main> only; sidebar stays clickable.
+      overlay.style.cssText = 'position:absolute; inset:0; background:var(--paper); display:flex; align-items:center; justify-content:center; z-index:5; pointer-events:auto;';
       overlay.innerHTML = `
         <div style="text-align:center; max-width:420px; padding:40px;">
           <div style="font-family:'Fraunces',serif; font-size:32px; color:var(--muted); margin-bottom:14px;">— No member selected —</div>
           <p style="color:var(--muted); font-size:13px; line-height:1.6;">เลือก <strong>Member</strong> ทาง sidebar ซ้ายเพื่อดูแคมเปญของลูกค้าคนนั้น<br>หรือกดปุ่ม <strong>+</strong> ที่ "Members" เพื่อเพิ่มลูกค้าใหม่</p>
         </div>`;
-      const host = document.getElementById('mainApp');
-      if (host) { host.style.position = 'relative'; host.appendChild(overlay); }
+      main.style.position = 'relative';
+      main.appendChild(overlay);
     }
-    if (overlay) overlay.style.display = 'flex';
+    overlay.style.display = 'flex';
   } else {
     if (overlay) overlay.style.display = 'none';
   }
