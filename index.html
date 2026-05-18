@@ -2112,10 +2112,6 @@ const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 // array inside an object `{__cells: [...]}` so the parent array becomes an
 // array of objects (which Firestore accepts).
 function fsEncode(value) {
-  // First normalize through JSON to strip undefined / functions / Maps / Sets /
-  // class instances (besides Date which JSON serializes as a string anyway).
-  // Then walk again and wrap any array-inside-array because Firestore rejects
-  // nested arrays even though JSON allows them.
   let safe;
   try { safe = JSON.parse(JSON.stringify(value)); } catch(e) { safe = value; }
   return _fsEncodeWrap(safe);
@@ -2125,7 +2121,7 @@ function _fsEncodeWrap(value) {
   if (typeof value !== 'object') return value;
   if (Array.isArray(value)) {
     return value.map(item => {
-      if (Array.isArray(item)) return { __cells: _fsEncodeWrap(item) };
+      if (Array.isArray(item)) return { cells: _fsEncodeWrap(item) };
       return _fsEncodeWrap(item);
     });
   }
@@ -2133,7 +2129,15 @@ function _fsEncodeWrap(value) {
   for (const k of Object.keys(value)) {
     const v = value[k];
     if (v === undefined) continue;
-    out[k] = _fsEncodeWrap(v);
+    // Sanitize keys that Firestore would reject:
+    //   - keys starting/ending with __ (reserved)
+    //   - empty keys
+    //   - keys containing '/' or '.'
+    let safeKey = k;
+    if (!safeKey) continue;
+    if (/^__.*__$/.test(safeKey) || safeKey.startsWith('__')) safeKey = 'k_' + safeKey.replace(/^_+/, '');
+    if (/[./]/.test(safeKey)) safeKey = safeKey.replace(/[./]/g, '_');
+    out[safeKey] = _fsEncodeWrap(v);
   }
   return out;
 }
@@ -2142,6 +2146,11 @@ function fsDecode(value) {
   if (typeof value !== 'object') return value;
   if (Array.isArray(value)) {
     return value.map(item => {
+      if (item && typeof item === 'object' && !Array.isArray(item)
+          && Array.isArray(item.cells) && Object.keys(item).length === 1) {
+        return item.cells.map(fsDecode);
+      }
+      // Back-compat: old encoder used __cells before the rename
       if (item && typeof item === 'object' && !Array.isArray(item)
           && Array.isArray(item.__cells) && Object.keys(item).length === 1) {
         return item.__cells.map(fsDecode);
@@ -2160,7 +2169,12 @@ function fsClean(obj) { return fsEncode(obj); }
 // looks like it would still trip Firestore (nested arrays, undefineds, etc.)
 function findFirestoreOffenders(value, path = '$', acc = []) {
   if (value === undefined) { acc.push(path + ' = undefined'); return acc; }
-  if (value === null || typeof value !== 'object') return acc;
+  if (value === null) return acc;
+  if (typeof value === 'number' && !isFinite(value)) { acc.push(path + ' = ' + value); return acc; }
+  if (typeof value === 'function') { acc.push(path + ' = <function>'); return acc; }
+  if (typeof value === 'symbol' || typeof value === 'bigint') { acc.push(path + ' = ' + typeof value); return acc; }
+  if (typeof value !== 'object') return acc;
+  if (value instanceof Date) return acc;
   if (Array.isArray(value)) {
     value.forEach((item, i) => {
       if (Array.isArray(item)) acc.push(`${path}[${i}] = <nested array>`);
@@ -2168,7 +2182,17 @@ function findFirestoreOffenders(value, path = '$', acc = []) {
     });
     return acc;
   }
-  for (const k of Object.keys(value)) findFirestoreOffenders(value[k], `${path}.${k}`, acc);
+  // Plain object: check key names and recurse
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    acc.push(`${path} = <class instance: ${proto.constructor && proto.constructor.name}>`);
+  }
+  for (const k of Object.keys(value)) {
+    if (!k) acc.push(`${path}.<empty-key>`);
+    else if (/^__.+__$/.test(k)) acc.push(`${path}.${k}: reserved key (starts+ends with __)`);
+    else if (/[./]/.test(k)) acc.push(`${path}.${k}: key has '.' or '/'`);
+    findFirestoreOffenders(value[k], `${path}.${k}`, acc);
+  }
   return acc;
 }
 
@@ -2181,11 +2205,24 @@ async function fbSaveDB() {
     await fbDb.collection('dbs').doc('main').set(data);
   } catch(e) {
     console.error('fbSaveDB: dbs/main write failed:', e);
-    console.error('Payload that failed:', data);
-    // Best-effort: find what looks like a nested array so we can pinpoint
-    const offenders = findFirestoreOffenders(data);
-    if (offenders.length) console.error('Suspicious fields:', offenders);
-    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown') + (offenders.length ? ' · suspect: ' + offenders.slice(0, 3).join(', ') : ''));
+    console.error('Raw payload (pre-encode):', raw);
+    console.error('Encoded payload (post-encode):', data);
+    const rawOffenders = findFirestoreOffenders(raw);
+    const encOffenders = findFirestoreOffenders(data);
+    if (rawOffenders.length) console.error('Raw suspects:', rawOffenders);
+    if (encOffenders.length) console.error('Encoded suspects:', encOffenders);
+    // Probe: try writing each top-level field by itself so we know which one
+    // Firestore is choking on. Helps when offender walker comes up empty.
+    const culprits = [];
+    for (const key of Object.keys(data)) {
+      try {
+        await fbDb.collection('dbs').doc('_probe').set({ [key]: data[key] });
+      } catch(pe) {
+        culprits.push(`${key}: ${pe.message || pe.code}`);
+      }
+    }
+    if (culprits.length) console.error('Per-field probe failures:', culprits);
+    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown') + (culprits.length ? ' · field: ' + culprits[0] : ''));
   }
   const batch = fbDb.batch();
   for (const m of (data.members || [])) {
