@@ -2112,20 +2112,28 @@ const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 // array inside an object `{__cells: [...]}` so the parent array becomes an
 // array of objects (which Firestore accepts).
 function fsEncode(value) {
+  // First normalize through JSON to strip undefined / functions / Maps / Sets /
+  // class instances (besides Date which JSON serializes as a string anyway).
+  // Then walk again and wrap any array-inside-array because Firestore rejects
+  // nested arrays even though JSON allows them.
+  let safe;
+  try { safe = JSON.parse(JSON.stringify(value)); } catch(e) { safe = value; }
+  return _fsEncodeWrap(safe);
+}
+function _fsEncodeWrap(value) {
   if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value.toISOString();
   if (typeof value !== 'object') return value;
   if (Array.isArray(value)) {
     return value.map(item => {
-      if (Array.isArray(item)) return { __cells: fsEncode(item) };
-      return fsEncode(item);
+      if (Array.isArray(item)) return { __cells: _fsEncodeWrap(item) };
+      return _fsEncodeWrap(item);
     });
   }
   const out = {};
   for (const k of Object.keys(value)) {
     const v = value[k];
     if (v === undefined) continue;
-    out[k] = fsEncode(v);
+    out[k] = _fsEncodeWrap(v);
   }
   return out;
 }
@@ -2148,15 +2156,36 @@ function fsDecode(value) {
 // Back-compat alias for any earlier callers
 function fsClean(obj) { return fsEncode(obj); }
 
+// Walk an encoded payload and return human-readable paths for anything that
+// looks like it would still trip Firestore (nested arrays, undefineds, etc.)
+function findFirestoreOffenders(value, path = '$', acc = []) {
+  if (value === undefined) { acc.push(path + ' = undefined'); return acc; }
+  if (value === null || typeof value !== 'object') return acc;
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => {
+      if (Array.isArray(item)) acc.push(`${path}[${i}] = <nested array>`);
+      findFirestoreOffenders(item, `${path}[${i}]`, acc);
+    });
+    return acc;
+  }
+  for (const k of Object.keys(value)) findFirestoreOffenders(value[k], `${path}.${k}`, acc);
+  return acc;
+}
+
 async function fbSaveDB() {
   if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
-  const data = fsEncode(buildDatabasePayload());
+  const raw = buildDatabasePayload();
+  const data = fsEncode(raw);
   try {
     await fbDb.collection('dbs').doc('main').set(data);
   } catch(e) {
     console.error('fbSaveDB: dbs/main write failed:', e);
-    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
+    console.error('Payload that failed:', data);
+    // Best-effort: find what looks like a nested array so we can pinpoint
+    const offenders = findFirestoreOffenders(data);
+    if (offenders.length) console.error('Suspicious fields:', offenders);
+    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown') + (offenders.length ? ' · suspect: ' + offenders.slice(0, 3).join(', ') : ''));
   }
   const batch = fbDb.batch();
   for (const m of (data.members || [])) {
