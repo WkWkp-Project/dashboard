@@ -899,12 +899,13 @@
         <div class="section-meta" id="hub-media-meta">—</div>
       </div>
       <div class="hub-card">
-        <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
-          <label>☁️ Offload media</label>
-          <pre id="hub-offload-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">กดปุ่มเพื่อยกไฟล์รูป/วิดีโอที่ฝังใน JSON ขึ้นเป็นไฟล์จริงในโฟลเดอร์ Drive ของแคมเปญ</pre>
-          <button class="btn sm gold" onclick="offloadMediaToDrive(true)">Offload now</button>
+        <div class="hub-row" style="grid-template-columns:160px 1fr auto auto;">
+          <label>☁️ Manual push</label>
+          <pre id="hub-offload-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">1) กด Media files เพื่อสร้าง/อัปโหลดสื่อใน Drive folder ของแคมเปญ · 2) กด JSON เพื่อสร้าง/อัปเดต wakuwaku_campaign.json</pre>
+          <button class="btn sm gold" onclick="offloadMediaToDrive(true)">Media files</button>
+          <button class="btn sm primary" onclick="saveCurrentCampaignJsonToDrive(true)">JSON</button>
         </div>
-        <small class="hint">ไฟล์จะถูกอัปโหลดเข้าซับโฟลเดอร์ <code>wakuwaku-media-{campaign}</code> ภายใน Campaign Drive Folder · จากนั้น campaign JSON จะไม่มี base64 และลูกค้าจะเห็นข้อมูลจาก Drive ได้ · ต้องตั้ง Client Drive Folder URL + แชร์ Editor ก่อน</small>
+        <small class="hint">ทั้งสองปุ่มจะเขียนลง <strong>Client Drive Folder URL</strong> ของ campaign ปัจจุบัน · Media files สร้างซับโฟลเดอร์ <code>wakuwaku-media-{campaign}</code> · JSON สร้าง/อัปเดต <code>wakuwaku_campaign.json</code> · ต้องแชร์โฟลเดอร์ให้บัญชีที่ login เป็น Editor ก่อน</small>
         <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:8px;">
           <label>📂 Media folder</label>
           <span id="hub-media-folder" style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted);">—</span>
@@ -2773,9 +2774,8 @@ async function offloadMediaToDrive(notify) {
   setOut('⏳ เตรียมอัปโหลด media...');
   const res = await offloadEmbeddedMediaBeforeCloudSave({ notify, setOut, stopOnApiDisabled:true });
   logAction('OFFLOAD', `Offloaded ${res.done} media file(s) to Drive${res.failed || res.skipped ? ` · ${res.failed + res.skipped} pending/failed` : ''}`);
-  setOut(`✓ Offload สำเร็จ ${res.done} ไฟล์${res.failed || res.skipped ? ` · ยังไม่สำเร็จ ${res.failed + res.skipped}` : ''} · กำลังเซฟ DB...`);
-  try { await saveToDrive(); } catch(e) {}
-  setOut(`✓ เสร็จ — metadata ถูกเซฟแล้ว · media ที่สำเร็จอยู่บน Drive และ DB JSON ไม่มี base64`);
+  setOut(`✓ Media files สำเร็จ ${res.done} ไฟล์${res.failed || res.skipped ? ` · ยังไม่สำเร็จ ${res.failed + res.skipped}` : ''} · กดปุ่ม JSON เพื่อสร้าง/อัปเดต ${CAMPAIGN_DB_FILENAME}`);
+  if (notify) showToast('✓ Media files pushed · กด JSON เพื่อเซฟ metadata ให้ลูกค้าเห็น', 'ok');
   renderDataHub();
 }
 
@@ -2949,6 +2949,42 @@ async function saveCampaignJsonToDrive(camp) {
   camp.driveDbFileId = res.id;
   camp.driveDbModifiedTime = res.modifiedTime || new Date().toISOString();
   return res;
+}
+
+async function saveCurrentCampaignJsonToDrive(notify) {
+  if (blockIfNotInternal('Save JSON เฉพาะทีม Wakuwaku')) return null;
+  if (isOfflineMode) { showToast('Offline mode — เซฟ Drive JSON ไม่ได้', 'warn'); return null; }
+  if (!accessToken) { showToast('ต้อง login Google ก่อนเพื่อเซฟ JSON ลง Drive', 'warn'); return null; }
+  const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือกแคมเปญก่อนเซฟ JSON', 'warn'); return null; }
+  if (!camp.driveFolderId) {
+    showToast('กรอก Client Drive Folder URL ใน Edit Info ก่อนสร้าง JSON', 'warn');
+    setSaveStatus('error', 'Missing Client Drive Folder URL');
+    return null;
+  }
+  setSaveStatus('saving', 'Saving campaign JSON to Drive...');
+  const out = document.getElementById('hub-offload-out');
+  if (out) out.textContent = `⏳ กำลังสร้าง/อัปเดต ${CAMPAIGN_DB_FILENAME} ใน Drive folder ของ ${camp.campaign || camp.id}...`;
+  try {
+    const res = await saveCampaignJsonToDrive(camp);
+    databaseFileId = res.id;
+    lastSaveTime = new Date();
+    pendingChanges = false;
+    saveSession();
+    persistLocalBackup();
+    setSaveStatus('saved', 'Drive JSON saved');
+    if (out) out.textContent = `✓ สร้าง/อัปเดต ${CAMPAIGN_DB_FILENAME} แล้ว · file id ${res.id}`;
+    if (notify) showToast('✓ Drive JSON saved: ' + (camp.campaign || camp.id), 'ok');
+    if (typeof renderDataHub === 'function' && document.getElementById('view-hub')?.classList.contains('active')) renderDataHub();
+    return res;
+  } catch(e) {
+    console.error('save current campaign JSON failed:', e);
+    persistLocalBackup();
+    setSaveStatus('error', 'Drive JSON save failed · click for backup');
+    if (out) out.textContent = '❌ JSON save failed: ' + (e.message || 'unknown');
+    showToast('❌ JSON save failed: ' + (e.message || 'unknown'), 'err');
+    throw e;
+  }
 }
 
 async function loadCampaignJsonFilesFromDrive() {
@@ -6302,6 +6338,11 @@ window.__runTests = async function() {
     ok(!payloadContainsEmbeddedMedia(p));
     eq(p.campaign.assets[0].files[0].uploadStatus, 'pending');
   });
+  t('manual Drive JSON button exists', () => {
+    const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'JSON');
+    ok(btn, 'JSON manual push button present');
+    ok(btn.getAttribute('onclick').includes('saveCurrentCampaignJsonToDrive'));
+  });
 
   // ---- Drive upload size routing ----
   t('DRIVE_MULTIPART_LIMIT sensible', () => { ok(DRIVE_MULTIPART_LIMIT > 1024*1024); ok(DRIVE_MULTIPART_LIMIT < 10*1024*1024); });
@@ -6435,7 +6476,7 @@ window.__runTests = async function() {
   ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
    'downloadManualBackup','offerManualBackup','openExportModal','doExport','captureOverviewAsCanvas',
    'openDateRangePicker','openDatePicker','dpPick','renderDatePicker',
-   'normalizeAsset','normalizeCampaign','buildCloudSafePayload','campaignDriveJsonPayload','saveCampaignJsonToDrive','loadCampaignJsonFilesFromDrive','offloadEmbeddedMediaBeforeCloudSave','blockIfClient','applyClientModeRestrictions',
+   'normalizeAsset','normalizeCampaign','buildCloudSafePayload','campaignDriveJsonPayload','saveCampaignJsonToDrive','saveCurrentCampaignJsonToDrive','loadCampaignJsonFilesFromDrive','offloadEmbeddedMediaBeforeCloudSave','blockIfClient','applyClientModeRestrictions',
    'performLogout','confirmLogout','saveSession','tryRestoreSession','clearSession',
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
