@@ -2200,48 +2200,43 @@ async function fbSaveDB() {
   if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
   const raw = buildDatabasePayload();
-  const data = fsEncode(raw);
+  // We store the whole payload as a single JSON string. Firestore has many
+  // validation rules for nested data (no nested arrays, no reserved key
+  // patterns, no undefined values, etc.) that are easy to trip with rich
+  // app state (excelData.rows, snapshot blobs, ...). A stringified blob
+  // sidesteps all of them. The only top-level fields we keep raw are the
+  // ones that security rules need to inspect (clientEmail, email).
+  const masterJson = JSON.stringify(raw);
   try {
-    await fbDb.collection('dbs').doc('main').set(data);
+    await fbDb.collection('dbs').doc('main').set({
+      json: masterJson,
+      savedAt: new Date().toISOString(),
+      schemaVersion: SCHEMA_VERSION,
+      sizeBytes: masterJson.length
+    });
   } catch(e) {
-    console.error('fbSaveDB: dbs/main write failed:', e);
-    console.error('Raw payload (pre-encode):', raw);
-    console.error('Encoded payload (post-encode):', data);
-    const rawOffenders = findFirestoreOffenders(raw);
-    const encOffenders = findFirestoreOffenders(data);
-    if (rawOffenders.length) console.error('Raw suspects:', rawOffenders);
-    if (encOffenders.length) console.error('Encoded suspects:', encOffenders);
-    // Probe: try writing each top-level field by itself so we know which one
-    // Firestore is choking on. Helps when offender walker comes up empty.
-    const culprits = [];
-    for (const key of Object.keys(data)) {
-      try {
-        await fbDb.collection('dbs').doc('_probe').set({ [key]: data[key] });
-      } catch(pe) {
-        culprits.push(`${key}: ${pe.message || pe.code}`);
-      }
-    }
-    if (culprits.length) console.error('Per-field probe failures:', culprits);
-    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown') + (culprits.length ? ' · field: ' + culprits[0] : ''));
+    console.error('fbSaveDB: dbs/main write failed:', e, '· json size:', masterJson.length);
+    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
   }
+  // Mirror docs so non-admin members can read only their own slice.
   const batch = fbDb.batch();
-  for (const m of (data.members || [])) {
+  for (const m of (raw.members || [])) {
     const e = (m && m.email || '').toLowerCase();
     if (!e) continue;
-    batch.set(fbDb.collection('members').doc(e), fsEncode({
+    batch.set(fbDb.collection('members').doc(e), {
       email: e,
       name: m.name || '',
       driveFolderUrl: m.driveFolderUrl || '',
       createdAt: m.createdAt || new Date().toISOString(),
       createdBy: m.createdBy || ''
-    }));
+    });
   }
-  for (const c of (data.campaigns || [])) {
+  for (const c of (raw.campaigns || [])) {
     const clientEmail = (c.clientEmail || '').toLowerCase();
     if (!c.id) continue;
     batch.set(fbDb.collection('campaigns').doc(c.id), {
       clientEmail,
-      data: c, // already encoded above
+      json: JSON.stringify(c),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
@@ -2255,8 +2250,7 @@ async function fbSaveDB() {
 
 function applyFirestorePayload(db, opts) {
   const silent = !!(opts && opts.silent);
-  // Reverse the fsEncode wrap (excelData.rows etc.)
-  db = fsDecode(db);
+  // Payload now arrives already-parsed (JSON.parse). No fsDecode needed.
   if (db && Array.isArray(db.campaigns)) {
     campaigns = db.campaigns.map(c => normalizeCampaign(c));
   }
@@ -2292,11 +2286,18 @@ function applyFirestorePayload(db, opts) {
   lastSaveTime = db && db.savedAt ? new Date(db.savedAt) : null;
 }
 
+function _parseJsonField(s, fallback) {
+  if (typeof s !== 'string') return fallback;
+  try { return JSON.parse(s); } catch(e) { return fallback; }
+}
+
 async function fbLoadDB() {
   if (!fbDb) throw new Error('Firestore not ready');
   if (isAdmin) {
     const snap = await fbDb.collection('dbs').doc('main').get();
-    return snap.exists ? snap.data() : null;
+    if (!snap.exists) return null;
+    const d = snap.data();
+    return _parseJsonField(d.json, null);
   }
   // Member view: read own member doc + campaigns where clientEmail == self
   let myMember = null;
@@ -2306,7 +2307,7 @@ async function fbLoadDB() {
   } catch(e) { /* doc may not exist or be denied — fall through */ }
   const qs = await fbDb.collection('campaigns')
     .where('clientEmail', '==', currentUserEmail).get();
-  const camps = qs.docs.map(d => fsDecode(d.data().data)).filter(Boolean);
+  const camps = qs.docs.map(d => _parseJsonField(d.data().json, null)).filter(Boolean);
   if (!myMember && !camps.length) return null;
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -2329,13 +2330,16 @@ function fbSubscribeDB() {
   };
   if (isAdmin) {
     fbDbUnsub = fbDb.collection('dbs').doc('main').onSnapshot(snap => {
-      if (snap.exists) onUpdate(snap.data());
+      if (!snap.exists) return;
+      const d = snap.data();
+      const parsed = _parseJsonField(d.json, null);
+      if (parsed) onUpdate(parsed);
     }, err => console.warn('Firestore listener error:', err));
   } else {
     fbDbUnsub = fbDb.collection('campaigns')
       .where('clientEmail', '==', currentUserEmail)
       .onSnapshot(qs => {
-        const camps = qs.docs.map(d => fsDecode(d.data().data)).filter(Boolean);
+        const camps = qs.docs.map(d => _parseJsonField(d.data().json, null)).filter(Boolean);
         onUpdate({
           schemaVersion: SCHEMA_VERSION,
           campaigns: camps,
