@@ -489,8 +489,8 @@
       <p>Content Production Dashboard · เลือกวิธีเข้าใช้งาน</p>
     </div>
 
-    <!-- Mode tabs -->
-    <div class="auth-tabs" role="tablist">
+    <!-- Mode tabs (hidden — single Google login covers both admin + members) -->
+    <div class="auth-tabs" role="tablist" style="display:none;">
       <button class="auth-tab active" data-mode="internal" onclick="switchAuthMode('internal')">
         <span class="auth-tab-ico">🔧</span>
         <strong>Internal</strong>
@@ -505,31 +505,22 @@
 
     <!-- INTERNAL panel -->
     <div class="auth-panel active" id="auth-panel-internal">
-      <div class="auth-blurb">เข้าระบบด้วย Google Workspace ของบริษัท เพื่อแก้ไข, สร้าง, จัดการแคมเปญทุกตัว และ sync ขึ้น Drive อัตโนมัติ</div>
+      <div class="auth-blurb">เข้าระบบด้วย Google · ทีม <code>@team.wkwkp.com</code> เห็นทุกแคมเปญ (admin) · อีเมลลูกค้าที่ admin add เป็น member เห็นเฉพาะแคมเปญตัวเอง (read-only)</div>
       <button class="auth-google" onclick="handleRealGoogleLogin()">
         <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Continue with Google Workspace
+        Continue with Google
       </button>
-      <div class="auth-meta">📍 ต้องเป็นบัญชี Google Workspace ของ Wakuwaku · ข้อมูลทั้งหมด sync ผ่าน Drive ของคุณ</div>
-    </div>
-
-    <!-- CLIENT panel -->
-    <div class="auth-panel" id="auth-panel-client">
-      <div class="auth-blurb">เปิดดูงานที่ Wakuwaku ส่งให้ — รวมรูป, วิดีโอ, ประวัติทั้งหมด · ใช้งานได้ตลอดไม่มีวันหมดอายุ · ไม่ต้อง login</div>
-      <div class="import-zone" id="importZone" onclick="document.getElementById('handoffFileInput').click()" ondrop="handleDrop(event)" ondragover="event.preventDefault()">
-        <div class="import-badge">CLIENT BUNDLE</div>
-        <strong>📦 เปิดไฟล์ส่งมอบงาน</strong>
-        <p>ลากไฟล์ <code>.ZIP</code> หรือ <code>.JSON</code> ที่ Wakuwaku ส่งให้<br>หรือคลิกเพื่อเลือกไฟล์</p>
+      <div class="auth-meta">📍 JSON เก็บที่ Firestore · Asset อยู่ใน Drive ของลูกค้าแต่ละราย</div>
+      <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center;">
+        <button type="button" onclick="document.getElementById('handoffFileInput').click()" style="background:none; border:none; color:var(--muted); font-size:11px; cursor:pointer; text-decoration:underline; font-family:'Geist Mono',monospace;">📦 เปิด handoff bundle เก่า (ZIP/JSON)</button>
         <input type="file" id="handoffFileInput" style="display:none;" accept=".zip,.json" onchange="handleFileSelect(event)" />
       </div>
-      <div class="auth-token-row">
-        <label style="display:block; font-family:'Geist Mono',monospace; font-size:10px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; letter-spacing:1px;">Access Token <span style="color:var(--muted-2); text-transform:none; letter-spacing:0;">(สำหรับ Operator / ปลดล็อก bundle)</span></label>
-        <div style="display:flex; gap:6px;">
-          <input type="text" id="accessTokenInput" placeholder="วาง token ที่ Wakuwaku Gen ให้ แล้วกด Enter" style="flex:1;" onkeydown="if(event.key==='Enter'){event.preventDefault();loginWithToken();}" />
-          <button class="btn primary" onclick="loginWithToken()">เข้าระบบ →</button>
-        </div>
-      </div>
-      <div class="auth-meta">🛠 <strong>Operator</strong>: กรอก token → กด Enter → เข้าระบบผ่าน Google · แก้ Section B ได้เต็มที่ · ดู Overview/Calendar/Export ได้ · ใช้ Connect Drive / Data Hub ร่วมกับทีมได้ · ยุ่งกับ Token/สร้างแคมเปญ/Backup-Offload ไม่ได้<br>🔒 หรือลากไฟล์ bundle ด้านบนเพื่อดูแบบ offline (read-only)</div>
+    </div>
+
+    <!-- CLIENT panel (hidden — kept for backwards-compat dragdrop handlers) -->
+    <div class="auth-panel" id="auth-panel-client" style="display:none;">
+      <div class="import-zone" id="importZone" ondrop="handleDrop(event)" ondragover="event.preventDefault()"></div>
+      <input type="text" id="accessTokenInput" style="display:none;" />
     </div>
   </div>
 </div>
@@ -569,11 +560,11 @@
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Content Calendar
       </div>
-      <div class="nav-item" data-view="access" onclick="switchView('access')" id="nav-access">
+      <div class="nav-item" data-view="access" onclick="switchView('access')" id="nav-access" style="display:none;">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>
         Access Control
       </div>
-      <div class="nav-item" data-view="hub" onclick="switchView('hub')" id="nav-hub">
+      <div class="nav-item" data-view="hub" onclick="switchView('hub')" id="nav-hub" style="display:none;">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
         Data Hub
       </div>
@@ -1160,6 +1151,7 @@
     </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeChecklistModal()">Cancel</button>
+      <button class="btn" onclick="transferCampaignDriveOwnership()" title="โอน ownership ของไฟล์ใน Client Drive Folder ให้อีเมลลูกค้า">🔑 Transfer Drive ownership</button>
       <button class="btn" onclick="downloadBundleZIP()">📥 Download ZIP only</button>
       <button class="btn gold" id="finalizeHandoffBtn" onclick="finalizeHandoff()">📦 Finalize &amp; Hand Off</button>
     </div>
@@ -1221,12 +1213,12 @@
       </div>
 
       <div class="input-group">
-        <label>📁 Campaign Folder URL <small class="hint-label">(ใน Hub folder)</small></label>
+        <label>📁 Client Drive Folder URL <small class="hint-label">(โฟลเดอร์ใน Drive ของลูกค้า)</small></label>
         <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
           <input type="url" id="editDriveFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
           <button type="button" class="btn" onclick="openEditDriveFolder()">Open ↗</button>
         </div>
-        <small class="hint">วาง URL โฟลเดอร์ของแคมเปญ <strong>ที่อยู่ใน Hub folder</strong> (สร้างเองใน Drive) · ระบบจะสร้าง <code>media/</code> ในนั้นให้อัตโนมัติเมื่ออัปไฟล์ · เปลี่ยน URL ภายหลังได้ ไฟล์เก่ายังอยู่ที่ folder เดิมและใช้งานได้ปกติ</small>
+        <small class="hint">วาง URL โฟลเดอร์ใน Drive <strong>ของลูกค้า</strong> (ลูกค้าหรือ admin สร้างใน Drive ของอีเมลลูกค้า แล้วแชร์เป็น Editor ให้ admin) · ระบบจะสร้าง subfolder <code>wakuwaku-media-&lt;campaign-id&gt;/</code> ในนั้นให้อัตโนมัติเมื่ออัปไฟล์ · ใช้ folder เดียวข้ามหลายแคมเปญของลูกค้าคนเดียวกันได้ · เปลี่ยน URL ภายหลังได้ ไฟล์เก่ายังอยู่ที่ folder เดิม</small>
       </div>
     </div>
     <div class="simple-modal-footer">
@@ -1651,10 +1643,8 @@ async function onLoginSuccess() {
   const fbUser = fbAuth && fbAuth.currentUser;
   currentUserEmail = ((fbUser && fbUser.email) || '').toLowerCase();
   isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-  if (!isAdmin) {
-    userRole = 'client';
-    document.body.classList.add('client-mode');
-  }
+  if (!isAdmin) { userRole = 'client'; }
+  applyRoleRestrictions();
   // 1) Profile — failure here must NOT block DB loading
   let userEmail = currentUserEmail;
   try {
@@ -1665,7 +1655,8 @@ async function onLoginSuccess() {
       if (!currentUserEmail && userEmail) {
         currentUserEmail = userEmail.toLowerCase();
         isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-        if (!isAdmin) { userRole = 'client'; document.body.classList.add('client-mode'); }
+        if (!isAdmin) { userRole = 'client'; }
+        applyRoleRestrictions();
       }
       const name = user.name || user.email || (isAdmin ? 'Wakuwaku Internal' : 'Member');
       const initial = (user.given_name || name)[0] || (isAdmin ? 'W' : 'M');
@@ -1857,8 +1848,8 @@ async function tryRestoreSession() {
     if (fbAuth && fbAuth.currentUser) {
       currentUserEmail = (fbAuth.currentUser.email || '').toLowerCase();
       isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-      if (!isAdmin) { userRole = 'client'; document.body.classList.add('client-mode'); }
-      else userRole = 'internal';
+      userRole = isAdmin ? 'internal' : 'client';
+      applyRoleRestrictions();
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainApp').style.display = 'grid';
       const name = fbAuth.currentUser.displayName || currentUserEmail;
@@ -2345,21 +2336,23 @@ async function ensureMediaFolder() {
 // switching Campaign Folder URL just invalidates the cache; old files keep
 // loading because asset.files[k].driveFileId is folder-agnostic.
 async function ensureCampaignMediaFolder(camp) {
-  if (!camp || !camp.driveFolderId) throw new Error('ต้องกรอก Campaign Folder URL ของแคมเปญนี้ก่อน');
+  if (!camp || !camp.driveFolderId) throw new Error('ต้องกรอก Client Drive Folder URL ของแคมเปญนี้ก่อน');
+  // Per-campaign subfolder name so two campaigns sharing the same client
+  // Drive folder don't collide in `media/`. Old campaigns without an id-suffix
+  // folder keep working via their cached mediaFolderId.
+  const folderName = `wakuwaku-media-${camp.id}`;
   if (camp.mediaFolderId) {
     try {
       const vr = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.mediaFolderId}?fields=id,trashed,parents`);
       if (vr.ok) {
         const vj = await vr.json();
-        // If the cached folder is still inside the current campaign folder
-        // and not trashed, reuse it. Otherwise fall through and re-resolve.
         if (!vj.trashed && Array.isArray(vj.parents) && vj.parents.includes(camp.driveFolderId)) {
           return camp.mediaFolderId;
         }
       }
     } catch(e) { /* fall through to re-resolve */ }
   }
-  const q = encodeURIComponent(`name='${MEDIA_SUBFOLDER_NAME}' and '${camp.driveFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const q = encodeURIComponent(`name='${folderName}' and '${camp.driveFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
   const sr = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
   if (sr.ok) {
     const sj = await sr.json();
@@ -2368,7 +2361,7 @@ async function ensureCampaignMediaFolder(camp) {
   const cr = await authFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-    body: JSON.stringify({ name: MEDIA_SUBFOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [camp.driveFolderId] })
+    body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [camp.driveFolderId] })
   });
   if (!cr.ok) throw await driveError(cr);
   const cj = await cr.json();
@@ -4959,6 +4952,75 @@ async function finalizeHandoff() {
       } catch (e) { showToast('Finalize failed: ' + e.message, 'err'); }
     }
   );
+}
+
+// Transfer ownership of every file inside the campaign's Client Drive Folder
+// (and its media subfolder) to a client email. Admin-only. Falls back to a
+// manual-share link if the API rejects the transfer (common across Workspace
+// orgs or for consumer Gmail accounts).
+async function transferCampaignDriveOwnership() {
+  if (blockIfNotInternal('Transfer ownership เฉพาะ admin')) return;
+  const camp = getCurrentCampaign();
+  if (!camp || !camp.driveFolderId) {
+    showToast('แคมเปญนี้ยังไม่ได้กรอก Client Drive Folder URL', 'warn');
+    return;
+  }
+  if (!accessToken) { showToast('ต้อง login ก่อน', 'warn'); return; }
+  const defaultEmail = (Array.isArray(camp.members) && camp.members[0]) || '';
+  const target = (prompt('โอน ownership ของไฟล์ทั้งหมดใน Client Drive Folder ให้อีเมลใด?\n(ปกติคืออีเมลลูกค้าที่ add เป็น member)', defaultEmail) || '').trim().toLowerCase();
+  if (!target) return;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) { showToast('รูปแบบอีเมลไม่ถูกต้อง', 'err'); return; }
+  if (!confirm(`ยืนยันโอน ownership ของไฟล์ใน folder "${camp.campaign}" ให้ ${target}?\n\nเมื่อโอนแล้ว ลูกค้าจะเป็นเจ้าของไฟล์ (กิน quota Drive ของลูกค้า) · admin จะยังเข้าถึงได้ในฐานะ editor`)) return;
+  showToast('🔄 กำลังโอน ownership... อาจใช้เวลาสักครู่');
+  let ok = 0, fail = 0;
+  const failures = [];
+  try {
+    const fileIds = await listAllFilesInFolder(camp.driveFolderId);
+    for (const fid of fileIds) {
+      try {
+        const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${fid}/permissions?transferOwnership=true&sendNotificationEmail=true`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'owner', type: 'user', emailAddress: target })
+        });
+        if (r.ok) ok++;
+        else { fail++; const e = await driveError(r); failures.push(`${fid.slice(0,8)}… · ${e.message}`); }
+      } catch(e) { fail++; failures.push(`${fid.slice(0,8)}… · ${e.message || 'error'}`); }
+    }
+    logAction('HANDOFF', `Transfer ownership to ${target}: ${ok} ok, ${fail} failed`);
+    if (fail === 0) {
+      showToast(`✓ โอน ownership สำเร็จ ${ok} ไฟล์ ให้ ${target}`, 'ok');
+    } else {
+      const link = `https://drive.google.com/drive/folders/${camp.driveFolderId}`;
+      showConfirm('โอน ownership บางส่วนล้มเหลว',
+        `สำเร็จ ${ok} · ล้มเหลว ${fail}\n\nสาเหตุที่พบบ่อย:\n• อีเมลลูกค้าและ admin อยู่คนละ Workspace org\n• เป็นบัญชี Gmail ทั่วไป (consumer)\n\nกด OK เพื่อเปิด folder ใน Drive แล้วโอน ownership เอง (Share → Transfer ownership)\n\nรายการ error 5 อันแรก:\n${failures.slice(0,5).join('\n')}`,
+        () => { try { window.open(link, '_blank'); } catch(e) {} });
+    }
+  } catch(e) {
+    showToast('Transfer ล้มเหลว: ' + (e.message || 'unknown'), 'err');
+  }
+}
+
+async function listAllFilesInFolder(folderId) {
+  const out = [];
+  const queue = [folderId];
+  while (queue.length) {
+    const cur = queue.shift();
+    let pageToken = null;
+    do {
+      const q = encodeURIComponent(`'${cur}' in parents and trashed=false`);
+      const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,mimeType),nextPageToken&pageSize=200${pageToken ? '&pageToken=' + pageToken : ''}`;
+      const r = await authFetch(url);
+      if (!r.ok) throw await driveError(r);
+      const j = await r.json();
+      (j.files || []).forEach(f => {
+        if (f.mimeType === 'application/vnd.google-apps.folder') queue.push(f.id);
+        else out.push(f.id);
+      });
+      pageToken = j.nextPageToken || null;
+    } while (pageToken);
+  }
+  return out;
 }
 
 function reopenForRevise() {
