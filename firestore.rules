@@ -15,11 +15,12 @@ service cloud.firestore {
       // wkwk team — admins are anyone with an @team.wkwkp.com email
       return signedIn() && email().matches('.*@team[.]wkwkp[.]com');
     }
-    function isMemberOf(camp) {
+    function isOwnerOf(camp) {
+      // A campaign belongs to exactly one member, identified by clientEmail.
       return signedIn()
-        && camp.keys().hasAll(['members'])
-        && camp.members is list
-        && (email() in camp.members);
+        && camp.keys().hasAll(['clientEmail'])
+        && camp.clientEmail is string
+        && camp.clientEmail == email();
     }
 
     // Master DB — wkwkp only. Used for handoff (full snapshot).
@@ -27,10 +28,16 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    // Per-campaign mirror — members can read their own; admin writes.
+    // Member docs — admin manages; the member themselves can read their own.
+    match /members/{memberEmail} {
+      allow read: if isAdmin() || (signedIn() && memberEmail == email());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Per-campaign mirror — the single clientEmail can read; admin writes.
     match /campaigns/{id} {
       allow read: if isAdmin()
-        || (resource != null && isMemberOf(resource.data));
+        || (resource != null && isOwnerOf(resource.data));
       allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
