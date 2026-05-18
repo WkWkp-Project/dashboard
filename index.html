@@ -2088,8 +2088,9 @@ function dbStats() {
       });
     });
   });
-  const jsonSize = JSON.stringify(buildDatabasePayload()).length;
-  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize, embeddedFiles, driveFiles };
+  const jsonSize = jsonByteLength(JSON.stringify(buildDatabasePayload()));
+  const firestoreJsonSize = jsonByteLength(JSON.stringify(buildFirestoreSafePayload()));
+  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize, firestoreJsonSize, embeddedFiles, driveFiles };
 }
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -2100,6 +2101,81 @@ function fmtBytes(n) {
 
 // Drive multipart limit is ~5 MB. Use resumable above that.
 const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
+// Keep Firestore JSON fields comfortably under the 1 MiB document/field limit.
+// Campaign Info + Section B metadata should still save even when media upload
+// is pending, so Firestore writes use a media-safe payload instead of raw state.
+const FIRESTORE_SAFE_JSON_LIMIT = 900 * 1024;
+
+function clonePlain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function stripEmbeddedMediaForFirestoreFile(file) {
+  const out = { ...(file || {}) };
+  const hadEmbeddedData = !!out.data;
+  if (hadEmbeddedData) delete out.data;
+  if (out.fileData) delete out.fileData;
+  if (hadEmbeddedData && !out.driveFileId) {
+    out.uploadStatus = out.uploadStatus || 'pending';
+    out.localOnly = true;
+  }
+  return out;
+}
+
+function stripEmbeddedMediaForFirestoreAsset(asset) {
+  const out = { ...(asset || {}) };
+  if (Array.isArray(out.files)) out.files = out.files.map(stripEmbeddedMediaForFirestoreFile);
+  if (out.fileData) {
+    delete out.fileData;
+    if (!out.files || !out.files.length) {
+      out.files = [{
+        name: out.fileName || 'file',
+        type: guessMimeFromDataUrl(asset.fileData),
+        uploadStatus: 'pending',
+        localOnly: true
+      }];
+    }
+  }
+  return out;
+}
+
+function buildFirestoreSafePayload(raw = buildDatabasePayload()) {
+  const safe = clonePlain(raw);
+  (safe.campaigns || []).forEach(c => {
+    c.assets = (c.assets || []).map(stripEmbeddedMediaForFirestoreAsset);
+    // Snapshots are useful for rollback but must never drag old embedded media
+    // into Firestore. They already use stripMediaForSnapshot in normal flow;
+    // this is the final guard for legacy imported data.
+    if (Array.isArray(c.snapshots)) {
+      c.snapshots = c.snapshots.map(s => {
+        if (!s || !s.data) return s;
+        return { ...s, data: stripFirestoreMediaFromCampaignSnapshot(s.data) };
+      });
+    }
+  });
+  return safe;
+}
+
+function stripFirestoreMediaFromCampaignSnapshot(snapshotData) {
+  const out = clonePlain(snapshotData);
+  if (Array.isArray(out.assets)) out.assets = out.assets.map(stripEmbeddedMediaForFirestoreAsset);
+  return out;
+}
+
+function payloadContainsEmbeddedMedia(value) {
+  return /data:[^;]+;base64,/.test(JSON.stringify(value || {}));
+}
+
+function jsonByteLength(json) {
+  return new TextEncoder().encode(json).length;
+}
+
+function assertFirestorePayloadSize(label, json) {
+  const bytes = jsonByteLength(json);
+  if (bytes > FIRESTORE_SAFE_JSON_LIMIT) {
+    throw new Error(`${label} ใหญ่เกิน Firestore safe limit (${fmtBytes(bytes)} > ${fmtBytes(FIRESTORE_SAFE_JSON_LIMIT)}) — กรุณาลดข้อมูลหรือ offload media เพิ่ม`);
+  }
+}
 
 // ============================================================================
 // FIRESTORE ADAPTER
@@ -2199,7 +2275,7 @@ function findFirestoreOffenders(value, path = '$', acc = []) {
 async function fbSaveDB() {
   if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
-  const raw = buildDatabasePayload();
+  const raw = buildFirestoreSafePayload();
   // We store the whole payload as a single JSON string. Firestore has many
   // validation rules for nested data (no nested arrays, no reserved key
   // patterns, no undefined values, etc.) that are easy to trip with rich
@@ -2207,12 +2283,14 @@ async function fbSaveDB() {
   // sidesteps all of them. The only top-level fields we keep raw are the
   // ones that security rules need to inspect (clientEmail, email).
   const masterJson = JSON.stringify(raw);
+  if (payloadContainsEmbeddedMedia(raw)) throw new Error('Firestore payload still contains embedded base64 media');
+  assertFirestorePayloadSize('dbs/main', masterJson);
   try {
     await fbDb.collection('dbs').doc('main').set({
       json: masterJson,
       savedAt: new Date().toISOString(),
       schemaVersion: SCHEMA_VERSION,
-      sizeBytes: masterJson.length
+      sizeBytes: jsonByteLength(masterJson)
     });
   } catch(e) {
     console.error('fbSaveDB: dbs/main write failed:', e, '· json size:', masterJson.length);
@@ -2234,9 +2312,11 @@ async function fbSaveDB() {
   for (const c of (raw.campaigns || [])) {
     const clientEmail = (c.clientEmail || '').toLowerCase();
     if (!c.id) continue;
+    const campaignJson = JSON.stringify(c);
+    assertFirestorePayloadSize(`campaigns/${c.id}`, campaignJson);
     batch.set(fbDb.collection('campaigns').doc(c.id), {
       clientEmail,
-      json: JSON.stringify(c),
+      json: campaignJson,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
@@ -2371,6 +2451,12 @@ async function saveToDrive() {
       pendingChanges = false;
       setSaveStatus('saved', 'Read-only (member access)');
       return;
+    }
+    const mediaRes = await offloadEmbeddedMediaBeforeFirestoreSave({
+      setOut: (s) => setSaveStatus('saving', s.replace(/^⏳\s*/, ''))
+    });
+    if (mediaRes && mediaRes.total && (mediaRes.failed || mediaRes.skipped)) {
+      console.warn('Some media is not on Drive yet; saving Firestore-safe metadata only:', mediaRes);
     }
     await fbSaveDB();
     databaseFileId = 'firestore:dbs/main';
@@ -2586,77 +2672,110 @@ async function uploadFileToDrive(name, blob, parentId) {
   return resp.json();
 }
 
-// Offload every embedded (base64) asset file into the Hub media folder.
-async function offloadMediaToDrive(notify) {
-  if (blockIfNotInternal('Offload media เฉพาะทีม Wakuwaku')) return;
-  if (isOfflineMode) { showToast('Offline mode — offload ไม่ได้', 'warn'); return; }
-  if (!accessToken) { showToast('ต้อง login ก่อน', 'warn'); return; }
-  if (!hub.driveFolderId) { showToast('ตั้ง Hub Folder URL ก่อน', 'warn'); return; }
-  const out = document.getElementById('hub-offload-out');
-  const setOut = (s) => { if (out) out.textContent = s; };
-  setOut('⏳ เตรียมโฟลเดอร์...');
-  let folderId;
-  try { folderId = await ensureMediaFolder(); }
-  catch(e) { setOut('❌ ' + (e.message || 'create folder failed')); showToast('สร้างโฟลเดอร์ media ไม่ได้: ' + (e.message||''), 'err'); return; }
-
-  // Collect work items
+function collectEmbeddedMediaWork() {
   const work = [];
-  campaigns.forEach(c => c.assets.forEach(a => (a.files || []).forEach((f, i) => {
-    if (f.data && !f.driveFileId) work.push({ camp:c, asset:a, file:f, idx:i });
+  campaigns.forEach(c => (c.assets || []).forEach(a => (a.files || []).forEach((f, i) => {
+    if (f && f.data && !f.driveFileId) work.push({ camp:c, asset:a, file:f, idx:i });
   })));
-  if (work.length === 0) { setOut('✓ ไม่มีไฟล์ที่ต้อง offload (ทุกไฟล์อยู่บน Drive แล้ว หรือไม่มีไฟล์)'); showToast('ไม่มีไฟล์ที่ต้อง offload', 'ok'); return; }
+  return work;
+}
 
-  // Block: every campaign with pending uploads must have its own folder set.
-  // Routing media to the wrong campaign's folder would mix client data and
-  // we'd rather make the user fix the missing URL than silently fall back.
-  const missing = [...new Set(work.filter(w => !w.camp.driveFolderId).map(w => w.camp.campaign || w.camp.id))];
-  if (missing.length) {
-    const list = missing.slice(0, 3).join(', ') + (missing.length > 3 ? `, +${missing.length - 3}` : '');
-    setOut(`❌ ต้องตั้ง Campaign Folder URL ก่อน · แคมเปญที่ขาด: ${list}`);
-    showToast(`กรอก Campaign Folder URL ที่ Edit Campaign ของ: ${list}`, 'warn');
-    return;
+async function resolveMediaUploadDestination(workItem) {
+  if (workItem.camp && workItem.camp.driveFolderId) return ensureCampaignMediaFolder(workItem.camp);
+  if (hub && hub.driveFolderId) return ensureMediaFolder();
+  return '';
+}
+
+async function offloadEmbeddedMediaBeforeFirestoreSave(options = {}) {
+  const { notify = false, setOut = null, stopOnApiDisabled = false } = options;
+  const out = typeof setOut === 'function' ? setOut : () => {};
+  const work = collectEmbeddedMediaWork();
+  if (!work.length) return { total:0, done:0, failed:0, skipped:0 };
+
+  if (!accessToken) {
+    work.forEach(w => { w.file.uploadStatus = w.file.uploadStatus || 'pending'; w.file.localOnly = true; w.file.uploadError = 'Drive login required'; });
+    out('⚠️ มี media รอ upload แต่ยังไม่มี Drive token — จะเซฟ metadata ก่อน');
+    return { total:work.length, done:0, failed:0, skipped:work.length, reason:'no-token' };
   }
 
-  let done = 0, failed = 0;
+  let done = 0, failed = 0, skipped = 0;
   for (const w of work) {
-    setOut(`⏳ อัปโหลด ${done+1}/${work.length} — ${w.file.name || 'file'}`);
+    out(`⏳ อัปโหลด ${done + failed + skipped + 1}/${work.length} — ${w.file.name || 'file'}`);
     try {
+      const dest = await resolveMediaUploadDestination(w);
+      if (!dest) {
+        skipped++;
+        w.file.uploadStatus = 'pending';
+        w.file.localOnly = true;
+        w.file.uploadError = 'Missing Campaign Folder URL / Hub Folder URL';
+        continue;
+      }
       const blob = dataUrlToBlob(w.file.data);
-      if (!blob) { failed++; continue; }
+      if (!blob) {
+        failed++;
+        w.file.uploadStatus = 'failed';
+        w.file.localOnly = true;
+        w.file.uploadError = 'Invalid embedded data URL';
+        continue;
+      }
       const safeName = `${w.camp.id}__${w.asset.id}__${w.idx+1}__${(w.file.name||'file').replace(/[^\w.\-]+/g,'_')}`;
-      // Route each file to its campaign's own Drive folder when configured;
-      // legacy Hub-level wakuwaku-media/ is used as fallback only for
-      // campaigns that don't have a Campaign Folder URL set yet.
-      const dest = (w.camp.driveFolderId)
-        ? await ensureCampaignMediaFolder(w.camp)
-        : folderId;
       const res = await uploadFileToDrive(safeName, blob, dest);
-      // Safety: only discard the embedded base64 once we're certain we got
-      // a usable Drive file id back. A 200 OK with no id (rare but seen on
-      // flaky networks) used to leave the asset with neither data nor a
-      // valid pointer — silent data loss. Now we keep f.data on any doubt.
+      // Safety: only discard embedded base64 once a real Drive pointer exists.
       if (!res || typeof res.id !== 'string' || !res.id) {
         failed++;
+        w.file.uploadStatus = 'failed';
+        w.file.localOnly = true;
+        w.file.uploadError = 'Drive upload returned no file id';
         console.warn('Upload returned no id; keeping embedded data for', w.file.name);
         continue;
       }
       w.file.driveFileId = res.id;
       w.file.size = +res.size || blob.size;
       w.file.webViewLink = res.webViewLink || '';
-      delete w.file.data; // shrink the DB JSON
+      w.file.uploadStatus = 'uploaded';
+      delete w.file.localOnly;
+      delete w.file.uploadError;
+      delete w.file.data; // shrink local state and Firestore JSON
       done++;
     } catch(e) {
       failed++;
+      w.file.uploadStatus = 'failed';
+      w.file.localOnly = true;
+      w.file.uploadError = e.message || String(e);
       console.warn('offload failed for', w.file.name, e);
-      if (e.driveCause === 'api-disabled') { setOut('❌ Drive API ปิดอยู่ — หยุด offload'); break; }
+      if (stopOnApiDisabled && e.driveCause === 'api-disabled') { out('❌ Drive API ปิดอยู่ — หยุด offload'); break; }
     }
   }
-  hub.updatedAt = new Date().toISOString();
-  logAction('OFFLOAD', `Offloaded ${done} media file(s) to Drive${failed?` · ${failed} failed`:''}`);
-  setOut(`✓ Offload สำเร็จ ${done} ไฟล์${failed?` · ล้มเหลว ${failed}`:''} · กำลังเซฟ DB...`);
+  if (done > 0) hub.updatedAt = new Date().toISOString();
+  if (notify && done > 0) showToast(`✓ Offload ${done} ไฟล์เข้า Drive แล้ว`, 'ok');
+  if ((failed || skipped) && notify) showToast(`⚠️ Media บางไฟล์ยังไม่ขึ้น Drive (${failed + skipped}) — metadata จะยังถูกเซฟ`, 'warn');
+  return { total:work.length, done, failed, skipped };
+}
+
+// Offload every embedded (base64) asset file into Drive. Manual button wrapper;
+// autosave calls the same core before Firestore writes so Info/Section B are
+// saved without base64 blocking the document.
+async function offloadMediaToDrive(notify) {
+  if (blockIfNotInternal('Offload media เฉพาะทีม Wakuwaku')) return;
+  if (isOfflineMode) { showToast('Offline mode — offload ไม่ได้', 'warn'); return; }
+  if (!accessToken) { showToast('ต้อง login ก่อน', 'warn'); return; }
+  const out = document.getElementById('hub-offload-out');
+  const setOut = (s) => { if (out) out.textContent = s; };
+  const work = collectEmbeddedMediaWork();
+  if (work.length === 0) { setOut('✓ ไม่มีไฟล์ที่ต้อง offload (ทุกไฟล์อยู่บน Drive แล้ว หรือไม่มีไฟล์)'); showToast('ไม่มีไฟล์ที่ต้อง offload', 'ok'); return; }
+  const missing = [...new Set(work.filter(w => !w.camp.driveFolderId && !hub.driveFolderId).map(w => w.camp.campaign || w.camp.id))];
+  if (missing.length) {
+    const list = missing.slice(0, 3).join(', ') + (missing.length > 3 ? `, +${missing.length - 3}` : '');
+    setOut(`❌ ต้องตั้ง Campaign Folder URL หรือ Hub Folder URL ก่อน · แคมเปญที่ขาด: ${list}`);
+    showToast(`กรอก Campaign Folder URL ที่ Edit Campaign ของ: ${list}`, 'warn');
+    return;
+  }
+  setOut('⏳ เตรียมอัปโหลด media...');
+  const res = await offloadEmbeddedMediaBeforeFirestoreSave({ notify, setOut, stopOnApiDisabled:true });
+  logAction('OFFLOAD', `Offloaded ${res.done} media file(s) to Drive${res.failed || res.skipped ? ` · ${res.failed + res.skipped} pending/failed` : ''}`);
+  setOut(`✓ Offload สำเร็จ ${res.done} ไฟล์${res.failed || res.skipped ? ` · ยังไม่สำเร็จ ${res.failed + res.skipped}` : ''} · กำลังเซฟ DB...`);
   try { await saveToDrive(); } catch(e) {}
-  setOut(`✓ เสร็จ — ${done} ไฟล์อยู่ในโฟลเดอร์ ${MEDIA_SUBFOLDER_NAME} แล้ว · DB JSON เล็กลง`);
-  if (notify) showToast(`✓ Offload ${done} ไฟล์เข้า Hub folder แล้ว`, 'ok');
+  setOut(`✓ เสร็จ — metadata ถูกเซฟแล้ว · media ที่สำเร็จอยู่บน Drive และ DB JSON ไม่มี base64`);
   renderDataHub();
 }
 
@@ -3370,7 +3489,7 @@ function renderDataHub() {
     ['Media files', st.totalFiles, `${st.driveFiles} on Drive · ${st.embeddedFiles} embedded`],
     ['Media size', fmtBytes(st.mediaBytes), ''],
     ['Log entries', st.totalLogs, ''],
-    ['Database size', fmtBytes(st.jsonSize), st.jsonSize > DRIVE_MULTIPART_LIMIT ? 'resumable upload' : 'multipart'],
+    ['Database size', fmtBytes(st.firestoreJsonSize), `Firestore-safe · raw ${fmtBytes(st.jsonSize)}`],
     ['Access tokens', accessTokens.length, ''],
     ['Manual backups', manualBackupHistory.length, '']
   ].map(([l, val, sub]) => `<div class="hub-stat"><div class="hub-stat-label">${l}</div><div class="hub-stat-value">${typeof val === 'number' ? `<em>${val}</em>` : val}</div><div class="hub-stat-sub">${sub || '·'}</div></div>`).join('');
@@ -3459,10 +3578,10 @@ function runIntegrityCheck() {
   const checks = [];
   const st = dbStats();
   // Section B media offload health
-  if (st.embeddedFiles > 0 && hub.driveFolderId && st.jsonSize > DRIVE_MULTIPART_LIMIT) {
-    checks.push({ level:'warn', label:`${st.embeddedFiles} media file(s) embedded in DB`, detail:`DB ${fmtBytes(st.jsonSize)} — กด "Offload now" เพื่อย้ายเข้า Hub folder และทำให้ DB เล็กลง` });
+  if (st.embeddedFiles > 0 && st.jsonSize > FIRESTORE_SAFE_JSON_LIMIT) {
+    checks.push({ level:'warn', label:`${st.embeddedFiles} media file(s) embedded locally`, detail:`Raw DB ${fmtBytes(st.jsonSize)} เกิน Firestore limit — autosave จะ offload/strip base64 แล้วเซฟ metadata ก่อน` });
   } else if (st.embeddedFiles > 0 && hub.driveFolderId) {
-    checks.push({ level:'ok', label:`${st.embeddedFiles} embedded · ${st.driveFiles} on Drive`, detail:'จะ offload เพิ่มเติมก็ได้ที่ Section B Media' });
+    checks.push({ level:'ok', label:`${st.embeddedFiles} embedded · ${st.driveFiles} on Drive`, detail:'autosave จะพยายาม offload เพิ่มเติมก่อนเขียน Firestore' });
   } else if (st.driveFiles > 0) {
     checks.push({ level:'ok', label:`${st.driveFiles} media file(s) stored in Hub folder`, detail:'อยู่ในซับโฟลเดอร์ ' + MEDIA_SUBFOLDER_NAME });
   }
@@ -3482,7 +3601,7 @@ function runIntegrityCheck() {
 
   if (_consecutiveSaveFailures > 0) checks.push({ level:'err', label:`Save failing ${_consecutiveSaveFailures}x`, detail:'แนะนำ Manual backup ทันที' });
 
-  if (st.jsonSize > DRIVE_MULTIPART_LIMIT) checks.push({ level:'warn', label:'Large database', detail:`${fmtBytes(st.jsonSize)} — ใช้ resumable upload (อาจใช้เวลานาน)` });
+  if (st.firestoreJsonSize > FIRESTORE_SAFE_JSON_LIMIT) checks.push({ level:'warn', label:'Large Firestore payload', detail:`${fmtBytes(st.firestoreJsonSize)} — อาจเกิน Firestore document limit` });
 
   campaigns.forEach(c => {
     if (!c.client || !c.campaign) checks.push({ level:'warn', label:`Campaign incomplete: ${c.campaign || c.id}`, detail:'Missing client หรือ campaign name' });
@@ -4088,7 +4207,7 @@ function editAsset(id) {
   const a = camp.assets.find(x => x.id === id);
   if (!a) return;
   editingAssetId = id;
-  pendingFiles = (a.files || []).map(f => ({ name:f.name, type:f.type, data:f.data }));
+  pendingFiles = (a.files || []).map(f => ({ ...f }));
   pendingLinks = (a.links && a.links.length) ? a.links.slice() : (a.link ? [a.link] : []);
   document.getElementById('asset-modal-title').textContent = 'Edit Asset';
   document.getElementById('asset-cat').value = a.catClass;
@@ -4387,9 +4506,9 @@ function saveAssetFromModal() {
     link: pendingLinks[0] || '',
     links: pendingLinks.slice(),
     scheduledDate: document.getElementById('asset-date').value,
-    files: pendingFiles.map(f => ({ name:f.name, type:f.type, data:f.data })),
+    files: pendingFiles.map(f => ({ ...f })),
     fileName: pendingFiles[0] ? pendingFiles[0].name : '',
-    fileData: pendingFiles[0] ? pendingFiles[0].data : '',
+    fileData: '',
     createdAt: (existing && existing.createdAt) || new Date().toISOString()
   };
   if (editingAssetId) {
@@ -6018,6 +6137,28 @@ window.__runTests = async function() {
     const p = buildDatabasePayload();
     ok(p.schemaVersion); ok(p.savedAt); ok(Array.isArray(p.campaigns));
   });
+  t('buildFirestoreSafePayload strips embedded media but keeps Section B metadata', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId };
+    campaigns = [normalizeCampaign({
+      id:'safe1', client:'Client', campaign:'Campaign',
+      assets:[{ id:'a1', h2:'Topic', h3:'Sub', files:[{ name:'p.png', type:'image/png', data:'data:image/png;base64,AAA' }], fileData:'data:image/png;base64,BBB' }]
+    })];
+    currentCampaignId = 'safe1';
+    const safe = buildFirestoreSafePayload();
+    const f = safe.campaigns[0].assets[0].files[0];
+    eq(safe.campaigns[0].assets[0].h2, 'Topic');
+    ok(!payloadContainsEmbeddedMedia(safe), 'safe payload has no data URLs');
+    ok(!('data' in f), 'file.data stripped');
+    eq(f.uploadStatus, 'pending');
+    ok(campaigns[0].assets[0].files[0].data, 'local state keeps base64 for retry/manual backup');
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+  });
+  t('stripEmbeddedMediaForFirestoreAsset removes legacy fileData duplication', () => {
+    const a = stripEmbeddedMediaForFirestoreAsset({ id:'x', fileName:'a.png', fileData:'data:image/png;base64,AAA' });
+    ok(!('fileData' in a));
+    ok(Array.isArray(a.files) && a.files.length === 1);
+    eq(a.files[0].uploadStatus, 'pending');
+  });
 
   // ---- Drive upload size routing ----
   t('DRIVE_MULTIPART_LIMIT sensible', () => { ok(DRIVE_MULTIPART_LIMIT > 1024*1024); ok(DRIVE_MULTIPART_LIMIT < 10*1024*1024); });
@@ -6045,7 +6186,7 @@ window.__runTests = async function() {
   t('MEDIA_SUBFOLDER_NAME constant', () => eq(MEDIA_SUBFOLDER_NAME, 'wakuwaku-media'));
   t('manualBackupHistory is array', () => ok(Array.isArray(manualBackupHistory)));
   t('buildDatabasePayload includes hub + history', () => { const p = buildDatabasePayload(); ok(p.hub); ok('manualBackupHistory' in p); });
-  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize','embeddedFiles','driveFiles'].forEach(k => ok(typeof s[k] === 'number', k)); });
+  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize','firestoreJsonSize','embeddedFiles','driveFiles'].forEach(k => ok(typeof s[k] === 'number', k)); });
   t('dataUrlToBlob produces typed blob', () => { const b = dataUrlToBlob('data:text/plain;base64,aGVsbG8='); ok(b instanceof Blob); eq(b.type, 'text/plain'); });
   t('dataUrlToBlob rejects non-dataurl', () => eq(dataUrlToBlob('not a data url'), null));
   t('fileSrcNow returns embedded data', () => eq(fileSrcNow({ data:'data:image/png;base64,AAA' }), 'data:image/png;base64,AAA'));
@@ -6151,7 +6292,7 @@ window.__runTests = async function() {
   ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
    'downloadManualBackup','offerManualBackup','openExportModal','doExport','captureOverviewAsCanvas',
    'openDateRangePicker','openDatePicker','dpPick','renderDatePicker',
-   'normalizeAsset','normalizeCampaign','blockIfClient','applyClientModeRestrictions',
+   'normalizeAsset','normalizeCampaign','buildFirestoreSafePayload','offloadEmbeddedMediaBeforeFirestoreSave','blockIfClient','applyClientModeRestrictions',
    'performLogout','confirmLogout','saveSession','tryRestoreSession','clearSession',
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
