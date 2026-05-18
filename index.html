@@ -1499,30 +1499,10 @@ function defaultSchema() {
   };
 }
 
-// Multi-campaign data model
-let campaigns = [
-  {
-    id: 'camp-' + Date.now(),
-    client: "Ocean Bites Co., Ltd.",
-    campaign: "Ocean Bites Launch 2026",
-    startPeriod: "May 2026",
-    endPeriod: "Aug 2026",
-    status: "active",
-    handoffInfo: null,
-    assets: [],
-    log: [],
-    schema: defaultSchema(),
-    excelData: null, // {sheetName, headers:[], rows:[]}
-    driveLinks: [
-      { name: "Product_Info", url: "" },
-      { name: "Content_Dir", url: "" },
-      { name: "CI_Design", url: "" },
-      { name: "Cat_Map", url: "" }
-    ],
-    linkedFilesCount: 0
-  }
-];
-let currentCampaignId = campaigns[0].id;
+// Multi-campaign data model. Starts empty in the member-centric model —
+// admin adds a Member first, then creates campaigns under that member.
+let campaigns = [];
+let currentCampaignId = null;
 // Member-centric model: each member (email) owns N campaigns.
 // `members` lists all known members; `currentMemberEmail` is the one being
 // viewed in main area. Empty/null → render blank state.
@@ -2126,35 +2106,51 @@ const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 // `dbs/main`    — admin-only master doc (wkwkp holds for handoff)
 // `campaigns/{id}` — per-campaign mirror; members[] gates read access
 // ============================================================================
+// Firestore rejects fields with `undefined` value. JSON.stringify drops them
+// (and converts undefined in arrays → null), so this is the safest sanitizer
+// for arbitrary in-memory state that may have grown stray undefineds.
+function fsClean(obj) {
+  try { return JSON.parse(JSON.stringify(obj)); } catch(e) { return obj; }
+}
+
 async function fbSaveDB() {
-  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready');
+  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
-  const data = buildDatabasePayload();
-  await fbDb.collection('dbs').doc('main').set(data);
+  const data = fsClean(buildDatabasePayload());
+  try {
+    await fbDb.collection('dbs').doc('main').set(data);
+  } catch(e) {
+    console.error('fbSaveDB: dbs/main write failed:', e);
+    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
+  }
   // Mirror docs so non-admin members can read only their own slice.
   const batch = fbDb.batch();
-  // Members collection (one doc per member email)
-  for (const m of members) {
+  for (const m of (data.members || [])) {
     const e = (m && m.email || '').toLowerCase();
     if (!e) continue;
-    batch.set(fbDb.collection('members').doc(e), {
+    batch.set(fbDb.collection('members').doc(e), fsClean({
       email: e,
       name: m.name || '',
       driveFolderUrl: m.driveFolderUrl || '',
       createdAt: m.createdAt || new Date().toISOString(),
       createdBy: m.createdBy || ''
-    });
+    }));
   }
-  // Campaigns collection — clientEmail is the access key
-  for (const c of data.campaigns) {
+  for (const c of (data.campaigns || [])) {
     const clientEmail = (c.clientEmail || '').toLowerCase();
+    if (!c.id) continue;
     batch.set(fbDb.collection('campaigns').doc(c.id), {
       clientEmail,
-      data: c,
+      data: fsClean(c),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch(e) {
+    console.error('fbSaveDB: batch.commit failed:', e);
+    throw new Error('mirror batch: ' + (e.message || e.code || 'unknown'));
+  }
 }
 
 function applyFirestorePayload(db, opts) {
@@ -3572,6 +3568,8 @@ async function saveNewMember() {
   renderEverything();
   // Immediate save — don't wait for the 2.5s debounce. If we wait and the
   // user reloads in between, the new member is lost (data only in memory).
+  if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่แล้วลองใหม่', 'warn'); return; }
+  isSaving = true;
   try {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     setSaveStatus('saving', 'Saving member...');
@@ -3584,10 +3582,11 @@ async function saveNewMember() {
     console.error('Save member failed:', e);
     setSaveStatus('error', 'Save failed · ' + (e.message || 'unknown'));
     showToast('❌ เซฟไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
-    // Roll back local state so what's on screen matches Firestore
     if (!wasEditing) members = members.filter(m => m.email !== emailRaw);
     if (currentMemberEmail === emailRaw) currentMemberEmail = null;
     renderEverything();
+  } finally {
+    isSaving = false;
   }
 }
 
@@ -3600,21 +3599,25 @@ function confirmDeleteMember() {
   }
   const toRemove = editingMemberEmail;
   showConfirm('Remove member?', `ลบ ${toRemove} ออกจากรายการ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร)`, async () => {
+    if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่', 'warn'); return; }
     members = members.filter(m => m.email !== toRemove);
     if (currentMemberEmail === toRemove) currentMemberEmail = null;
     closeAddMemberModal();
     logAction('MEMBER', `Removed member: ${toRemove}`);
     renderEverything();
+    isSaving = true;
     try {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
       await fbSaveDB();
-      // Also delete the member doc itself (fbSaveDB only writes upserts)
       if (fbDb) { try { await fbDb.collection('members').doc(toRemove).delete(); } catch(e) { console.warn('member doc delete:', e); } }
       pendingChanges = false;
       setSaveStatus('saved', 'Member removed');
       showToast('✓ Removed', 'ok');
     } catch(e) {
+      console.error('Remove member failed:', e);
       showToast('❌ Remove ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+    } finally {
+      isSaving = false;
     }
   });
 }
