@@ -1,12 +1,12 @@
 # Wakuwaku Studio — Production Dashboard
 
-Content production dashboard. **JSON data → Firestore** (wkwkp holds master for handoff). **Asset files (รูป/วิดีโอ) → Google Drive**. Per-campaign member access for clients.
+Content production dashboard. **Campaign JSON + asset files (รูป/วิดีโอ) → Google Drive folder ของลูกค้าแต่ละแคมเปญ**. Firebase is used for Google sign-in only.
 
 ---
 
-## 🔥 Firebase one-time setup
+## 🔥 Firebase / Google one-time setup
 
-The Firebase config is already wired in `index.html`. You only need to enable the services in Firebase Console:
+The Firebase config is already wired in `index.html`. Firebase is used for Google Sign-In; Drive stores campaign JSON and media files.
 
 ### 1. Enable Google Sign-In
 
@@ -16,23 +16,19 @@ Under **Authorized domains**, add the domain you host from (e.g. `wkwkp-project.
 > **Important — use the same OAuth client for Drive token reuse (optional):**
 > Authentication → Sign-in method → Google → **Web SDK configuration** → set Web client ID to `165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com`. This lets the existing Drive OAuth consent carry over. If you skip this, login still works but Drive uploads may require re-consent the first time.
 
-### 2. Enable Firestore
+### 2. Enable Google Drive API
 
-Firebase Console → **Firestore Database → Create database** → Production mode → location `asia-southeast1`.
+Google Cloud Console → APIs & Services → Library → **Google Drive API** → Enable.
 
-### 3. Publish security rules
+Each campaign must have a Client Drive Folder URL. The app writes:
+- `wakuwaku_campaign.json` in that campaign folder.
+- media files in a per-campaign `wakuwaku-media-{campaignId}` subfolder.
 
-Firebase Console → **Firestore Database → Rules** → paste the contents of [`firestore.rules`](./firestore.rules) → **Publish**.
+Share the campaign folder with the Wakuwaku/operator account as **Editor** so saves can create/update JSON and media files.
 
-The rules enforce:
-- `@team.wkwkp.com` emails = **admin** (read/write everything).
-- Other emails = read-only access to campaigns they are listed in (`members[]`).
-- Edit the `team.wkwkp.com` domain in `firestore.rules` if your team uses a different one.
+### 3. Add members / campaigns
 
-### 4. Add members to a campaign
-
-Open the campaign → **Edit Info** → **Members** field → one email per line → Save.
-The campaign auto-syncs to Firestore. That email can now sign in and will see only this campaign.
+Add a member, set their default Client Drive Folder URL, then create campaigns under that member. Campaign Info and Section B save to that campaign's Drive JSON file instead of Firestore. Clients who have access to the shared Drive folder can load the campaign JSON and media from Drive.
 
 **Live demo:** _Add your GitHub Pages URL here after deployment_
 
@@ -157,7 +153,7 @@ Key constants in `index.html` (around line 686):
 ```js
 const CLIENT_ID = '165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com';
 const SAVE_DEBOUNCE_MS = 2500;  // batch saves to avoid Drive API spam
-const DB_FILENAME = 'wakuwaku_database.json';
+const CAMPAIGN_DB_FILENAME = 'wakuwaku_campaign.json';  // created inside each campaign Drive folder
 ```
 
 ---

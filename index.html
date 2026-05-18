@@ -518,7 +518,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
         Continue with Google
       </button>
-      <div class="auth-meta">📍 JSON เก็บที่ Firestore · Asset อยู่ใน Drive ของลูกค้าแต่ละราย</div>
+      <div class="auth-meta">📍 JSON + Asset เก็บใน Google Drive folder ของลูกค้าแต่ละแคมเปญ</div>
       <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center;">
         <button type="button" onclick="document.getElementById('handoffFileInput').click()" style="background:none; border:none; color:var(--muted); font-size:11px; cursor:pointer; text-decoration:underline; font-family:'Geist Mono',monospace;">📦 เปิด handoff bundle เก่า (ZIP/JSON)</button>
         <input type="file" id="handoffFileInput" style="display:none;" accept=".zip,.json" onchange="handleFileSelect(event)" />
@@ -828,12 +828,12 @@
     <div class="page view-container" id="view-hub">
       <div class="hero">
         <div>
-          <div class="hero-eyebrow">Storage · Master Hub</div>
+          <div class="hero-eyebrow">Storage · Client Drive JSON</div>
           <h1>Data <em>Hub</em></h1>
-          <p>ภาพรวมข้อมูลทั้งระบบ — รู้ว่า master file อยู่ตรงไหน, ขนาดเท่าไหร่, มี campaign กี่อัน, backup ล่าสุดเมื่อไหร่ · ป้องกันข้อมูลหายตอน handoff</p>
+          <p>ภาพรวมไฟล์ campaign JSON และ media ที่เซฟไว้ใน Drive folder ของลูกค้าแต่ละแคมเปญ · ป้องกันข้อมูลหายตอน handoff</p>
         </div>
         <div class="hero-actions">
-          <button class="btn" onclick="forceSave()">☁️ Sync now</button>
+          <button class="btn" onclick="forceSave()">☁️ Save Drive JSON</button>
           <button class="btn" onclick="downloadManualBackup()">💾 Manual backup</button>
           <button class="btn" onclick="restoreFromLocalBackup()" title="กู้ข้อมูลจาก backup ที่เก็บอัตโนมัติในเครื่อง">↩ Restore local backup</button>
           <button class="btn gold" onclick="doExport('full-snapshot')">📦 Full Snapshot ZIP</button>
@@ -857,7 +857,7 @@
 
       <div class="section-head">
         <div class="section-num">①</div>
-        <div class="section-title">Master Hub Folder · จุดเก็บข้อมูลกลาง</div>
+        <div class="section-title">Optional Hub Folder · backup/งานกลาง</div>
         <div class="section-meta" id="hub-status-pill"></div>
       </div>
       <div class="hub-card">
@@ -867,12 +867,7 @@
           <button class="btn sm" onclick="saveHubConfig()">Save</button>
           <button class="btn sm" onclick="openHubFolder()">Open ↗</button>
         </div>
-        <small class="hint">วาง URL โฟลเดอร์ Google Drive — ระบบจะดึง folder ID อัตโนมัติ แล้ว <strong>สร้างไฟล์ database ในโฟลเดอร์นี้</strong> (การเซฟครั้งถัดไปจะ overwrite ไฟล์เดิมเสมอ) · ต้องแชร์โฟลเดอร์ให้บัญชีที่ login แบบ Editor</small>
-        <div class="hub-row" style="grid-template-columns:160px 1fr auto; margin-top:10px;">
-          <label>🔁 Team DB</label>
-          <small class="hint" style="margin:0;">ถ้าทีมแต่ละคนมี DB ของตัวเอง (เห็น DB id ต่างกันใน sidebar) กดปุ่มนี้เพื่อสลับมาใช้ไฟล์เดียวกันใน Hub folder ด้านบน</small>
-          <button class="btn sm" onclick="connectToTeamDB()">Connect to team DB</button>
-        </div>
+        <small class="hint">วาง URL โฟลเดอร์ Google Drive สำหรับ backup/งานกลาง (optional) · campaign JSON หลักจะถูกสร้างใน Client Drive Folder ของแต่ละแคมเปญ</small>
         <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
           <label>🆔 Folder ID</label>
           <code id="hub-folder-id-display" style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">—</code>
@@ -900,16 +895,16 @@
 
       <div class="section-head">
         <div class="section-num">③</div>
-        <div class="section-title">Section B Media · เก็บไฟล์รูป/วิดีโอไว้ใน Hub folder</div>
+        <div class="section-title">Section B Media · เก็บไฟล์รูป/วิดีโอไว้ใน Campaign Drive folder</div>
         <div class="section-meta" id="hub-media-meta">—</div>
       </div>
       <div class="hub-card">
         <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
           <label>☁️ Offload media</label>
-          <pre id="hub-offload-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">กดปุ่มเพื่อยกไฟล์รูป/วิดีโอที่ฝังใน JSON ขึ้นเป็นไฟล์จริงในโฟลเดอร์ Hub</pre>
+          <pre id="hub-offload-out" style="margin:0; white-space:pre-wrap; font-family:'Geist Mono',monospace; font-size:11px; color:var(--ink); background:var(--paper-2); padding:8px 10px; border-radius:4px;">กดปุ่มเพื่อยกไฟล์รูป/วิดีโอที่ฝังใน JSON ขึ้นเป็นไฟล์จริงในโฟลเดอร์ Drive ของแคมเปญ</pre>
           <button class="btn sm gold" onclick="offloadMediaToDrive(true)">Offload now</button>
         </div>
-        <small class="hint">ไฟล์จะถูกอัปโหลดเข้าซับโฟลเดอร์ <code>wakuwaku-media</code> ภายใน Hub folder · จากนั้น DB JSON จะเล็กลงมาก เซฟเร็วขึ้น · การดู/ดาวน์โหลด/ทำ bundle จะดึงจาก Drive ให้อัตโนมัติ · ต้องตั้ง Hub Folder URL + แชร์ Editor ก่อน</small>
+        <small class="hint">ไฟล์จะถูกอัปโหลดเข้าซับโฟลเดอร์ <code>wakuwaku-media-{campaign}</code> ภายใน Campaign Drive Folder · จากนั้น campaign JSON จะไม่มี base64 และลูกค้าจะเห็นข้อมูลจาก Drive ได้ · ต้องตั้ง Client Drive Folder URL + แชร์ Editor ก่อน</small>
         <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:8px;">
           <label>📂 Media folder</label>
           <span id="hub-media-folder" style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted);">—</span>
@@ -1423,11 +1418,12 @@ const CLIENT_ID = '165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleuser
 const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const SAVE_DEBOUNCE_MS = 2500;
 const DB_FILENAME = 'wakuwaku_database_v4.json';
+const CAMPAIGN_DB_FILENAME = 'wakuwaku_campaign.json';
 const SCHEMA_VERSION = 4;
 
 // ============================================================================
 // FIREBASE
-// JSON ทั้งหมดเก็บที่ Firestore (wkwkp = admin). Asset files ยังขึ้น Drive ตามเดิม.
+// Firebase ใช้สำหรับ Google sign-in เท่านั้น; campaign JSON + asset files เก็บใน Drive folder ของลูกค้าแต่ละแคมเปญ.
 // ============================================================================
 const firebaseConfig = {
   apiKey: "AIzaSyB-FTwBeYHv8I_IxgozAiYeNOrlwfbczx8",
@@ -1639,8 +1635,8 @@ function refreshToken() {
     .catch(err => { _drainTokenWaiters(null); console.warn('reauth failed:', err); });
 }
 function handleRealGoogleLogin() {
-  // Firebase popup (single sign-in): gives us a Firebase user (for Firestore
-  // access) + a Google access token (for Drive uploads of assets).
+  // Firebase popup (single sign-in): gives us a Firebase user identity +
+  // a Google access token for Drive JSON/media files.
   if (!fbAuth) { showToast('Firebase ยังโหลดไม่เสร็จ', 'warn'); return; }
   const provider = new firebase.auth.GoogleAuthProvider();
   SCOPES.split(' ').forEach(s => provider.addScope(s));
@@ -2013,8 +2009,7 @@ function scheduleSave() {
   pendingChanges = true;
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
-  const haveFbUser = !!(fbAuth && fbAuth.currentUser);
-  if (!accessToken && !haveFbUser) { setSaveStatus('offline', 'Not signed in'); return; }
+  if (!accessToken) { setSaveStatus('offline', 'Drive token required'); return; }
   // Block uploads until the first sync finished. Without this, a logAction
   // that runs during the login flow (or any pre-sync activity) starts a 2.5s
   // timer that fires before the Drive read finishes — uploading the empty
@@ -2089,8 +2084,8 @@ function dbStats() {
     });
   });
   const jsonSize = jsonByteLength(JSON.stringify(buildDatabasePayload()));
-  const firestoreJsonSize = jsonByteLength(JSON.stringify(buildFirestoreSafePayload()));
-  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize, firestoreJsonSize, embeddedFiles, driveFiles };
+  const cloudJsonSize = jsonByteLength(JSON.stringify(buildCloudSafePayload()));
+  return { campaigns: campaigns.length, totalAssets, totalFiles, totalLogs, mediaBytes, jsonSize, cloudJsonSize, embeddedFiles, driveFiles };
 }
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -2101,16 +2096,15 @@ function fmtBytes(n) {
 
 // Drive multipart limit is ~5 MB. Use resumable above that.
 const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
-// Keep Firestore JSON fields comfortably under the 1 MiB document/field limit.
-// Campaign Info + Section B metadata should still save even when media upload
-// is pending, so Firestore writes use a media-safe payload instead of raw state.
-const FIRESTORE_SAFE_JSON_LIMIT = 900 * 1024;
+// Keep cloud JSON media-safe: Campaign Info + Section B metadata should still
+// save even when media upload is pending, so cloud writes use a payload without base64.
+const CLOUD_SAFE_JSON_WARN_LIMIT = 900 * 1024;
 
 function clonePlain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function stripEmbeddedMediaForFirestoreFile(file) {
+function stripEmbeddedMediaForCloudFile(file) {
   const out = { ...(file || {}) };
   const hadEmbeddedData = !!out.data;
   if (hadEmbeddedData) delete out.data;
@@ -2122,9 +2116,9 @@ function stripEmbeddedMediaForFirestoreFile(file) {
   return out;
 }
 
-function stripEmbeddedMediaForFirestoreAsset(asset) {
+function stripEmbeddedMediaForCloudAsset(asset) {
   const out = { ...(asset || {}) };
-  if (Array.isArray(out.files)) out.files = out.files.map(stripEmbeddedMediaForFirestoreFile);
+  if (Array.isArray(out.files)) out.files = out.files.map(stripEmbeddedMediaForCloudFile);
   if (out.fileData) {
     delete out.fileData;
     if (!out.files || !out.files.length) {
@@ -2139,26 +2133,26 @@ function stripEmbeddedMediaForFirestoreAsset(asset) {
   return out;
 }
 
-function buildFirestoreSafePayload(raw = buildDatabasePayload()) {
+function buildCloudSafePayload(raw = buildDatabasePayload()) {
   const safe = clonePlain(raw);
   (safe.campaigns || []).forEach(c => {
-    c.assets = (c.assets || []).map(stripEmbeddedMediaForFirestoreAsset);
+    c.assets = (c.assets || []).map(stripEmbeddedMediaForCloudAsset);
     // Snapshots are useful for rollback but must never drag old embedded media
-    // into Firestore. They already use stripMediaForSnapshot in normal flow;
+    // into cloud JSON. They already use stripMediaForSnapshot in normal flow;
     // this is the final guard for legacy imported data.
     if (Array.isArray(c.snapshots)) {
       c.snapshots = c.snapshots.map(s => {
         if (!s || !s.data) return s;
-        return { ...s, data: stripFirestoreMediaFromCampaignSnapshot(s.data) };
+        return { ...s, data: stripCloudMediaFromCampaignSnapshot(s.data) };
       });
     }
   });
   return safe;
 }
 
-function stripFirestoreMediaFromCampaignSnapshot(snapshotData) {
+function stripCloudMediaFromCampaignSnapshot(snapshotData) {
   const out = clonePlain(snapshotData);
-  if (Array.isArray(out.assets)) out.assets = out.assets.map(stripEmbeddedMediaForFirestoreAsset);
+  if (Array.isArray(out.assets)) out.assets = out.assets.map(stripEmbeddedMediaForCloudAsset);
   return out;
 }
 
@@ -2170,15 +2164,15 @@ function jsonByteLength(json) {
   return new TextEncoder().encode(json).length;
 }
 
-function assertFirestorePayloadSize(label, json) {
+function assertCloudPayloadSize(label, json) {
   const bytes = jsonByteLength(json);
-  if (bytes > FIRESTORE_SAFE_JSON_LIMIT) {
-    throw new Error(`${label} ใหญ่เกิน Firestore safe limit (${fmtBytes(bytes)} > ${fmtBytes(FIRESTORE_SAFE_JSON_LIMIT)}) — กรุณาลดข้อมูลหรือ offload media เพิ่ม`);
+  if (bytes > CLOUD_SAFE_JSON_WARN_LIMIT) {
+    throw new Error(`${label} ใหญ่เกิน cloud JSON warning limit (${fmtBytes(bytes)} > ${fmtBytes(CLOUD_SAFE_JSON_WARN_LIMIT)}) — กรุณาลดข้อมูลหรือ offload media เพิ่ม`);
   }
 }
 
 // ============================================================================
-// FIRESTORE ADAPTER
+// LEGACY FIRESTORE ADAPTER (kept for backward compatibility; Drive JSON is the active save path)
 // `dbs/main`    — admin-only master doc (wkwkp holds for handoff)
 // `campaigns/{id}` — per-campaign mirror; members[] gates read access
 // ============================================================================
@@ -2243,7 +2237,7 @@ function fsClean(obj) { return fsEncode(obj); }
 
 // Walk an encoded payload and return human-readable paths for anything that
 // looks like it would still trip Firestore (nested arrays, undefineds, etc.)
-function findFirestoreOffenders(value, path = '$', acc = []) {
+function findCloudPayloadOffenders(value, path = '$', acc = []) {
   if (value === undefined) { acc.push(path + ' = undefined'); return acc; }
   if (value === null) return acc;
   if (typeof value === 'number' && !isFinite(value)) { acc.push(path + ' = ' + value); return acc; }
@@ -2254,7 +2248,7 @@ function findFirestoreOffenders(value, path = '$', acc = []) {
   if (Array.isArray(value)) {
     value.forEach((item, i) => {
       if (Array.isArray(item)) acc.push(`${path}[${i}] = <nested array>`);
-      findFirestoreOffenders(item, `${path}[${i}]`, acc);
+      findCloudPayloadOffenders(item, `${path}[${i}]`, acc);
     });
     return acc;
   }
@@ -2267,15 +2261,15 @@ function findFirestoreOffenders(value, path = '$', acc = []) {
     if (!k) acc.push(`${path}.<empty-key>`);
     else if (/^__.+__$/.test(k)) acc.push(`${path}.${k}: reserved key (starts+ends with __)`);
     else if (/[./]/.test(k)) acc.push(`${path}.${k}: key has '.' or '/'`);
-    findFirestoreOffenders(value[k], `${path}.${k}`, acc);
+    findCloudPayloadOffenders(value[k], `${path}.${k}`, acc);
   }
   return acc;
 }
 
-async function fbSaveDB() {
-  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
+async function legacyFbSaveDB() {
+  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Legacy Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
-  const raw = buildFirestoreSafePayload();
+  const raw = buildCloudSafePayload();
   // We store the whole payload as a single JSON string. Firestore has many
   // validation rules for nested data (no nested arrays, no reserved key
   // patterns, no undefined values, etc.) that are easy to trip with rich
@@ -2283,8 +2277,8 @@ async function fbSaveDB() {
   // sidesteps all of them. The only top-level fields we keep raw are the
   // ones that security rules need to inspect (clientEmail, email).
   const masterJson = JSON.stringify(raw);
-  if (payloadContainsEmbeddedMedia(raw)) throw new Error('Firestore payload still contains embedded base64 media');
-  assertFirestorePayloadSize('dbs/main', masterJson);
+  if (payloadContainsEmbeddedMedia(raw)) throw new Error('Cloud JSON payload still contains embedded base64 media');
+  assertCloudPayloadSize('dbs/main', masterJson);
   try {
     await fbDb.collection('dbs').doc('main').set({
       json: masterJson,
@@ -2293,7 +2287,7 @@ async function fbSaveDB() {
       sizeBytes: jsonByteLength(masterJson)
     });
   } catch(e) {
-    console.error('fbSaveDB: dbs/main write failed:', e, '· json size:', masterJson.length);
+    console.error('legacyFbSaveDB: dbs/main write failed:', e, '· json size:', masterJson.length);
     throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
   }
   // Mirror docs so non-admin members can read only their own slice.
@@ -2313,7 +2307,7 @@ async function fbSaveDB() {
     const clientEmail = (c.clientEmail || '').toLowerCase();
     if (!c.id) continue;
     const campaignJson = JSON.stringify(c);
-    assertFirestorePayloadSize(`campaigns/${c.id}`, campaignJson);
+    assertCloudPayloadSize(`campaigns/${c.id}`, campaignJson);
     batch.set(fbDb.collection('campaigns').doc(c.id), {
       clientEmail,
       json: campaignJson,
@@ -2323,12 +2317,12 @@ async function fbSaveDB() {
   try {
     await batch.commit();
   } catch(e) {
-    console.error('fbSaveDB: batch.commit failed:', e);
+    console.error('legacyFbSaveDB: batch.commit failed:', e);
     throw new Error('mirror batch: ' + (e.message || e.code || 'unknown'));
   }
 }
 
-function applyFirestorePayload(db, opts) {
+function applyCloudPayload(db, opts) {
   const silent = !!(opts && opts.silent);
   // Payload now arrives already-parsed (JSON.parse). No fsDecode needed.
   if (db && Array.isArray(db.campaigns)) {
@@ -2371,8 +2365,8 @@ function _parseJsonField(s, fallback) {
   try { return JSON.parse(s); } catch(e) { return fallback; }
 }
 
-async function fbLoadDB() {
-  if (!fbDb) throw new Error('Firestore not ready');
+async function legacyFbLoadDB() {
+  if (!fbDb) throw new Error('Legacy Firestore not ready');
   if (isAdmin) {
     const snap = await fbDb.collection('dbs').doc('main').get();
     if (!snap.exists) return null;
@@ -2399,12 +2393,12 @@ async function fbLoadDB() {
   };
 }
 
-function fbSubscribeDB() {
+function legacyFbSubscribeDB() {
   if (!fbDb) return;
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   const onUpdate = (db) => {
     if (isSaving || saveTimer || pendingChanges) return; // don't clobber local edits
-    applyFirestorePayload(db, { silent: true });
+    applyCloudPayload(db, { silent: true });
     renderEverything();
     renderPresenceSidebar();
   };
@@ -2414,7 +2408,7 @@ function fbSubscribeDB() {
       const d = snap.data();
       const parsed = _parseJsonField(d.json, null);
       if (parsed) onUpdate(parsed);
-    }, err => console.warn('Firestore listener error:', err));
+    }, err => console.warn('Legacy listener error:', err));
   } else {
     fbDbUnsub = fbDb.collection('campaigns')
       .where('clientEmail', '==', currentUserEmail)
@@ -2426,18 +2420,16 @@ function fbSubscribeDB() {
           members: [{ email: currentUserEmail, name: '', driveFolderUrl: '' }],
           currentCampaignId: camps[0] && camps[0].id
         });
-      }, err => console.warn('Firestore listener error:', err));
+      }, err => console.warn('Legacy listener error:', err));
   }
 }
 
 let _consecutiveSaveFailures = 0;
 async function saveToDrive() {
   if (isSaving) return;
-  // Firestore writes only need fbAuth, not the Drive access_token. Allow the
-  // save through when we have a Firebase user even if accessToken is null
-  // (e.g. right after a page reload before reauth).
-  const haveFbUser = !!(fbAuth && fbAuth.currentUser);
-  if (!accessToken && !haveFbUser) { setSaveStatus('offline', 'Not signed in'); return; }
+  // Campaign JSON is stored in the client's shared Drive folder, so every
+  // cloud save needs a Drive access token. Firebase is only used for sign-in.
+  if (!accessToken) { setSaveStatus('offline', 'Drive token required'); return; }
   // Last-line defense against the login-race: if we haven't successfully
   // read Drive yet, do NOT upload — we'd be writing the in-memory initial
   // state on top of the real shared DB. scheduleSave already guards this,
@@ -2452,19 +2444,28 @@ async function saveToDrive() {
       setSaveStatus('saved', 'Read-only (member access)');
       return;
     }
-    const mediaRes = await offloadEmbeddedMediaBeforeFirestoreSave({
+    const mediaRes = await offloadEmbeddedMediaBeforeCloudSave({
       setOut: (s) => setSaveStatus('saving', s.replace(/^⏳\s*/, ''))
     });
     if (mediaRes && mediaRes.total && (mediaRes.failed || mediaRes.skipped)) {
-      console.warn('Some media is not on Drive yet; saving Firestore-safe metadata only:', mediaRes);
+      console.warn('Some media is not on Drive yet; saving Drive JSON metadata only:', mediaRes);
     }
-    await fbSaveDB();
-    databaseFileId = 'firestore:dbs/main';
+    const targets = campaigns.filter(c => c && c.driveFolderId);
+    const current = getCurrentCampaign();
+    if (current && !current.driveFolderId) throw new Error('กรุณาตั้ง Client Drive Folder URL ของแคมเปญนี้ก่อนเซฟ JSON');
+    if (!targets.length) throw new Error('ยังไม่มีแคมเปญที่มี Client Drive Folder URL สำหรับเซฟ JSON');
+    let savedCount = 0;
+    for (const c of targets) {
+      setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}/${targets.length})...`);
+      await saveCampaignJsonToDrive(c);
+      savedCount++;
+    }
+    databaseFileId = (current && current.driveDbFileId) || (targets[0] && targets[0].driveDbFileId) || 'drive:campaign-json';
     lastSaveTime = new Date();
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
     _lastSaveError = null;
-    setSaveStatus('saved', 'All changes saved');
+    setSaveStatus('saved', 'Drive JSON saved');
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
@@ -2682,11 +2683,10 @@ function collectEmbeddedMediaWork() {
 
 async function resolveMediaUploadDestination(workItem) {
   if (workItem.camp && workItem.camp.driveFolderId) return ensureCampaignMediaFolder(workItem.camp);
-  if (hub && hub.driveFolderId) return ensureMediaFolder();
   return '';
 }
 
-async function offloadEmbeddedMediaBeforeFirestoreSave(options = {}) {
+async function offloadEmbeddedMediaBeforeCloudSave(options = {}) {
   const { notify = false, setOut = null, stopOnApiDisabled = false } = options;
   const out = typeof setOut === 'function' ? setOut : () => {};
   const work = collectEmbeddedMediaWork();
@@ -2707,7 +2707,7 @@ async function offloadEmbeddedMediaBeforeFirestoreSave(options = {}) {
         skipped++;
         w.file.uploadStatus = 'pending';
         w.file.localOnly = true;
-        w.file.uploadError = 'Missing Campaign Folder URL / Hub Folder URL';
+        w.file.uploadError = 'Missing Campaign Folder URL';
         continue;
       }
       const blob = dataUrlToBlob(w.file.data);
@@ -2735,7 +2735,7 @@ async function offloadEmbeddedMediaBeforeFirestoreSave(options = {}) {
       w.file.uploadStatus = 'uploaded';
       delete w.file.localOnly;
       delete w.file.uploadError;
-      delete w.file.data; // shrink local state and Firestore JSON
+      delete w.file.data; // shrink local state and Cloud JSON
       done++;
     } catch(e) {
       failed++;
@@ -2753,8 +2753,8 @@ async function offloadEmbeddedMediaBeforeFirestoreSave(options = {}) {
 }
 
 // Offload every embedded (base64) asset file into Drive. Manual button wrapper;
-// autosave calls the same core before Firestore writes so Info/Section B are
-// saved without base64 blocking the document.
+// autosave calls the same core before Drive JSON writes so Info/Section B are
+// saved without base64 bloating the campaign file.
 async function offloadMediaToDrive(notify) {
   if (blockIfNotInternal('Offload media เฉพาะทีม Wakuwaku')) return;
   if (isOfflineMode) { showToast('Offline mode — offload ไม่ได้', 'warn'); return; }
@@ -2763,15 +2763,15 @@ async function offloadMediaToDrive(notify) {
   const setOut = (s) => { if (out) out.textContent = s; };
   const work = collectEmbeddedMediaWork();
   if (work.length === 0) { setOut('✓ ไม่มีไฟล์ที่ต้อง offload (ทุกไฟล์อยู่บน Drive แล้ว หรือไม่มีไฟล์)'); showToast('ไม่มีไฟล์ที่ต้อง offload', 'ok'); return; }
-  const missing = [...new Set(work.filter(w => !w.camp.driveFolderId && !hub.driveFolderId).map(w => w.camp.campaign || w.camp.id))];
+  const missing = [...new Set(work.filter(w => !w.camp.driveFolderId).map(w => w.camp.campaign || w.camp.id))];
   if (missing.length) {
     const list = missing.slice(0, 3).join(', ') + (missing.length > 3 ? `, +${missing.length - 3}` : '');
-    setOut(`❌ ต้องตั้ง Campaign Folder URL หรือ Hub Folder URL ก่อน · แคมเปญที่ขาด: ${list}`);
+    setOut(`❌ ต้องตั้ง Campaign Folder URL ก่อน · แคมเปญที่ขาด: ${list}`);
     showToast(`กรอก Campaign Folder URL ที่ Edit Campaign ของ: ${list}`, 'warn');
     return;
   }
   setOut('⏳ เตรียมอัปโหลด media...');
-  const res = await offloadEmbeddedMediaBeforeFirestoreSave({ notify, setOut, stopOnApiDisabled:true });
+  const res = await offloadEmbeddedMediaBeforeCloudSave({ notify, setOut, stopOnApiDisabled:true });
   logAction('OFFLOAD', `Offloaded ${res.done} media file(s) to Drive${res.failed || res.skipped ? ` · ${res.failed + res.skipped} pending/failed` : ''}`);
   setOut(`✓ Offload สำเร็จ ${res.done} ไฟล์${res.failed || res.skipped ? ` · ยังไม่สำเร็จ ${res.failed + res.skipped}` : ''} · กำลังเซฟ DB...`);
   try { await saveToDrive(); } catch(e) {}
@@ -2854,6 +2854,144 @@ async function driveResumableUpload(metadata, jsonBody) {
   return putResp.json();
 }
 
+// Generic JSON upload to a specific Drive file/folder. This is used by the
+// campaign-per-folder persistence path and deliberately does not depend on the
+// old global databaseFileId.
+async function driveMultipartUploadFile(fileId, metadata, jsonBody) {
+  const boundary = '-------wkcjson' + Math.random().toString(36).slice(2);
+  const body =
+    `--${boundary}\r\n` +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(metadata) + '\r\n' +
+    `--${boundary}\r\n` +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    jsonBody + '\r\n' +
+    `--${boundary}--`;
+  const url = fileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id,modifiedTime,webViewLink`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime,webViewLink';
+  const resp = await authFetch(url, {
+    method: fileId ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  if (!resp.ok) throw await driveError(resp);
+  return resp.json();
+}
+
+async function driveResumableUploadFile(fileId, metadata, jsonBody) {
+  const initUrl = fileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=resumable&fields=id,modifiedTime,webViewLink`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,modifiedTime,webViewLink';
+  const initResp = await authFetch(initUrl, {
+    method: fileId ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' },
+    body: JSON.stringify(metadata)
+  });
+  if (!initResp.ok) { const e = await driveError(initResp); e.message = 'Campaign JSON resumable init failed · ' + e.message; throw e; }
+  const sessionUrl = initResp.headers.get('Location');
+  if (!sessionUrl) throw new Error('Campaign JSON resumable session URL missing');
+  const putResp = await fetch(sessionUrl, { method:'PUT', headers:{ 'Content-Type':'application/json; charset=UTF-8' }, body:new Blob([jsonBody], { type:'application/json; charset=UTF-8' }) });
+  if (!putResp.ok) { const e = await driveError(putResp); e.message = 'Campaign JSON resumable upload failed · ' + e.message; throw e; }
+  return putResp.json();
+}
+
+async function uploadJsonToDriveFile(fileId, metadata, jsonBody) {
+  return jsonByteLength(jsonBody) > DRIVE_MULTIPART_LIMIT
+    ? driveResumableUploadFile(fileId, metadata, jsonBody)
+    : driveMultipartUploadFile(fileId, metadata, jsonBody);
+}
+
+function campaignDriveJsonPayload(camp) {
+  const safeCampaign = clonePlain(camp);
+  safeCampaign.assets = (safeCampaign.assets || []).map(stripEmbeddedMediaForCloudAsset);
+  if (Array.isArray(safeCampaign.snapshots)) {
+    safeCampaign.snapshots = safeCampaign.snapshots.map(s => {
+      if (!s || !s.data) return s;
+      return { ...s, data: stripCloudMediaFromCampaignSnapshot(s.data) };
+    });
+  }
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    savedAt: new Date().toISOString(),
+    type: 'wakuwaku-campaign',
+    campaign: safeCampaign
+  };
+}
+
+async function findCampaignJsonFile(camp) {
+  if (!camp || !camp.driveFolderId) return null;
+  if (camp.driveDbFileId) {
+    const vr = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.driveDbFileId}?fields=id,modifiedTime,trashed,parents,webViewLink`);
+    if (vr.ok) {
+      const vj = await vr.json();
+      if (!vj.trashed && Array.isArray(vj.parents) && vj.parents.includes(camp.driveFolderId)) return vj;
+    }
+  }
+  const q = encodeURIComponent(`name='${CAMPAIGN_DB_FILENAME}' and '${camp.driveFolderId}' in parents and trashed=false`);
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,webViewLink,parents)&orderBy=modifiedTime desc`);
+  if (!r.ok) throw await driveError(r);
+  const j = await r.json();
+  return (j.files && j.files[0]) || null;
+}
+
+async function saveCampaignJsonToDrive(camp) {
+  if (!camp || !camp.id) throw new Error('ไม่พบ campaign ที่จะเซฟ');
+  if (!camp.driveFolderId) throw new Error(`Campaign "${camp.campaign || camp.id}" ยังไม่มี Client Drive Folder URL`);
+  const existing = await findCampaignJsonFile(camp);
+  const payload = campaignDriveJsonPayload(camp);
+  if (payloadContainsEmbeddedMedia(payload)) throw new Error(`Campaign ${camp.campaign || camp.id} JSON ยังมี base64 media ค้างอยู่`);
+  const jsonBody = JSON.stringify(payload, null, 2);
+  const metadata = { name: CAMPAIGN_DB_FILENAME, mimeType: 'application/json' };
+  if (!existing) metadata.parents = [camp.driveFolderId];
+  const res = await uploadJsonToDriveFile(existing && existing.id, metadata, jsonBody);
+  if (!res || !res.id) throw new Error('Drive JSON save returned no file id');
+  camp.driveDbFileId = res.id;
+  camp.driveDbModifiedTime = res.modifiedTime || new Date().toISOString();
+  return res;
+}
+
+async function loadCampaignJsonFilesFromDrive() {
+  if (!accessToken) throw new Error('ต้อง login Google Drive ก่อน');
+  const q = encodeURIComponent(`name='${CAMPAIGN_DB_FILENAME}' and trashed=false`);
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,parents,webViewLink)&orderBy=modifiedTime desc&pageSize=1000`);
+  if (!r.ok) throw await driveError(r);
+  const j = await r.json();
+  const loaded = [];
+  for (const f of (j.files || [])) {
+    try {
+      const cr = await authFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+      if (!cr.ok) throw await driveError(cr);
+      const data = await cr.json();
+      const rawCampaign = data.campaign || (Array.isArray(data.campaigns) && data.campaigns[0]);
+      if (!rawCampaign) continue;
+      const camp = normalizeCampaign(rawCampaign);
+      camp.driveDbFileId = f.id;
+      camp.driveDbModifiedTime = f.modifiedTime || data.savedAt || '';
+      if (!camp.driveFolderId && Array.isArray(f.parents) && f.parents[0]) {
+        camp.driveFolderId = f.parents[0];
+        camp.driveFolderUrl = `https://drive.google.com/drive/folders/${f.parents[0]}`;
+      }
+      loaded.push(camp);
+    } catch(e) { console.warn('campaign JSON load failed:', f.id, e); }
+  }
+  return loaded;
+}
+
+function deriveMembersFromCampaigns(camps) {
+  const byEmail = new Map();
+  (members || []).forEach(m => { if (m.email) byEmail.set(m.email.toLowerCase(), { ...m, email:m.email.toLowerCase() }); });
+  (camps || []).forEach(c => {
+    const email = (c.clientEmail || '').toLowerCase();
+    if (!email) return;
+    const cur = byEmail.get(email) || { email, name:'', driveFolderUrl:'', createdAt:'', createdBy:'' };
+    if (!cur.driveFolderUrl && c.driveFolderUrl) cur.driveFolderUrl = c.driveFolderUrl;
+    if (!cur.name && c.client) cur.name = c.client;
+    byEmail.set(email, cur);
+  });
+  return Array.from(byEmail.values()).sort((a,b) => (a.name || a.email).localeCompare(b.name || b.email));
+}
+
 // Returns a structured Error with .driveCode / .driveStatus / .driveHelpUrl
 async function driveError(resp) {
   let text = '';
@@ -2897,42 +3035,42 @@ async function readDriveError(resp) { return (await driveError(resp)).message; }
 
 async function syncDatabaseFromDrive(opts) {
   const silent = !!(opts && opts.silent);
-  if (!silent) setSaveStatus('saving', 'Loading...');
+  if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
+  if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
-    const db = await fbLoadDB();
-    if (!db) {
-      if (!isAdmin) {
-        // Member with no shared campaigns: clear the seed campaign so they don't
-        // see dummy data they can't save.
-        campaigns = [];
-        currentCampaignId = null;
-      }
-      setSaveStatus('idle', isAdmin ? 'New project · ready to start' : 'No campaigns shared with you yet');
+    const loaded = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
+    const visible = isAdmin ? loaded : loaded.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+    if (visible.length) {
+      campaigns = visible.map(normalizeCampaign);
+      members = deriveMembersFromCampaigns(campaigns);
+      if (!isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
+      else if (currentMemberEmail && !members.find(m => m.email === currentMemberEmail)) currentMemberEmail = null;
+      if (!currentMemberEmail && !isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
+      const keepLocal = silent && currentCampaignId && campaigns.find(c => c.id === currentCampaignId);
+      if (!keepLocal) currentCampaignId = (currentCampaignId && campaigns.find(c => c.id === currentCampaignId)) ? currentCampaignId : campaigns[0].id;
+      databaseFileId = campaigns[0].driveDbFileId || 'drive:campaign-json';
+      lastSaveTime = campaigns.reduce((latest, c) => {
+        const d = c.driveDbModifiedTime ? new Date(c.driveDbModifiedTime) : null;
+        return d && (!latest || d > latest) ? d : latest;
+      }, null);
       renderEverything();
-      _readyToSave = true;
-      if (pendingChanges && isAdmin) scheduleSave();
-      fbSubscribeDB();
-      return;
+      renderPresenceSidebar();
+      updateDbIdFooter();
+      setSaveStatus('saved', silent ? 'Synced from Drive' : 'Loaded campaign JSON from Drive');
+      if (lastSaveTime) { const m = document.getElementById('meta-saved'); if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }); }
+      if (!silent) showToast(`Loaded ${campaigns.length} campaign JSON file(s) from Drive`);
+    } else {
+      if (!isAdmin) { campaigns = []; currentCampaignId = null; }
+      setSaveStatus('idle', isAdmin ? 'No Drive campaign JSON yet' : 'No campaigns shared with you yet');
+      renderEverything();
     }
-    applyFirestorePayload(db, { silent });
-    databaseFileId = 'firestore:dbs/main';
-    renderEverything();
-    if (presenceKey) upsertPresence();
-    renderPresenceSidebar();
-    updateDbIdFooter();
-    setSaveStatus('saved', silent ? 'Synced' : 'Loaded from cloud');
-    if (lastSaveTime) {
-      const m = document.getElementById('meta-saved');
-      if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }
-    if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
     _readyToSave = true;
-    if (pendingChanges) scheduleSave();
-    fbSubscribeDB();
+    if (pendingChanges && isAdmin) scheduleSave();
     return;
   } catch (err) {
-    console.error('Firestore sync error:', err);
-    if (!silent) setSaveStatus('error', 'Load failed · ' + (err.message || 'unknown'));
+    console.error('Drive campaign JSON sync error:', err);
+    if (!silent) setSaveStatus('error', 'Drive load failed · ' + (err.message || 'unknown'));
+    _readyToSave = true;
     return;
   }
   // ----- legacy Drive path (unused, kept for reference) -----
@@ -3092,7 +3230,7 @@ async function pollRemoteChanges() {
 }
 
 function startRemotePolling() {
-  // Replaced by Firestore onSnapshot (see fbSubscribeDB). No-op now.
+  // Per-campaign Drive JSON does not poll one global DB file. No-op now.
   return;
 }
 function stopRemotePolling() {
@@ -3200,8 +3338,8 @@ function updateDbIdFooter() {
   if (!databaseFileId || userRole === 'client' || isOfflineMode) { el.style.display = 'none'; return; }
   el.style.display = '';
   if (databaseFileId.startsWith('firestore:')) {
-    el.textContent = 'Firestore · ' + firebaseConfig.projectId;
-    el.title = 'JSON stored in Firestore project ' + firebaseConfig.projectId;
+    el.textContent = 'Drive JSON · ' + databaseFileId.slice(0, 10) + '…';
+    el.title = 'Legacy Firestore project ' + firebaseConfig.projectId;
   } else {
     el.textContent = 'DB ' + databaseFileId.slice(0, 10) + '…';
     el.title = 'Shared database file id: ' + databaseFileId;
@@ -3235,6 +3373,8 @@ function normalizeCampaign(c) {
     driveFolderUrl: c.driveFolderUrl || '',
     driveFolderId: c.driveFolderId || '',
     mediaFolderId: c.mediaFolderId || '',
+    driveDbFileId: c.driveDbFileId || '',
+    driveDbModifiedTime: c.driveDbModifiedTime || '',
     // The single member email this campaign belongs to. Migration: legacy
     // campaigns may have `members[]` instead — pick first as clientEmail.
     clientEmail: (c.clientEmail
@@ -3469,7 +3609,7 @@ function openHubBackupFolder() {
 }
 function openMasterDBFile() {
   if (databaseFileId) window.open('https://drive.google.com/file/d/' + databaseFileId + '/view', '_blank');
-  else showToast('Master DB file ยังไม่ถูกสร้าง — กด Sync now ก่อน', 'warn');
+  else showToast('Campaign JSON ยังไม่ถูกสร้าง — กด Backup to Cloud ก่อน', 'warn');
 }
 
 function renderDataHub() {
@@ -3489,7 +3629,7 @@ function renderDataHub() {
     ['Media files', st.totalFiles, `${st.driveFiles} on Drive · ${st.embeddedFiles} embedded`],
     ['Media size', fmtBytes(st.mediaBytes), ''],
     ['Log entries', st.totalLogs, ''],
-    ['Database size', fmtBytes(st.firestoreJsonSize), `Firestore-safe · raw ${fmtBytes(st.jsonSize)}`],
+    ['Drive JSON size', fmtBytes(st.cloudJsonSize), `media-safe · raw ${fmtBytes(st.jsonSize)}`],
     ['Access tokens', accessTokens.length, ''],
     ['Manual backups', manualBackupHistory.length, '']
   ].map(([l, val, sub]) => `<div class="hub-stat"><div class="hub-stat-label">${l}</div><div class="hub-stat-value">${typeof val === 'number' ? `<em>${val}</em>` : val}</div><div class="hub-stat-sub">${sub || '·'}</div></div>`).join('');
@@ -3506,21 +3646,18 @@ function renderDataHub() {
   else if (hub.folderUrl || hub.backupFolderUrl) statusPill.innerHTML = '⚠ PARTIALLY SET';
   else statusPill.innerHTML = '⚠ NOT SET — ตั้ง URL ด้านล่าง';
 
-  // Master DB card
+  // Campaign JSON card
   const dbCard = document.getElementById('hub-db-card');
   const dbMeta = document.getElementById('hub-db-meta');
   if (databaseFileId) {
-    const hubBtn = hub.driveFolderId
-      ? `<button class="btn sm" onclick="ensureDBInHubFolder(true).then(()=>renderDataHub())">Move into Hub folder ↘</button>`
-      : `<span style="font-size:11px; color:var(--muted-2);">ตั้ง Hub Folder URL เพื่อย้ายไฟล์เข้าโฟลเดอร์</span>`;
     dbCard.innerHTML = `
       <div class="hub-row" style="grid-template-columns:160px 1fr auto;">
-        <label>📄 DB File</label>
-        <code style="font-family:'Geist Mono',monospace; font-size:11px; background:var(--paper-2); padding:6px 8px; border-radius:4px; word-break:break-all;">${DB_FILENAME}</code>
+        <label>📄 Campaign JSON</label>
+        <code style="font-family:'Geist Mono',monospace; font-size:11px; background:var(--paper-2); padding:6px 8px; border-radius:4px; word-break:break-all;">${CAMPAIGN_DB_FILENAME}</code>
         <button class="btn sm" onclick="openMasterDBFile()">Open in Drive ↗</button>
       </div>
       <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:10px;">
-        <label>🆔 Drive File ID</label>
+        <label>🆔 Drive JSON File ID</label>
         <code style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); word-break:break-all;">${escapeHtml(databaseFileId)}</code>
       </div>
       <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:6px;">
@@ -3532,10 +3669,10 @@ function renderDataHub() {
         <span style="font-family:'Geist Mono',monospace; font-size:11px;">${lastSaveTime ? lastSaveTime.toLocaleString() : '—'}</span>
       </div>
       <div class="hub-row" style="grid-template-columns:160px 1fr; margin-top:10px;">
-        <label></label>
-        <div>${hubBtn}</div>
+        <label>Mode</label>
+        <span style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--connect);">Per-campaign Drive JSON</span>
       </div>`;
-    dbMeta.textContent = `${fmtBytes(st.jsonSize)} · Google Drive`;
+    dbMeta.textContent = `${fmtBytes(st.cloudJsonSize)} · Client Drive`;
     // Async fetch the actual parent folder name
     if (accessToken) {
       authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=parents`).then(r => r.ok ? r.json() : null).then(j => {
@@ -3547,15 +3684,15 @@ function renderDataHub() {
         const inHub = hub.driveFolderId && pid === hub.driveFolderId;
         authFetch(`https://www.googleapis.com/drive/v3/files/${pid}?fields=id,name,webViewLink`).then(rr => rr.ok ? rr.json() : null).then(fj => {
           if (!fj) { pEl.textContent = pid; return; }
-          pEl.innerHTML = `${inHub ? '✓ ' : ''}<a href="${escapeHtml(fj.webViewLink || ('https://drive.google.com/drive/folders/'+pid))}" target="_blank">${escapeHtml(fj.name)}</a>${inHub ? ' (= Hub folder)' : ' <span style="color:var(--warn);">≠ Hub folder</span>'}`;
+          pEl.innerHTML = `${inHub ? '✓ ' : ''}<a href="${escapeHtml(fj.webViewLink || ('https://drive.google.com/drive/folders/'+pid))}" target="_blank">${escapeHtml(fj.name)}</a>${inHub ? ' (= Hub folder)' : ' <span style="color:var(--warn);">= Campaign/Client folder</span>'}`;
         }).catch(()=>{ pEl.textContent = pid; });
       }).catch(()=>{ const pEl = document.getElementById('hub-db-parent'); if (pEl) pEl.textContent = '—'; });
     }
   } else if (isOfflineMode) {
-    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">Offline mode — ไม่มี master DB file<br><small>ใช้ Manual Backup หรือ Full Snapshot แทน</small></div>';
+    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">Offline mode — ไม่มี campaign JSON file<br><small>ใช้ Manual Backup หรือ Full Snapshot แทน</small></div>';
     dbMeta.textContent = 'OFFLINE';
   } else {
-    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">ยังไม่ได้สร้าง master DB · กด <strong>Sync now</strong> ด้านบนเพื่อสร้างไฟล์</div>';
+    dbCard.innerHTML = '<div style="color:var(--muted); padding:14px; text-align:center;">ยังไม่ได้สร้าง campaign JSON · ตั้ง Client Drive Folder URL แล้วกด <strong>Backup to Cloud</strong></div>';
     dbMeta.textContent = 'NOT CREATED';
   }
 
@@ -3578,16 +3715,16 @@ function runIntegrityCheck() {
   const checks = [];
   const st = dbStats();
   // Section B media offload health
-  if (st.embeddedFiles > 0 && st.jsonSize > FIRESTORE_SAFE_JSON_LIMIT) {
-    checks.push({ level:'warn', label:`${st.embeddedFiles} media file(s) embedded locally`, detail:`Raw DB ${fmtBytes(st.jsonSize)} เกิน Firestore limit — autosave จะ offload/strip base64 แล้วเซฟ metadata ก่อน` });
+  if (st.embeddedFiles > 0 && st.jsonSize > CLOUD_SAFE_JSON_WARN_LIMIT) {
+    checks.push({ level:'warn', label:`${st.embeddedFiles} media file(s) embedded locally`, detail:`Raw DB ${fmtBytes(st.jsonSize)} ใหญ่เพราะมี local media — autosave จะ offload/strip base64 แล้วเซฟ JSON metadata ลง Drive ก่อน` });
   } else if (st.embeddedFiles > 0 && hub.driveFolderId) {
-    checks.push({ level:'ok', label:`${st.embeddedFiles} embedded · ${st.driveFiles} on Drive`, detail:'autosave จะพยายาม offload เพิ่มเติมก่อนเขียน Firestore' });
+    checks.push({ level:'ok', label:`${st.embeddedFiles} embedded · ${st.driveFiles} on Drive`, detail:'autosave จะพยายาม offload เพิ่มเติมก่อนเขียน campaign JSON ลง Drive' });
   } else if (st.driveFiles > 0) {
     checks.push({ level:'ok', label:`${st.driveFiles} media file(s) stored in Hub folder`, detail:'อยู่ในซับโฟลเดอร์ ' + MEDIA_SUBFOLDER_NAME });
   }
-  if (databaseFileId) checks.push({ level:'ok', label:'Master DB file exists', detail:'Drive file ID ' + databaseFileId.slice(0,20) + '...' });
+  if (databaseFileId) checks.push({ level:'ok', label:'Campaign JSON file exists', detail:'Drive file ID ' + databaseFileId.slice(0,20) + '...' });
   else if (isOfflineMode) checks.push({ level:'warn', label:'Offline mode', detail:'ไม่มี cloud DB — พึ่ง manual backup' });
-  else checks.push({ level:'err', label:'No master DB file', detail:'กด Sync now ที่ Data Hub' });
+  else checks.push({ level:'err', label:'No campaign JSON file', detail:'ตั้ง Client Drive Folder URL แล้วกด Backup to Cloud' });
 
   if (lastSaveTime) {
     const minsAgo = Math.round((Date.now() - lastSaveTime.getTime()) / 60000);
@@ -3601,7 +3738,7 @@ function runIntegrityCheck() {
 
   if (_consecutiveSaveFailures > 0) checks.push({ level:'err', label:`Save failing ${_consecutiveSaveFailures}x`, detail:'แนะนำ Manual backup ทันที' });
 
-  if (st.firestoreJsonSize > FIRESTORE_SAFE_JSON_LIMIT) checks.push({ level:'warn', label:'Large Firestore payload', detail:`${fmtBytes(st.firestoreJsonSize)} — อาจเกิน Firestore document limit` });
+  if (st.cloudJsonSize > CLOUD_SAFE_JSON_WARN_LIMIT) checks.push({ level:'warn', label:'Large Drive JSON payload', detail:`${fmtBytes(st.cloudJsonSize)} — ไฟล์ JSON ใหญ่ แนะนำแยก Excel/log หรือทำ snapshot backup` });
 
   campaigns.forEach(c => {
     if (!c.client || !c.campaign) checks.push({ level:'warn', label:`Campaign incomplete: ${c.campaign || c.id}`, detail:'Missing client หรือ campaign name' });
@@ -3798,12 +3935,11 @@ async function saveNewMember() {
   isSaving = true;
   try {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    setSaveStatus('saving', 'Saving member...');
-    await fbSaveDB();
-    pendingChanges = false;
-    lastSaveTime = new Date();
-    setSaveStatus('saved', 'Member saved');
-    showToast('✓ Saved member: ' + emailRaw, 'ok');
+    setSaveStatus('saving', 'Member saved locally');
+    pendingChanges = true;
+    persistLocalBackup();
+    setSaveStatus('saved', 'Member saved locally · campaign JSON saves to Drive');
+    showToast('✓ Saved member locally: ' + emailRaw + ' · สร้าง/เซฟแคมเปญเพื่อเขียน JSON ลง Drive', 'ok');
   } catch(e) {
     console.error('Save member failed:', e);
     setSaveStatus('error', 'Save failed · ' + (e.message || 'unknown'));
@@ -3834,10 +3970,9 @@ function confirmDeleteMember() {
     isSaving = true;
     try {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-      await fbSaveDB();
-      if (fbDb) { try { await fbDb.collection('members').doc(toRemove).delete(); } catch(e) { console.warn('member doc delete:', e); } }
-      pendingChanges = false;
-      setSaveStatus('saved', 'Member removed');
+      persistLocalBackup();
+      pendingChanges = true;
+      setSaveStatus('saved', 'Member removed locally');
       showToast('✓ Removed', 'ok');
     } catch(e) {
       console.error('Remove member failed:', e);
@@ -6137,14 +6272,14 @@ window.__runTests = async function() {
     const p = buildDatabasePayload();
     ok(p.schemaVersion); ok(p.savedAt); ok(Array.isArray(p.campaigns));
   });
-  t('buildFirestoreSafePayload strips embedded media but keeps Section B metadata', () => {
+  t('buildCloudSafePayload strips embedded media but keeps Section B metadata', () => {
     const save = { campaigns: campaigns.slice(), currentCampaignId };
     campaigns = [normalizeCampaign({
       id:'safe1', client:'Client', campaign:'Campaign',
       assets:[{ id:'a1', h2:'Topic', h3:'Sub', files:[{ name:'p.png', type:'image/png', data:'data:image/png;base64,AAA' }], fileData:'data:image/png;base64,BBB' }]
     })];
     currentCampaignId = 'safe1';
-    const safe = buildFirestoreSafePayload();
+    const safe = buildCloudSafePayload();
     const f = safe.campaigns[0].assets[0].files[0];
     eq(safe.campaigns[0].assets[0].h2, 'Topic');
     ok(!payloadContainsEmbeddedMedia(safe), 'safe payload has no data URLs');
@@ -6153,11 +6288,19 @@ window.__runTests = async function() {
     ok(campaigns[0].assets[0].files[0].data, 'local state keeps base64 for retry/manual backup');
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
   });
-  t('stripEmbeddedMediaForFirestoreAsset removes legacy fileData duplication', () => {
-    const a = stripEmbeddedMediaForFirestoreAsset({ id:'x', fileName:'a.png', fileData:'data:image/png;base64,AAA' });
+  t('stripEmbeddedMediaForCloudAsset removes legacy fileData duplication', () => {
+    const a = stripEmbeddedMediaForCloudAsset({ id:'x', fileName:'a.png', fileData:'data:image/png;base64,AAA' });
     ok(!('fileData' in a));
     ok(Array.isArray(a.files) && a.files.length === 1);
     eq(a.files[0].uploadStatus, 'pending');
+  });
+  t('campaignDriveJsonPayload stores one campaign without embedded media', () => {
+    const c = normalizeCampaign({ id:'drive1', client:'C', campaign:'D', assets:[{ id:'a', h2:'H', files:[{ name:'x.png', type:'image/png', data:'data:image/png;base64,AAA' }] }] });
+    const p = campaignDriveJsonPayload(c);
+    eq(p.type, 'wakuwaku-campaign');
+    eq(p.campaign.id, 'drive1');
+    ok(!payloadContainsEmbeddedMedia(p));
+    eq(p.campaign.assets[0].files[0].uploadStatus, 'pending');
   });
 
   // ---- Drive upload size routing ----
@@ -6186,7 +6329,7 @@ window.__runTests = async function() {
   t('MEDIA_SUBFOLDER_NAME constant', () => eq(MEDIA_SUBFOLDER_NAME, 'wakuwaku-media'));
   t('manualBackupHistory is array', () => ok(Array.isArray(manualBackupHistory)));
   t('buildDatabasePayload includes hub + history', () => { const p = buildDatabasePayload(); ok(p.hub); ok('manualBackupHistory' in p); });
-  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize','firestoreJsonSize','embeddedFiles','driveFiles'].forEach(k => ok(typeof s[k] === 'number', k)); });
+  t('dbStats returns numeric fields', () => { const s = dbStats(); ['campaigns','totalAssets','totalFiles','totalLogs','mediaBytes','jsonSize','cloudJsonSize','embeddedFiles','driveFiles'].forEach(k => ok(typeof s[k] === 'number', k)); });
   t('dataUrlToBlob produces typed blob', () => { const b = dataUrlToBlob('data:text/plain;base64,aGVsbG8='); ok(b instanceof Blob); eq(b.type, 'text/plain'); });
   t('dataUrlToBlob rejects non-dataurl', () => eq(dataUrlToBlob('not a data url'), null));
   t('fileSrcNow returns embedded data', () => eq(fileSrcNow({ data:'data:image/png;base64,AAA' }), 'data:image/png;base64,AAA'));
@@ -6292,7 +6435,7 @@ window.__runTests = async function() {
   ['saveToDrive','syncDatabaseFromDrive','authFetch','driveMultipartUpload','driveResumableUpload',
    'downloadManualBackup','offerManualBackup','openExportModal','doExport','captureOverviewAsCanvas',
    'openDateRangePicker','openDatePicker','dpPick','renderDatePicker',
-   'normalizeAsset','normalizeCampaign','buildFirestoreSafePayload','offloadEmbeddedMediaBeforeFirestoreSave','blockIfClient','applyClientModeRestrictions',
+   'normalizeAsset','normalizeCampaign','buildCloudSafePayload','campaignDriveJsonPayload','saveCampaignJsonToDrive','loadCampaignJsonFilesFromDrive','offloadEmbeddedMediaBeforeCloudSave','blockIfClient','applyClientModeRestrictions',
    'performLogout','confirmLogout','saveSession','tryRestoreSession','clearSession',
    'openMediaViewer','mediaViewerDownload','mediaViewerDownloadAll','addAssetLink','removeAssetLink',
    'updateEditPeriodSummary','saveCampaignInfo','openEditModal',
