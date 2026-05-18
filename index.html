@@ -2106,29 +2106,63 @@ const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 // `dbs/main`    — admin-only master doc (wkwkp holds for handoff)
 // `campaigns/{id}` — per-campaign mirror; members[] gates read access
 // ============================================================================
-// Firestore rejects fields with `undefined` value. JSON.stringify drops them
-// (and converts undefined in arrays → null), so this is the safest sanitizer
-// for arbitrary in-memory state that may have grown stray undefineds.
-function fsClean(obj) {
-  try { return JSON.parse(JSON.stringify(obj)); } catch(e) { return obj; }
+// Firestore rejects fields with `undefined` value AND arrays that contain
+// other arrays directly (e.g. excelData.rows is a 2D array). These helpers
+// round-trip the data through a safe shape: drop undefined, wrap any nested
+// array inside an object `{__cells: [...]}` so the parent array becomes an
+// array of objects (which Firestore accepts).
+function fsEncode(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (Array.isArray(item)) return { __cells: fsEncode(item) };
+      return fsEncode(item);
+    });
+  }
+  const out = {};
+  for (const k of Object.keys(value)) {
+    const v = value[k];
+    if (v === undefined) continue;
+    out[k] = fsEncode(v);
+  }
+  return out;
 }
+function fsDecode(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (item && typeof item === 'object' && !Array.isArray(item)
+          && Array.isArray(item.__cells) && Object.keys(item).length === 1) {
+        return item.__cells.map(fsDecode);
+      }
+      return fsDecode(item);
+    });
+  }
+  const out = {};
+  for (const k of Object.keys(value)) out[k] = fsDecode(value[k]);
+  return out;
+}
+// Back-compat alias for any earlier callers
+function fsClean(obj) { return fsEncode(obj); }
 
 async function fbSaveDB() {
   if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready (no Firebase user)');
   if (!isAdmin) return; // members are read-only
-  const data = fsClean(buildDatabasePayload());
+  const data = fsEncode(buildDatabasePayload());
   try {
     await fbDb.collection('dbs').doc('main').set(data);
   } catch(e) {
     console.error('fbSaveDB: dbs/main write failed:', e);
     throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
   }
-  // Mirror docs so non-admin members can read only their own slice.
   const batch = fbDb.batch();
   for (const m of (data.members || [])) {
     const e = (m && m.email || '').toLowerCase();
     if (!e) continue;
-    batch.set(fbDb.collection('members').doc(e), fsClean({
+    batch.set(fbDb.collection('members').doc(e), fsEncode({
       email: e,
       name: m.name || '',
       driveFolderUrl: m.driveFolderUrl || '',
@@ -2141,7 +2175,7 @@ async function fbSaveDB() {
     if (!c.id) continue;
     batch.set(fbDb.collection('campaigns').doc(c.id), {
       clientEmail,
-      data: fsClean(c),
+      data: c, // already encoded above
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
@@ -2155,6 +2189,8 @@ async function fbSaveDB() {
 
 function applyFirestorePayload(db, opts) {
   const silent = !!(opts && opts.silent);
+  // Reverse the fsEncode wrap (excelData.rows etc.)
+  db = fsDecode(db);
   if (db && Array.isArray(db.campaigns)) {
     campaigns = db.campaigns.map(c => normalizeCampaign(c));
   }
@@ -2204,7 +2240,7 @@ async function fbLoadDB() {
   } catch(e) { /* doc may not exist or be denied — fall through */ }
   const qs = await fbDb.collection('campaigns')
     .where('clientEmail', '==', currentUserEmail).get();
-  const camps = qs.docs.map(d => d.data().data).filter(Boolean);
+  const camps = qs.docs.map(d => fsDecode(d.data().data)).filter(Boolean);
   if (!myMember && !camps.length) return null;
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -2233,7 +2269,7 @@ function fbSubscribeDB() {
     fbDbUnsub = fbDb.collection('campaigns')
       .where('clientEmail', '==', currentUserEmail)
       .onSnapshot(qs => {
-        const camps = qs.docs.map(d => d.data().data).filter(Boolean);
+        const camps = qs.docs.map(d => fsDecode(d.data().data)).filter(Boolean);
         onUpdate({
           schemaVersion: SCHEMA_VERSION,
           campaigns: camps,
