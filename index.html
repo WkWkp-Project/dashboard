@@ -2033,7 +2033,8 @@ function scheduleSave() {
   pendingChanges = true;
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
-  if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
+  const haveFbUser = !!(fbAuth && fbAuth.currentUser);
+  if (!accessToken && !haveFbUser) { setSaveStatus('offline', 'Not signed in'); return; }
   // Block uploads until the first sync finished. Without this, a logAction
   // that runs during the login flow (or any pre-sync activity) starts a 2.5s
   // timer that fires before the Drive read finishes — uploading the empty
@@ -2250,7 +2251,11 @@ function fbSubscribeDB() {
 let _consecutiveSaveFailures = 0;
 async function saveToDrive() {
   if (isSaving) return;
-  if (!accessToken) { setSaveStatus('offline', 'Not signed in'); return; }
+  // Firestore writes only need fbAuth, not the Drive access_token. Allow the
+  // save through when we have a Firebase user even if accessToken is null
+  // (e.g. right after a page reload before reauth).
+  const haveFbUser = !!(fbAuth && fbAuth.currentUser);
+  if (!accessToken && !haveFbUser) { setSaveStatus('offline', 'Not signed in'); return; }
   // Last-line defense against the login-race: if we haven't successfully
   // read Drive yet, do NOT upload — we'd be writing the in-memory initial
   // state on top of the real shared DB. scheduleSave already guards this,
@@ -3544,7 +3549,7 @@ function openEditMember(email) {
 
 function closeAddMemberModal() { document.getElementById('addMemberModal').classList.remove('show'); }
 
-function saveNewMember() {
+async function saveNewMember() {
   const emailRaw = document.getElementById('newMemberEmail').value.trim().toLowerCase();
   const name = document.getElementById('newMemberName').value.trim();
   const driveUrl = document.getElementById('newMemberDriveUrl').value.trim();
@@ -3560,12 +3565,30 @@ function saveNewMember() {
       createdBy: currentUserName()
     });
   }
+  const wasEditing = !!editingMemberEmail;
   closeAddMemberModal();
-  logAction('MEMBER', `${editingMemberEmail ? 'Updated' : 'Added'} member: ${emailRaw}`);
-  scheduleSave();
+  logAction('MEMBER', `${wasEditing ? 'Updated' : 'Added'} member: ${emailRaw}`);
   if (!currentMemberEmail) currentMemberEmail = emailRaw;
   renderEverything();
-  showToast('✓ Saved member: ' + emailRaw, 'ok');
+  // Immediate save — don't wait for the 2.5s debounce. If we wait and the
+  // user reloads in between, the new member is lost (data only in memory).
+  try {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    setSaveStatus('saving', 'Saving member...');
+    await fbSaveDB();
+    pendingChanges = false;
+    lastSaveTime = new Date();
+    setSaveStatus('saved', 'Member saved');
+    showToast('✓ Saved member: ' + emailRaw, 'ok');
+  } catch(e) {
+    console.error('Save member failed:', e);
+    setSaveStatus('error', 'Save failed · ' + (e.message || 'unknown'));
+    showToast('❌ เซฟไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+    // Roll back local state so what's on screen matches Firestore
+    if (!wasEditing) members = members.filter(m => m.email !== emailRaw);
+    if (currentMemberEmail === emailRaw) currentMemberEmail = null;
+    renderEverything();
+  }
 }
 
 function confirmDeleteMember() {
@@ -3575,13 +3598,24 @@ function confirmDeleteMember() {
     showToast(`Member นี้ยังมี ${camps.length} แคมเปญ — ลบ/ย้ายแคมก่อน`, 'warn');
     return;
   }
-  showConfirm('Remove member?', `ลบ ${editingMemberEmail} ออกจากรายการ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร)`, () => {
-    members = members.filter(m => m.email !== editingMemberEmail);
-    if (currentMemberEmail === editingMemberEmail) currentMemberEmail = null;
+  const toRemove = editingMemberEmail;
+  showConfirm('Remove member?', `ลบ ${toRemove} ออกจากรายการ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร)`, async () => {
+    members = members.filter(m => m.email !== toRemove);
+    if (currentMemberEmail === toRemove) currentMemberEmail = null;
     closeAddMemberModal();
-    logAction('MEMBER', `Removed member: ${editingMemberEmail}`);
-    scheduleSave();
+    logAction('MEMBER', `Removed member: ${toRemove}`);
     renderEverything();
+    try {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      await fbSaveDB();
+      // Also delete the member doc itself (fbSaveDB only writes upserts)
+      if (fbDb) { try { await fbDb.collection('members').doc(toRemove).delete(); } catch(e) { console.warn('member doc delete:', e); } }
+      pendingChanges = false;
+      setSaveStatus('saved', 'Member removed');
+      showToast('✓ Removed', 'ok');
+    } catch(e) {
+      showToast('❌ Remove ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+    }
   });
 }
 
