@@ -1,6 +1,38 @@
 # Wakuwaku Studio — Production Dashboard
 
-Content production dashboard with Google Drive sync, handoff bundles, and audit logging.
+Content production dashboard. **JSON data → Firestore** (wkwkp holds master for handoff). **Asset files (รูป/วิดีโอ) → Google Drive**. Per-campaign member access for clients.
+
+---
+
+## 🔥 Firebase one-time setup
+
+The Firebase config is already wired in `index.html`. You only need to enable the services in Firebase Console:
+
+### 1. Enable Google Sign-In
+
+Firebase Console → **Authentication → Sign-in method → Google → Enable**.
+Under **Authorized domains**, add the domain you host from (e.g. `wkwkp-project.github.io` and `localhost` for testing).
+
+> **Important — use the same OAuth client for Drive token reuse (optional):**
+> Authentication → Sign-in method → Google → **Web SDK configuration** → set Web client ID to `165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com`. This lets the existing Drive OAuth consent carry over. If you skip this, login still works but Drive uploads may require re-consent the first time.
+
+### 2. Enable Firestore
+
+Firebase Console → **Firestore Database → Create database** → Production mode → location `asia-southeast1`.
+
+### 3. Publish security rules
+
+Firebase Console → **Firestore Database → Rules** → paste the contents of [`firestore.rules`](./firestore.rules) → **Publish**.
+
+The rules enforce:
+- `@wakuwaku.co.th` emails = **admin** (read/write everything).
+- Other emails = read-only access to campaigns they are listed in (`members[]`).
+- Edit the `wakuwaku.co.th` domain in `firestore.rules` if your team uses a different one.
+
+### 4. Add members to a campaign
+
+Open the campaign → **Edit Info** → **Members** field → one email per line → Save.
+The campaign auto-syncs to Firestore. That email can now sign in and will see only this campaign.
 
 **Live demo:** _Add your GitHub Pages URL here after deployment_
 

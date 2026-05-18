@@ -13,6 +13,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- Firebase (compat SDK, no bundler needed) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 
 <style>
   :root {
@@ -1211,6 +1215,12 @@
       </div>
 
       <div class="input-group">
+        <label>🔐 Members <small class="hint-label">(อีเมลที่ดูแคมเปญนี้ได้ · บรรทัดละ 1 อีเมล)</small></label>
+        <textarea id="editMembers" rows="3" placeholder="client@brand.com&#10;reviewer@brand.com"></textarea>
+        <small class="hint">อีเมล <code>@wakuwaku.co.th</code> เป็น admin เห็นทุกแคมเปญอยู่แล้ว · อีเมลที่ใส่ที่นี่จะเห็นเฉพาะแคมเปญนี้ (read-only)</small>
+      </div>
+
+      <div class="input-group">
         <label>📁 Campaign Folder URL <small class="hint-label">(ใน Hub folder)</small></label>
         <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
           <input type="url" id="editDriveFolderUrl" placeholder="https://drive.google.com/drive/folders/..." />
@@ -1376,6 +1386,29 @@ const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com
 const SAVE_DEBOUNCE_MS = 2500;
 const DB_FILENAME = 'wakuwaku_database_v4.json';
 const SCHEMA_VERSION = 4;
+
+// ============================================================================
+// FIREBASE
+// JSON ทั้งหมดเก็บที่ Firestore (wkwkp = admin). Asset files ยังขึ้น Drive ตามเดิม.
+// ============================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyB-FTwBeYHv8I_IxgozAiYeNOrlwfbczx8",
+  authDomain: "wkwkp-project.firebaseapp.com",
+  projectId: "wkwkp-project",
+  storageBucket: "wkwkp-project.firebasestorage.app",
+  messagingSenderId: "956822346063",
+  appId: "1:956822346063:web:58e035a01fda8bc7cd4d3a"
+};
+const ADMIN_EMAIL_DOMAIN = 'wakuwaku.co.th'; // อีเมล @wakuwaku.co.th = admin
+let fbApp = null, fbAuth = null, fbDb = null;
+try {
+  fbApp = firebase.initializeApp(firebaseConfig);
+  fbAuth = firebase.auth();
+  fbDb = firebase.firestore();
+} catch(e) { console.error('Firebase init failed:', e); }
+let currentUserEmail = '';
+let isAdmin = false;
+let fbDbUnsub = null;
 
 // ============================================================================
 // STATE
@@ -1561,17 +1594,49 @@ function initGoogleAuth() {
 let refreshTimer = null;
 let _isInitialLogin = false;
 function refreshToken() {
-  if (!tokenClient || isOfflineMode) return;
-  // Silent refresh — no popup
-  tokenClient.requestAccessToken({ prompt: '' });
+  if (!fbAuth || !fbAuth.currentUser || isOfflineMode) return;
+  // Firebase doesn't auto-refresh Google access tokens; reauth via popup.
+  const provider = new firebase.auth.GoogleAuthProvider();
+  SCOPES.split(' ').forEach(s => provider.addScope(s));
+  fbAuth.currentUser.reauthenticateWithPopup(provider)
+    .then(result => {
+      const t = result.credential && result.credential.accessToken;
+      if (t) {
+        accessToken = t;
+        if (_tokenRefreshInFlight) _drainTokenWaiters(t);
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => refreshToken(), 50 * 60 * 1000);
+        setSaveStatus('idle', 'Connected');
+      }
+    })
+    .catch(err => { _drainTokenWaiters(null); console.warn('reauth failed:', err); });
 }
 function handleRealGoogleLogin() {
-  if (CLIENT_ID.includes('YOUR_CLIENT_ID')) { showToast('CLIENT_ID not configured. Use Offline Import instead.', 'err'); return; }
-  if (!tokenClient) { showToast('Google services not loaded yet.', 'warn'); return; }
+  // Firebase popup (single sign-in): gives us a Firebase user (for Firestore
+  // access) + a Google access token (for Drive uploads of assets).
+  if (!fbAuth) { showToast('Firebase ยังโหลดไม่เสร็จ', 'warn'); return; }
+  const provider = new firebase.auth.GoogleAuthProvider();
+  SCOPES.split(' ').forEach(s => provider.addScope(s));
+  provider.setCustomParameters({ prompt: 'select_account' });
   _isInitialLogin = true;
-  // No prompt arg → GIS shows the account picker and re-asks consent ONLY
-  // if the required scopes aren't already granted (avoids re-consenting every login).
-  tokenClient.requestAccessToken();
+  fbAuth.signInWithPopup(provider).then(result => {
+    accessToken = (result.credential && result.credential.accessToken) || null;
+    if (!accessToken) { showToast('Login failed: no Drive token returned', 'err'); _isInitialLogin = false; return; }
+    // GIS silent refresh still works because Firebase Auth's Google provider
+    // uses the same OAuth consent. Pre-warm tokenClient for later 401 refresh.
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => refreshToken(), 50 * 60 * 1000);
+    if (_tokenRefreshInFlight) _drainTokenWaiters(accessToken);
+    _isInitialLogin = false;
+    onLoginSuccess();
+  }).catch(err => {
+    _isInitialLogin = false;
+    _drainTokenWaiters(null);
+    console.warn('Firebase signin error:', err);
+    if (err && err.code === 'auth/popup-closed-by-user') return;
+    showToast('Login failed: ' + (err.message || err.code || 'unknown'), 'err');
+    setSaveStatus('error', 'Sign-in failed · click to retry');
+  });
 }
 
 async function onLoginSuccess() {
@@ -1582,15 +1647,28 @@ async function onLoginSuccess() {
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
   setSaveStatus('idle', 'Connected');
+  // 0) Firebase user → email + role gate
+  const fbUser = fbAuth && fbAuth.currentUser;
+  currentUserEmail = ((fbUser && fbUser.email) || '').toLowerCase();
+  isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
+  if (!isAdmin) {
+    userRole = 'client';
+    document.body.classList.add('client-mode');
+  }
   // 1) Profile — failure here must NOT block DB loading
-  let userEmail = '';
+  let userEmail = currentUserEmail;
   try {
     const userResp = await authFetch('https://www.googleapis.com/oauth2/v3/userinfo');
     if (userResp.ok) {
       const user = await userResp.json();
-      userEmail = user.email || '';
-      const name = user.name || user.email || 'Wakuwaku Internal';
-      const initial = (user.given_name || name)[0] || 'W';
+      userEmail = user.email || userEmail;
+      if (!currentUserEmail && userEmail) {
+        currentUserEmail = userEmail.toLowerCase();
+        isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
+        if (!isAdmin) { userRole = 'client'; document.body.classList.add('client-mode'); }
+      }
+      const name = user.name || user.email || (isAdmin ? 'Wakuwaku Internal' : 'Member');
+      const initial = (user.given_name || name)[0] || (isAdmin ? 'W' : 'M');
       document.getElementById('sb-name').textContent = name;
       document.getElementById('sb-avatar').textContent = initial;
       document.getElementById('tb-name').textContent = name;
@@ -1614,7 +1692,7 @@ async function onLoginSuccess() {
   // 2b) Announce presence on the shared DB so other Wkwk teammates see us
   // in their sidebar. Done after sync so the join log mentions the right
   // databaseFileId.
-  joinSharedSession('internal', userEmail);
+  if (isAdmin) joinSharedSession('internal', userEmail);
   // 3) If Drive had no DB but a local backup exists, offer to restore it
   maybeOfferLocalRestore();
   // 4) Pending follow-ups
@@ -1631,11 +1709,10 @@ function loginWithToken() {
   const token = (document.getElementById('accessTokenInput').value || '').trim();
   if (!token) { showToast('กรอก token ก่อน', 'warn'); return; }
   if (CLIENT_ID.includes('YOUR_CLIENT_ID')) { showToast('CLIENT_ID ยังไม่ตั้งค่า — ใช้ไฟล์ bundle แทน', 'err'); return; }
-  if (!tokenClient) { showToast('Google services ยังโหลดไม่เสร็จ', 'warn'); return; }
+  if (!fbAuth) { showToast('Firebase ยังโหลดไม่เสร็จ', 'warn'); return; }
   _pendingTokenLogin = token;
-  _isInitialLogin = true;
   showToast('กำลังเข้าระบบผ่าน Google เพื่อตรวจสอบ token...');
-  tokenClient.requestAccessToken();
+  handleRealGoogleLogin();
 }
 function applyTokenLogin(token) {
   const match = (accessTokens || []).find(x => x.token === token);
@@ -1768,6 +1845,37 @@ function clearSession() {
 }
 
 async function tryRestoreSession() {
+  // Firebase Auth restores its session automatically. If currentUser is set
+  // we can render the app even without a Drive access_token; member views
+  // don't need Drive, and admins will be re-prompted on the next asset upload.
+  try {
+    await new Promise(res => {
+      if (!fbAuth) return res();
+      const off = fbAuth.onAuthStateChanged(() => { off(); res(); });
+      setTimeout(res, 1500);
+    });
+    if (fbAuth && fbAuth.currentUser) {
+      currentUserEmail = (fbAuth.currentUser.email || '').toLowerCase();
+      isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
+      if (!isAdmin) { userRole = 'client'; document.body.classList.add('client-mode'); }
+      else userRole = 'internal';
+      document.getElementById('authOverlay').style.display = 'none';
+      document.getElementById('mainApp').style.display = 'grid';
+      const name = fbAuth.currentUser.displayName || currentUserEmail;
+      const initial = (name || '?')[0] || '?';
+      document.getElementById('sb-name').textContent = name;
+      document.getElementById('sb-avatar').textContent = initial;
+      document.getElementById('tb-name').textContent = name;
+      document.getElementById('tb-avatar').textContent = initial;
+      document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
+      document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
+      try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
+      if (isAdmin) joinSharedSession('internal', currentUserEmail);
+      setSaveStatus('idle', 'Connected');
+      showToast('Session restored');
+      return true;
+    }
+  } catch(e) { console.warn('firebase restore failed:', e); }
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
     if (!raw) return false;
@@ -1965,6 +2073,95 @@ function fmtBytes(n) {
 // Drive multipart limit is ~5 MB. Use resumable above that.
 const DRIVE_MULTIPART_LIMIT = 4 * 1024 * 1024;
 
+// ============================================================================
+// FIRESTORE ADAPTER
+// `dbs/main`    — admin-only master doc (wkwkp holds for handoff)
+// `campaigns/{id}` — per-campaign mirror; members[] gates read access
+// ============================================================================
+function normalizeMembers(c) {
+  const arr = Array.isArray(c.members) ? c.members : [];
+  return arr.map(e => String(e || '').trim().toLowerCase()).filter(Boolean);
+}
+
+async function fbSaveDB() {
+  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Firestore not ready');
+  if (!isAdmin) return; // members are read-only
+  const data = buildDatabasePayload();
+  await fbDb.collection('dbs').doc('main').set(data);
+  // Mirror each campaign so members can read just their own.
+  const batch = fbDb.batch();
+  for (const c of data.campaigns) {
+    const members = normalizeMembers(c);
+    batch.set(fbDb.collection('campaigns').doc(c.id), {
+      members,
+      data: c,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
+  await batch.commit();
+}
+
+function applyFirestorePayload(db, opts) {
+  const silent = !!(opts && opts.silent);
+  if (db && Array.isArray(db.campaigns) && db.campaigns.length > 0) {
+    campaigns = db.campaigns.map(c => normalizeCampaign(c));
+    const keepLocal = silent && currentCampaignId && campaigns.find(c => c.id === currentCampaignId);
+    if (!keepLocal) {
+      currentCampaignId = db.currentCampaignId && campaigns.find(c=>c.id===db.currentCampaignId) ? db.currentCampaignId : campaigns[0].id;
+    }
+  }
+  if (db && db.accessTokens) accessTokens = db.accessTokens;
+  if (db && db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
+  if (db && Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
+  if (db && Array.isArray(db.presence)) presence = db.presence;
+  lastSaveTime = db && db.savedAt ? new Date(db.savedAt) : null;
+}
+
+async function fbLoadDB() {
+  if (!fbDb) throw new Error('Firestore not ready');
+  if (isAdmin) {
+    const snap = await fbDb.collection('dbs').doc('main').get();
+    return snap.exists ? snap.data() : null;
+  } else {
+    // Member view: only campaigns they're listed in
+    const qs = await fbDb.collection('campaigns')
+      .where('members', 'array-contains', currentUserEmail).get();
+    const camps = qs.docs.map(d => d.data().data).filter(Boolean);
+    if (!camps.length) return null;
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      savedAt: new Date().toISOString(),
+      campaigns: camps,
+      currentCampaignId: camps[0].id,
+      accessTokens: [], hub: {}, manualBackupHistory: [], presence: []
+    };
+  }
+}
+
+function fbSubscribeDB() {
+  if (!fbDb) return;
+  if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
+  const onUpdate = (db) => {
+    // Don't clobber unsaved local edits — wait until they're flushed
+    if (isSaving || saveTimer || pendingChanges) return;
+    applyFirestorePayload(db, { silent: true });
+    renderEverything();
+    renderPresenceSidebar();
+  };
+  if (isAdmin) {
+    fbDbUnsub = fbDb.collection('dbs').doc('main').onSnapshot(snap => {
+      if (snap.exists) onUpdate(snap.data());
+    }, err => console.warn('Firestore listener error:', err));
+  } else {
+    fbDbUnsub = fbDb.collection('campaigns')
+      .where('members', 'array-contains', currentUserEmail)
+      .onSnapshot(qs => {
+        const camps = qs.docs.map(d => d.data().data).filter(Boolean);
+        onUpdate({ schemaVersion: SCHEMA_VERSION, campaigns: camps, currentCampaignId: camps[0] && camps[0].id });
+      }, err => console.warn('Firestore listener error:', err));
+  }
+}
+
 let _consecutiveSaveFailures = 0;
 async function saveToDrive() {
   if (isSaving) return;
@@ -1977,21 +2174,14 @@ async function saveToDrive() {
   isSaving = true;
   setSaveStatus('saving', 'Saving...');
   try {
-    const dbData = buildDatabasePayload();
-    const jsonBody = JSON.stringify(dbData);
-    const metadata = dbFileMetadata();
-
-    let result;
-    if (jsonBody.length > DRIVE_MULTIPART_LIMIT) {
-      setSaveStatus('saving', `Uploading ${(jsonBody.length/1048576).toFixed(1)} MB...`);
-      result = await driveResumableUpload(metadata, jsonBody);
-    } else {
-      result = await driveMultipartUpload(metadata, jsonBody);
+    if (!isAdmin) {
+      // Members can't write the master DB; they only see their campaigns read-only
+      pendingChanges = false;
+      setSaveStatus('saved', 'Read-only (member access)');
+      return;
     }
-
-    const wasNewFile = result && result.id && !databaseFileId;
-    if (wasNewFile) databaseFileId = result.id;
-    if (result && result.modifiedTime) remoteModifiedTime = result.modifiedTime;
+    await fbSaveDB();
+    databaseFileId = 'firestore:dbs/main';
     lastSaveTime = new Date();
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
@@ -2001,8 +2191,6 @@ async function saveToDrive() {
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
     persistLocalBackup();
-    // Make sure the file lives inside the configured Hub folder
-    if (hub && hub.driveFolderId) ensureDBInHubFolder(wasNewFile);
     if (typeof renderDataHub === 'function' && document.getElementById('view-hub')?.classList.contains('active')) renderDataHub();
   } catch(e) {
     console.error('Save error:', e);
@@ -2398,8 +2586,45 @@ async function syncDatabaseFromDrive(opts) {
   const silent = !!(opts && opts.silent);
   if (!silent) setSaveStatus('saving', 'Loading...');
   try {
-    // Ask for parents + ownedByMe so we can pick the canonical team DB when
-    // several copies exist (each first-time login creates one in My Drive).
+    const db = await fbLoadDB();
+    if (!db) {
+      if (!isAdmin) {
+        // Member with no shared campaigns: clear the seed campaign so they don't
+        // see dummy data they can't save.
+        campaigns = [];
+        currentCampaignId = null;
+      }
+      setSaveStatus('idle', isAdmin ? 'New project · ready to start' : 'No campaigns shared with you yet');
+      renderEverything();
+      _readyToSave = true;
+      if (pendingChanges && isAdmin) scheduleSave();
+      fbSubscribeDB();
+      return;
+    }
+    applyFirestorePayload(db, { silent });
+    databaseFileId = 'firestore:dbs/main';
+    renderEverything();
+    if (presenceKey) upsertPresence();
+    renderPresenceSidebar();
+    updateDbIdFooter();
+    setSaveStatus('saved', silent ? 'Synced' : 'Loaded from cloud');
+    if (lastSaveTime) {
+      const m = document.getElementById('meta-saved');
+      if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }
+    if (!silent) showToast(`Loaded ${campaigns.length} campaign(s)`);
+    _readyToSave = true;
+    if (pendingChanges) scheduleSave();
+    fbSubscribeDB();
+    return;
+  } catch (err) {
+    console.error('Firestore sync error:', err);
+    if (!silent) setSaveStatus('error', 'Load failed · ' + (err.message || 'unknown'));
+    return;
+  }
+  // ----- legacy Drive path (unused, kept for reference) -----
+  /* eslint-disable no-unreachable */
+  try {
     const searchResp = await authFetch(`https://www.googleapis.com/drive/v3/files?q=name='${DB_FILENAME}' and trashed=false&fields=files(id,modifiedTime,parents,ownedByMe)&orderBy=modifiedTime desc`);
     const searchResult = await searchResp.json();
     const files = (searchResult.files || []);
@@ -2554,9 +2779,8 @@ async function pollRemoteChanges() {
 }
 
 function startRemotePolling() {
-  if (remotePollTimer) return;
-  if (userRole === 'client' || isOfflineMode || !accessToken) return;
-  remotePollTimer = setInterval(pollRemoteChanges, REMOTE_POLL_MS);
+  // Replaced by Firestore onSnapshot (see fbSubscribeDB). No-op now.
+  return;
 }
 function stopRemotePolling() {
   if (remotePollTimer) { clearInterval(remotePollTimer); remotePollTimer = null; }
@@ -2662,8 +2886,13 @@ function updateDbIdFooter() {
   if (!el) return;
   if (!databaseFileId || userRole === 'client' || isOfflineMode) { el.style.display = 'none'; return; }
   el.style.display = '';
-  el.textContent = 'DB ' + databaseFileId.slice(0, 10) + '…';
-  el.title = 'Shared database file id: ' + databaseFileId;
+  if (databaseFileId.startsWith('firestore:')) {
+    el.textContent = 'Firestore · ' + firebaseConfig.projectId;
+    el.title = 'JSON stored in Firestore project ' + firebaseConfig.projectId;
+  } else {
+    el.textContent = 'DB ' + databaseFileId.slice(0, 10) + '…';
+    el.title = 'Shared database file id: ' + databaseFileId;
+  }
 }
 
 function normalizeCampaign(c) {
@@ -2692,7 +2921,9 @@ function normalizeCampaign(c) {
     // working — they fall back to the Hub-level wakuwaku-media/ folder.
     driveFolderUrl: c.driveFolderUrl || '',
     driveFolderId: c.driveFolderId || '',
-    mediaFolderId: c.mediaFolderId || ''
+    mediaFolderId: c.mediaFolderId || '',
+    // Member emails (lowercase) that can read this campaign in Firestore.
+    members: Array.isArray(c.members) ? c.members.map(e => String(e || '').trim().toLowerCase()).filter(Boolean) : []
   };
 }
 
@@ -3358,15 +3589,17 @@ function performLogout() {
   // block logout on the network.
   stopPresenceHeartbeat();
   stopRemotePolling();
+  if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (presenceKey && Array.isArray(presence)) {
     presence = presence.filter(p => p.key !== presenceKey);
-    if (accessToken && databaseFileId) { logAction('SYSTEM', `LOGOUT: ${currentUserName()}`); try { saveToDrive(); } catch(e) {} }
+    if (accessToken && isAdmin) { logAction('SYSTEM', `LOGOUT: ${currentUserName()}`); try { saveToDrive(); } catch(e) {} }
   }
   try {
     if (accessToken && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
       google.accounts.oauth2.revoke(accessToken, () => {});
     }
   } catch(e) { /* ignore */ }
+  try { if (fbAuth) fbAuth.signOut(); } catch(e) { /* ignore */ }
   clearSession();
   // NOTE: deliberately keep LOCAL_BACKUP_KEY so data survives logout and can
   // be offered for restore on next login.
@@ -4836,6 +5069,7 @@ function openEditModal() {
   document.getElementById('editEndISO').value = camp.endDate || '';
   document.getElementById('editDescription').value = camp.description || '';
   document.getElementById('editStakeholders').value = camp.stakeholders || '';
+  document.getElementById('editMembers').value = (Array.isArray(camp.members) ? camp.members : []).join('\n');
   document.getElementById('editTags').value = (camp.tags || []).join(', ');
   document.getElementById('editStatus').value = camp.status === 'handed-off' ? 'completed' : camp.status;
   document.getElementById('editDriveFolderUrl').value = camp.driveFolderUrl || '';
@@ -4882,6 +5116,8 @@ function saveCampaignInfo() {
   camp.endDate = document.getElementById('editEndISO').value;
   camp.description = document.getElementById('editDescription').value.trim();
   camp.stakeholders = document.getElementById('editStakeholders').value.trim();
+  camp.members = (document.getElementById('editMembers').value || '')
+    .split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   camp.tags = document.getElementById('editTags').value.split(',').map(s=>s.trim()).filter(Boolean);
   camp.status = document.getElementById('editStatus').value;
   // Per-campaign Drive folder. Parse the URL, store both URL and folder id.
