@@ -5556,15 +5556,53 @@ async function buildHandoffBundle() {
     folder.file('access-token.txt', `Wakuwaku Access Token\n=====================\n\nToken: ${bundleToken.token}\nFor: ${bundleToken.name}\nCampaign: ${camp.campaign}\nIssued: ${new Date().toLocaleString()}\n\nวิธีใช้:\n1. เปิด Wakuwaku Studio\n2. ลากไฟล์ ZIP นี้เข้า Quick Handoff Viewer\n3. กรอก token ด้านล่างถ้าระบบขอ\n`);
   }
 
+  // Inline media into a clone of the campaign so campaign-data.json is
+  // self-contained for clients (who can't reach Drive). We also drop the
+  // base64 into attachments/ for users who want standalone files. Both
+  // sources resolve from the same fetched dataUrl so we only download
+  // each Drive file once.
+  const campClone = JSON.parse(JSON.stringify(camp));
+  const attach = folder.folder('attachments');
+  let attachCount = 0;
+  let inlinedCount = 0;
+  for (let ai = 0; ai < camp.assets.length; ai++) {
+    const a = camp.assets[ai];
+    const liveList = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
+    const cloneAsset = campClone.assets[ai] || {};
+    if (!Array.isArray(cloneAsset.files)) cloneAsset.files = [];
+    for (let i = 0; i < liveList.length; i++) {
+      const f = liveList[i];
+      if (typeof exportProgress === 'function') exportProgress(`รวมไฟล์แนบ ${attachCount + 1}... (${f.name || 'file'})`);
+      let dataUrl = '';
+      try { dataUrl = await getFileDataUrl(f); } catch(e) { console.warn('handoff inline failed', f && f.name, e); }
+      if (!dataUrl) continue;
+      const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+      const b64 = m ? m[2] : null;
+      if (b64) {
+        attach.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, b64, { base64: true });
+        attachCount++;
+      }
+      // Inline so the client view renders the preview without Drive access.
+      const cloneFile = cloneAsset.files[i] || { ...f };
+      cloneFile.data = dataUrl;
+      cloneAsset.files[i] = cloneFile;
+      inlinedCount++;
+    }
+    // Legacy single-file path: mirror data into the clone too.
+    if (cloneAsset.fileData == null && a.fileData) cloneAsset.fileData = a.fileData;
+  }
+  if (attachCount === 0) attach.file('.placeholder', 'No file attachments in this campaign');
+
   folder.file('campaign-data.json', JSON.stringify({
     handoffMeta: {
       generatedAt: new Date().toISOString(),
       generatedBy: document.getElementById('sb-name').textContent,
       bundleVersion: '4.0',
       schemaVersion: SCHEMA_VERSION,
-      bundleToken: bundleToken ? bundleToken.token : null
+      bundleToken: bundleToken ? bundleToken.token : null,
+      inlinedMediaCount: inlinedCount
     },
-    campaign: camp,
+    campaign: campClone,
     members: [{
       email: (camp.clientEmail || '').toLowerCase(),
       name: camp.client || '',
@@ -5580,20 +5618,6 @@ async function buildHandoffBundle() {
   if (pdfDoc) folder.file('final-report.pdf', pdfDoc.output('blob'));
 
   folder.file('README.html', generateReadmeHTML(bundleToken));
-
-  // Attachments — fetches Drive-backed files so the bundle is self-contained
-  const attach = folder.folder('attachments');
-  let attachCount = 0;
-  for (const a of camp.assets) {
-    const list = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
-    for (let i = 0; i < list.length; i++) {
-      const f = list[i];
-      if (typeof exportProgress === 'function') exportProgress(`รวมไฟล์แนบ ${attachCount+1}... (${f.name||'file'})`);
-      const b64 = await fileToBase64(f);
-      if (b64) { attach.file(`${a.id}_${i+1}_${(f.name||'file').replace(/[^\w.\-]+/g,'_')}`, b64, { base64: true }); attachCount++; }
-    }
-  }
-  if (attachCount === 0) attach.file('.placeholder', 'No file attachments in this campaign');
 
   return zip;
 }
