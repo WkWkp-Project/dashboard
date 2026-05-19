@@ -1420,6 +1420,7 @@ const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com
 const SAVE_DEBOUNCE_MS = 2500;
 const DB_FILENAME = 'wakuwaku_database_v4.json';
 const CAMPAIGN_DB_FILENAME = 'wakuwaku_campaign.json';
+const MEMBER_MARKER_FILENAME = 'wakuwaku_member.json';
 const SCHEMA_VERSION = 4;
 
 // ============================================================================
@@ -2267,60 +2268,120 @@ function findCloudPayloadOffenders(value, path = '$', acc = []) {
   return acc;
 }
 
-async function legacyFbSaveDB() {
-  if (!fbDb || !fbAuth || !fbAuth.currentUser) throw new Error('Legacy Firestore not ready (no Firebase user)');
-  if (!isAdmin) return; // members are read-only
-  const raw = buildCloudSafePayload();
-  // We store the whole payload as a single JSON string. Firestore has many
-  // validation rules for nested data (no nested arrays, no reserved key
-  // patterns, no undefined values, etc.) that are easy to trip with rich
-  // app state (excelData.rows, snapshot blobs, ...). A stringified blob
-  // sidesteps all of them. The only top-level fields we keep raw are the
-  // ones that security rules need to inspect (clientEmail, email).
-  const masterJson = JSON.stringify(raw);
-  if (payloadContainsEmbeddedMedia(raw)) throw new Error('Cloud JSON payload still contains embedded base64 media');
-  assertCloudPayloadSize('dbs/main', masterJson);
-  try {
-    await fbDb.collection('dbs').doc('main').set({
-      json: masterJson,
-      savedAt: new Date().toISOString(),
-      schemaVersion: SCHEMA_VERSION,
-      sizeBytes: jsonByteLength(masterJson)
-    });
-  } catch(e) {
-    console.error('legacyFbSaveDB: dbs/main write failed:', e, '· json size:', masterJson.length);
-    throw new Error('dbs/main: ' + (e.message || e.code || 'unknown'));
+// Member identity now lives in a small marker file (wakuwaku_member.json) in
+// the customer's own Drive folder. Every admin who has access to that folder
+// sees the member via Drive search — no central hub required, no localStorage
+// dependence, so switching machines never loses the roster.
+
+function memberMarkerPayload(member) {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    type: 'wakuwaku-member',
+    savedAt: new Date().toISOString(),
+    member: {
+      email: (member.email || '').toLowerCase(),
+      name: member.name || '',
+      driveFolderId: member.driveFolderId || '',
+      driveFolderUrl: member.driveFolderUrl || '',
+      createdAt: member.createdAt || new Date().toISOString(),
+      createdBy: member.createdBy || ''
+    }
+  };
+}
+
+async function findMemberMarkerFile(folderId) {
+  if (!folderId) return null;
+  const q = encodeURIComponent(`name='${MEMBER_MARKER_FILENAME}' and '${folderId}' in parents and trashed=false`);
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,parents)&orderBy=modifiedTime desc`);
+  if (!r.ok) throw await driveError(r);
+  const j = await r.json();
+  return (j.files && j.files[0]) || null;
+}
+
+async function saveMemberMarkerToDrive(member) {
+  const folderId = member.driveFolderId || parseDriveFolderId(member.driveFolderUrl);
+  if (!folderId) throw new Error('Member ' + (member.email || '?') + ' ไม่มี Drive folder URL ที่ถูกต้อง');
+  member.driveFolderId = folderId;
+  const existing = await findMemberMarkerFile(folderId);
+  const metadata = { name: MEMBER_MARKER_FILENAME, mimeType: 'application/json' };
+  if (!existing) metadata.parents = [folderId];
+  const body = JSON.stringify(memberMarkerPayload(member), null, 2);
+  const res = await uploadJsonToDriveFile(existing && existing.id, metadata, body);
+  if (!res || !res.id) throw new Error('Drive marker save returned no file id');
+  member.markerFileId = res.id;
+  return res;
+}
+
+async function trashMemberMarkerInDrive(member) {
+  const folderId = member && (member.driveFolderId || parseDriveFolderId(member.driveFolderUrl));
+  if (!folderId) return false;
+  const existing = await findMemberMarkerFile(folderId).catch(() => null);
+  if (!existing) return false;
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${existing.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true })
+  });
+  if (!r.ok) throw await driveError(r);
+  return true;
+}
+
+async function shareDriveFolderWithUser(folderId, email, role) {
+  if (!folderId || !email) return null;
+  const body = { role: role || 'reader', type: 'user', emailAddress: email };
+  const url = `https://www.googleapis.com/drive/v3/files/${folderId}/permissions?sendNotificationEmail=true&supportsAllDrives=true`;
+  const r = await authFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (r.ok) return await r.json();
+  // Duplicate permission is fine — treat as success.
+  const errText = await r.text().catch(() => '');
+  if (/already exists|duplicate/i.test(errText)) return { duplicate: true };
+  const err = new Error(`Drive share ${role || 'reader'} ${email} failed: ${r.status} ${errText.slice(0, 200)}`);
+  err.status = r.status;
+  throw err;
+}
+
+async function revokeDriveFolderShare(folderId, email) {
+  if (!folderId || !email) return false;
+  const lr = await authFetch(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions?fields=permissions(id,emailAddress,role)&supportsAllDrives=true`);
+  if (!lr.ok) return false;
+  const lj = await lr.json();
+  const target = (lj.permissions || []).find(p => (p.emailAddress || '').toLowerCase() === email.toLowerCase());
+  if (!target) return false;
+  const dr = await authFetch(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions/${target.id}?supportsAllDrives=true`, { method: 'DELETE' });
+  return dr.ok;
+}
+
+async function loadMembersFromDrive() {
+  if (!accessToken) return [];
+  const q = encodeURIComponent(`name='${MEMBER_MARKER_FILENAME}' and trashed=false`);
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,parents)&orderBy=modifiedTime desc&pageSize=1000`);
+  if (!r.ok) throw await driveError(r);
+  const j = await r.json();
+  const out = [];
+  for (const f of (j.files || [])) {
+    try {
+      const cr = await authFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+      if (!cr.ok) continue;
+      const data = await cr.json();
+      const m = data && data.member;
+      if (!m || !m.email) continue;
+      const folderId = m.driveFolderId || (Array.isArray(f.parents) && f.parents[0]) || '';
+      out.push({
+        email: m.email.toLowerCase(),
+        name: m.name || '',
+        driveFolderId: folderId,
+        driveFolderUrl: m.driveFolderUrl || (folderId ? `https://drive.google.com/drive/folders/${folderId}` : ''),
+        createdAt: m.createdAt || '',
+        createdBy: m.createdBy || '',
+        markerFileId: f.id
+      });
+    } catch(e) { console.warn('member marker load failed:', f.id, e); }
   }
-  // Mirror docs so non-admin members can read only their own slice.
-  const batch = fbDb.batch();
-  for (const m of (raw.members || [])) {
-    const e = (m && m.email || '').toLowerCase();
-    if (!e) continue;
-    batch.set(fbDb.collection('members').doc(e), {
-      email: e,
-      name: m.name || '',
-      driveFolderUrl: m.driveFolderUrl || '',
-      createdAt: m.createdAt || new Date().toISOString(),
-      createdBy: m.createdBy || ''
-    });
-  }
-  for (const c of (raw.campaigns || [])) {
-    const clientEmail = (c.clientEmail || '').toLowerCase();
-    if (!c.id) continue;
-    const campaignJson = JSON.stringify(c);
-    assertCloudPayloadSize(`campaigns/${c.id}`, campaignJson);
-    batch.set(fbDb.collection('campaigns').doc(c.id), {
-      clientEmail,
-      json: campaignJson,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  }
-  try {
-    await batch.commit();
-  } catch(e) {
-    console.error('legacyFbSaveDB: batch.commit failed:', e);
-    throw new Error('mirror batch: ' + (e.message || e.code || 'unknown'));
-  }
+  return out;
 }
 
 function applyCloudPayload(db, opts) {
@@ -2364,65 +2425,6 @@ function applyCloudPayload(db, opts) {
 function _parseJsonField(s, fallback) {
   if (typeof s !== 'string') return fallback;
   try { return JSON.parse(s); } catch(e) { return fallback; }
-}
-
-async function legacyFbLoadDB() {
-  if (!fbDb) throw new Error('Legacy Firestore not ready');
-  if (isAdmin) {
-    const snap = await fbDb.collection('dbs').doc('main').get();
-    if (!snap.exists) return null;
-    const d = snap.data();
-    return _parseJsonField(d.json, null);
-  }
-  // Member view: read own member doc + campaigns where clientEmail == self
-  let myMember = null;
-  try {
-    const meSnap = await fbDb.collection('members').doc(currentUserEmail).get();
-    if (meSnap.exists) myMember = meSnap.data();
-  } catch(e) { /* doc may not exist or be denied — fall through */ }
-  const qs = await fbDb.collection('campaigns')
-    .where('clientEmail', '==', currentUserEmail).get();
-  const camps = qs.docs.map(d => _parseJsonField(d.data().json, null)).filter(Boolean);
-  if (!myMember && !camps.length) return null;
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    savedAt: new Date().toISOString(),
-    campaigns: camps,
-    members: myMember ? [myMember] : [{ email: currentUserEmail, name: '', driveFolderUrl: '' }],
-    currentCampaignId: camps[0] && camps[0].id,
-    accessTokens: [], hub: {}, manualBackupHistory: [], presence: []
-  };
-}
-
-function legacyFbSubscribeDB() {
-  if (!fbDb) return;
-  if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
-  const onUpdate = (db) => {
-    if (isSaving || saveTimer || pendingChanges) return; // don't clobber local edits
-    applyCloudPayload(db, { silent: true });
-    renderEverything();
-    renderPresenceSidebar();
-  };
-  if (isAdmin) {
-    fbDbUnsub = fbDb.collection('dbs').doc('main').onSnapshot(snap => {
-      if (!snap.exists) return;
-      const d = snap.data();
-      const parsed = _parseJsonField(d.json, null);
-      if (parsed) onUpdate(parsed);
-    }, err => console.warn('Legacy listener error:', err));
-  } else {
-    fbDbUnsub = fbDb.collection('campaigns')
-      .where('clientEmail', '==', currentUserEmail)
-      .onSnapshot(qs => {
-        const camps = qs.docs.map(d => _parseJsonField(d.data().json, null)).filter(Boolean);
-        onUpdate({
-          schemaVersion: SCHEMA_VERSION,
-          campaigns: camps,
-          members: [{ email: currentUserEmail, name: '', driveFolderUrl: '' }],
-          currentCampaignId: camps[0] && camps[0].id
-        });
-      }, err => console.warn('Legacy listener error:', err));
-  }
 }
 
 let _consecutiveSaveFailures = 0;
@@ -3014,14 +3016,18 @@ async function loadCampaignJsonFilesFromDrive() {
   return loaded;
 }
 
-function deriveMembersFromCampaigns(camps) {
+// Markers are the source of truth for who is a member. Campaigns only add
+// fallback metadata (display name, folder URL) for legacy members that don't
+// yet have a marker file.
+function deriveMembersFromCampaigns(camps, baseline) {
   const byEmail = new Map();
-  (members || []).forEach(m => { if (m.email) byEmail.set(m.email.toLowerCase(), { ...m, email:m.email.toLowerCase() }); });
+  (baseline || []).forEach(m => { if (m && m.email) byEmail.set(m.email.toLowerCase(), { ...m, email: m.email.toLowerCase() }); });
   (camps || []).forEach(c => {
     const email = (c.clientEmail || '').toLowerCase();
     if (!email) return;
-    const cur = byEmail.get(email) || { email, name:'', driveFolderUrl:'', createdAt:'', createdBy:'' };
+    const cur = byEmail.get(email) || { email, name:'', driveFolderUrl:'', driveFolderId:'', createdAt:'', createdBy:'' };
     if (!cur.driveFolderUrl && c.driveFolderUrl) cur.driveFolderUrl = c.driveFolderUrl;
+    if (!cur.driveFolderId && c.driveFolderId) cur.driveFolderId = c.driveFolderId;
     if (!cur.name && c.client) cur.name = c.client;
     byEmail.set(email, cur);
   });
@@ -3075,16 +3081,18 @@ async function syncDatabaseFromDrive(opts) {
   if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
     const loaded = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
+    const markerMembers = accessToken ? await loadMembersFromDrive().catch(e => { console.warn('loadMembersFromDrive failed:', e); return []; }) : [];
     const visible = isAdmin ? loaded : loaded.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
-    if (visible.length) {
+    const visibleMarkers = isAdmin ? markerMembers : markerMembers.filter(m => m.email === currentUserEmail);
+    if (visible.length || visibleMarkers.length) {
       campaigns = visible.map(normalizeCampaign);
-      members = deriveMembersFromCampaigns(campaigns);
+      members = deriveMembersFromCampaigns(campaigns, visibleMarkers);
       if (!isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
       else if (currentMemberEmail && !members.find(m => m.email === currentMemberEmail)) currentMemberEmail = null;
       if (!currentMemberEmail && !isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
       const keepLocal = silent && currentCampaignId && campaigns.find(c => c.id === currentCampaignId);
-      if (!keepLocal) currentCampaignId = (currentCampaignId && campaigns.find(c => c.id === currentCampaignId)) ? currentCampaignId : campaigns[0].id;
-      databaseFileId = campaigns[0].driveDbFileId || 'drive:campaign-json';
+      if (!keepLocal) currentCampaignId = (currentCampaignId && campaigns.find(c => c.id === currentCampaignId)) ? currentCampaignId : (campaigns[0] ? campaigns[0].id : null);
+      databaseFileId = (campaigns[0] && campaigns[0].driveDbFileId) || (campaigns.length ? 'drive:campaign-json' : null);
       lastSaveTime = campaigns.reduce((latest, c) => {
         const d = c.driveDbModifiedTime ? new Date(c.driveDbModifiedTime) : null;
         return d && (!latest || d > latest) ? d : latest;
@@ -3094,7 +3102,7 @@ async function syncDatabaseFromDrive(opts) {
       updateDbIdFooter();
       setSaveStatus('saved', silent ? 'Synced from Drive' : 'Loaded campaign JSON from Drive');
       if (lastSaveTime) { const m = document.getElementById('meta-saved'); if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }); }
-      if (!silent) showToast(`Loaded ${campaigns.length} campaign JSON file(s) from Drive`);
+      if (!silent) showToast(`Loaded ${campaigns.length} campaign · ${members.length} member(s) from Drive`);
     } else {
       if (!isAdmin) { campaigns = []; currentCampaignId = null; }
       setSaveStatus('idle', isAdmin ? 'No Drive campaign JSON yet' : 'No campaigns shared with you yet');
@@ -3949,39 +3957,58 @@ async function saveNewMember() {
   const name = document.getElementById('newMemberName').value.trim();
   const driveUrl = document.getElementById('newMemberDriveUrl').value.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) { showToast('รูปแบบอีเมลไม่ถูกต้อง', 'err'); return; }
-  if (editingMemberEmail) {
-    const m = findMember(editingMemberEmail);
-    if (m) { m.name = name; m.driveFolderUrl = driveUrl; }
-  } else {
-    if (findMember(emailRaw)) { showToast('มี member อีเมลนี้อยู่แล้ว', 'warn'); return; }
-    members.push({
-      email: emailRaw, name, driveFolderUrl: driveUrl,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUserName()
-    });
-  }
-  const wasEditing = !!editingMemberEmail;
-  closeAddMemberModal();
-  logAction('MEMBER', `${wasEditing ? 'Updated' : 'Added'} member: ${emailRaw}`);
-  if (!currentMemberEmail) currentMemberEmail = emailRaw;
-  renderEverything();
-  // Immediate save — don't wait for the 2.5s debounce. If we wait and the
-  // user reloads in between, the new member is lost (data only in memory).
+  const folderId = parseDriveFolderId(driveUrl);
+  if (!folderId) { showToast('ต้องกรอก Drive Folder URL ของลูกค้า (ต้องเป็น link /folders/...)', 'err'); return; }
+  if (!accessToken) { showToast('ต้อง login Google Drive ก่อนเพิ่ม member', 'err'); return; }
   if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่แล้วลองใหม่', 'warn'); return; }
+  const wasEditing = !!editingMemberEmail;
+  if (!wasEditing && findMember(emailRaw)) { showToast('มี member อีเมลนี้อยู่แล้ว', 'warn'); return; }
+
+  // Snapshot existing state so we can rollback if Drive write fails.
+  const prevMembers = members.map(m => ({ ...m }));
+  const prevCurrentMember = currentMemberEmail;
+
+  const existing = wasEditing ? findMember(editingMemberEmail) : null;
+  const candidate = wasEditing
+    ? { ...existing, name, driveFolderUrl: driveUrl, driveFolderId: folderId }
+    : { email: emailRaw, name, driveFolderUrl: driveUrl, driveFolderId: folderId,
+        createdAt: new Date().toISOString(), createdBy: currentUserName() };
+
   isSaving = true;
+  setSaveStatus('saving', wasEditing ? 'Updating member on Drive...' : 'Saving member to Drive...');
   try {
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    setSaveStatus('saving', 'Member saved locally');
-    pendingChanges = true;
+    // 1) Drive marker — source of truth. Must succeed before we touch local state.
+    await saveMemberMarkerToDrive(candidate);
+
+    // 2) Local roster.
+    if (wasEditing) {
+      const m = findMember(editingMemberEmail);
+      if (m) Object.assign(m, candidate);
+    } else {
+      members.push(candidate);
+    }
+    if (!currentMemberEmail) currentMemberEmail = emailRaw;
     persistLocalBackup();
-    setSaveStatus('saved', 'Member saved locally · campaign JSON saves to Drive');
-    showToast('✓ Saved member locally: ' + emailRaw + ' · สร้าง/เซฟแคมเปญเพื่อเขียน JSON ลง Drive', 'ok');
+    closeAddMemberModal();
+    logAction('MEMBER', `${wasEditing ? 'Updated' : 'Added'} member: ${emailRaw}`);
+    renderEverything();
+    setSaveStatus('saved', 'Member saved to Drive');
+    showToast('✓ Saved member to Drive: ' + emailRaw, 'ok');
+
+    // 3) Share customer folder so member can read their own folder. Non-fatal.
+    try {
+      await shareDriveFolderWithUser(folderId, emailRaw, 'reader');
+    } catch(shareErr) {
+      console.warn('share folder failed:', shareErr);
+      showToast('⚠️ Saved แต่ share folder ให้ ' + emailRaw + ' ไม่สำเร็จ — share เองที่ Drive: ' + (shareErr.message || 'unknown'), 'warn');
+    }
   } catch(e) {
     console.error('Save member failed:', e);
+    // Rollback in-memory mutations.
+    members = prevMembers;
+    currentMemberEmail = prevCurrentMember;
     setSaveStatus('error', 'Save failed · ' + (e.message || 'unknown'));
     showToast('❌ เซฟไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
-    if (!wasEditing) members = members.filter(m => m.email !== emailRaw);
-    if (currentMemberEmail === emailRaw) currentMemberEmail = null;
     renderEverything();
   } finally {
     isSaving = false;
@@ -3996,22 +4023,32 @@ function confirmDeleteMember() {
     return;
   }
   const toRemove = editingMemberEmail;
+  const target = findMember(toRemove);
   showConfirm('Remove member?', `ลบ ${toRemove} ออกจากรายการ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร)`, async () => {
     if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่', 'warn'); return; }
-    members = members.filter(m => m.email !== toRemove);
-    if (currentMemberEmail === toRemove) currentMemberEmail = null;
-    closeAddMemberModal();
-    logAction('MEMBER', `Removed member: ${toRemove}`);
-    renderEverything();
+    if (!accessToken) { showToast('ต้อง login Google Drive ก่อนลบ member', 'err'); return; }
     isSaving = true;
+    setSaveStatus('saving', 'Removing member from Drive...');
     try {
-      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      // Drive ops first — fail loud if marker can't be trashed.
+      if (target) await trashMemberMarkerInDrive(target);
+      members = members.filter(m => m.email !== toRemove);
+      if (currentMemberEmail === toRemove) currentMemberEmail = null;
+      closeAddMemberModal();
+      logAction('MEMBER', `Removed member: ${toRemove}`);
       persistLocalBackup();
-      pendingChanges = true;
-      setSaveStatus('saved', 'Member removed locally');
+      renderEverything();
+      setSaveStatus('saved', 'Member removed');
       showToast('✓ Removed', 'ok');
+      // Best-effort revoke share — non-fatal.
+      const folderId = target && (target.driveFolderId || parseDriveFolderId(target.driveFolderUrl));
+      if (folderId) {
+        try { await revokeDriveFolderShare(folderId, toRemove); }
+        catch(e) { console.warn('revoke share failed:', e); }
+      }
     } catch(e) {
       console.error('Remove member failed:', e);
+      setSaveStatus('error', 'Remove failed · ' + (e.message || 'unknown'));
       showToast('❌ Remove ไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
     } finally {
       isSaving = false;
