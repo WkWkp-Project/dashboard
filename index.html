@@ -5565,6 +5565,12 @@ async function buildHandoffBundle() {
       bundleToken: bundleToken ? bundleToken.token : null
     },
     campaign: camp,
+    members: [{
+      email: (camp.clientEmail || '').toLowerCase(),
+      name: camp.client || '',
+      driveFolderUrl: camp.driveFolderUrl || '',
+      driveFolderId: camp.driveFolderId || ''
+    }].filter(m => m.email),
     accessTokens: bundleToken ? [bundleToken] : []
   }, null, 2));
 
@@ -5835,6 +5841,29 @@ function loadDataOffline(data, providedToken) {
   accessTokens = bundleTokens;
   if (data.hub) hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...data.hub };
   if (Array.isArray(data.manualBackupHistory)) manualBackupHistory = data.manualBackupHistory;
+
+  // Member-centric UI requires a selected member. Derive roster from the
+  // bundle's explicit members[] when present, otherwise synthesize one entry
+  // per unique campaign.clientEmail so the sidebar isn't empty.
+  const bundleMembers = (Array.isArray(data.members) && data.members.length)
+    ? data.members.map(m => ({
+        email: (m.email || '').toLowerCase(),
+        name: m.name || '',
+        driveFolderUrl: m.driveFolderUrl || '',
+        driveFolderId: m.driveFolderId || '',
+        createdAt: m.createdAt || '',
+        createdBy: m.createdBy || ''
+      })).filter(m => m.email)
+    : campaigns.filter(c => c.clientEmail).map(c => ({
+        email: (c.clientEmail || '').toLowerCase(),
+        name: c.client || '',
+        driveFolderUrl: c.driveFolderUrl || '',
+        driveFolderId: c.driveFolderId || '',
+        createdAt: '', createdBy: ''
+      }));
+  members = Array.from(new Map(bundleMembers.map(m => [m.email, m])).values());
+  const firstCamp = campaigns.find(c => c.id === currentCampaignId) || campaigns[0];
+  currentMemberEmail = ((firstCamp && firstCamp.clientEmail) || (members[0] && members[0].email) || '').toLowerCase() || null;
 
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
