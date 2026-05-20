@@ -1,6 +1,34 @@
 # Wakuwaku Studio — Production Dashboard
 
-Content production dashboard with Google Drive sync, handoff bundles, and audit logging.
+Content production dashboard. **Campaign JSON + asset files (รูป/วิดีโอ) → Google Drive folder ของลูกค้าแต่ละแคมเปญ**. Firebase is used for Google sign-in only.
+
+---
+
+## 🔥 Firebase / Google one-time setup
+
+The Firebase config is already wired in `index.html`. Firebase is used for Google Sign-In; Drive stores campaign JSON and media files.
+
+### 1. Enable Google Sign-In
+
+Firebase Console → **Authentication → Sign-in method → Google → Enable**.
+Under **Authorized domains**, add the domain you host from (e.g. `wkwkp-project.github.io` and `localhost` for testing).
+
+> **Important — use the same OAuth client for Drive token reuse (optional):**
+> Authentication → Sign-in method → Google → **Web SDK configuration** → set Web client ID to `165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com`. This lets the existing Drive OAuth consent carry over. If you skip this, login still works but Drive uploads may require re-consent the first time.
+
+### 2. Enable Google Drive API
+
+Google Cloud Console → APIs & Services → Library → **Google Drive API** → Enable.
+
+Each campaign must have a Client Drive Folder URL. The app writes:
+- `wakuwaku_campaign.json` in that campaign folder.
+- media files in a per-campaign `wakuwaku-media-{campaignId}` subfolder.
+
+Share the campaign folder with the Wakuwaku/operator account as **Editor** so saves can create/update JSON and media files.
+
+### 3. Add members / campaigns
+
+Add a member, set their default Client Drive Folder URL, then create campaigns under that member. Campaign Info and Section B save to that campaign's Drive JSON file instead of Firestore. Clients who have access to the shared Drive folder can load the campaign JSON and media from Drive.
 
 **Live demo:** _Add your GitHub Pages URL here after deployment_
 
@@ -67,7 +95,7 @@ If your CLIENT_ID is hardcoded in the file, anyone can see it. While CLIENT_ID i
 **Option B — Public repo, restrict OAuth (free, recommended):** 
 - Keep the repo public
 - In Google Cloud Console, OAuth Consent Screen, set **User Type: Internal** (only allows users in your Google Workspace organization)
-- Or restrict by domain: only `@wakuwaku.co.th` emails can login
+- Or restrict by domain: only `@team.wkwkp.com` emails can login
 
 ---
 
@@ -125,7 +153,7 @@ Key constants in `index.html` (around line 686):
 ```js
 const CLIENT_ID = '165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com';
 const SAVE_DEBOUNCE_MS = 2500;  // batch saves to avoid Drive API spam
-const DB_FILENAME = 'wakuwaku_database.json';
+const CAMPAIGN_DB_FILENAME = 'wakuwaku_campaign.json';  // created inside each campaign Drive folder
 ```
 
 ---
