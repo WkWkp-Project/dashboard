@@ -1471,6 +1471,7 @@ let currentUserEmail = '';
 let isAdmin = false;
 let userRoleControl = null;       // resolved role from control plane: admin|editor|operation|viewer|customer|null
 let assignedCampaignFolderIds = []; // campaigns this user may see (non-admin)
+let _controlLiveRender = false;   // true after initial load → control updates may re-render
 let fbDbUnsub = null;
 
 // ============================================================================
@@ -1788,7 +1789,11 @@ function onControlMembersChanged(controlMembers) {
     const me = members.find(m => m.email === currentUserEmail);
     if (me) { assignedCampaignFolderIds = me.campaignFolderIds || []; }
   }
-  if (typeof renderEverything === 'function' && document.getElementById('mainApp') &&
+  // Only re-render for genuine real-time updates *after* the initial login load
+  // has rendered (the login/sync path renders once campaigns are in). This
+  // avoids a wasteful flash render with empty campaigns during login.
+  if (_controlLiveRender && typeof renderEverything === 'function' &&
+      document.getElementById('mainApp') &&
       document.getElementById('mainApp').style.display !== 'none') {
     renderEverything();
   }
@@ -1841,6 +1846,7 @@ async function onLoginSuccess() {
   // 2) Load DB — failure here must NOT throw away the session
   try { await syncDatabaseFromDrive(); }
   catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
+  _controlLiveRender = true; // initial load done → control real-time updates may re-render now
   // 2b) Announce presence on the shared DB so other Wkwk teammates see us
   // in their sidebar. Done after sync so the join log mentions the right
   // databaseFileId.
@@ -2021,6 +2027,7 @@ async function tryRestoreSession() {
       document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
+      _controlLiveRender = true; // initial load done → control real-time updates may re-render now
       if (isAdmin) joinSharedSession('internal', currentUserEmail);
       setSaveStatus('idle', 'Connected');
       showToast('Session restored');
@@ -2521,7 +2528,10 @@ function applyCloudPayload(db, opts) {
     members = db.members.map(m => ({
       email: (m.email || '').toLowerCase(),
       name: m.name || '',
+      role: m.role || 'viewer',
+      campaignFolderIds: Array.isArray(m.campaignFolderIds) ? m.campaignFolderIds : [],
       driveFolderUrl: m.driveFolderUrl || '',
+      driveFolderId: m.driveFolderId || '',
       createdAt: m.createdAt || '',
       createdBy: m.createdBy || ''
     })).filter(m => m.email);
@@ -3208,12 +3218,14 @@ async function syncDatabaseFromDrive(opts) {
   if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
     const loaded = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
-    const markerMembers = accessToken ? await loadMembersFromDrive().catch(e => { console.warn('loadMembersFromDrive failed:', e); return []; }) : [];
+    // Members come from the Firestore control plane when it's active; otherwise
+    // fall back to deriving them from the campaigns + Drive marker files.
+    const controlActive = !!(window.Control && window.Control.available() && window.Control.isReady());
+    const markerMembers = (!controlActive && accessToken)
+      ? await loadMembersFromDrive().catch(e => { console.warn('loadMembersFromDrive failed:', e); return []; })
+      : [];
     const visible = filterVisibleCampaigns(loaded);
     const visibleMarkers = isAdmin ? markerMembers : markerMembers.filter(m => m.email === currentUserEmail);
-    // Members come from the Firestore control plane when it's active; otherwise
-    // fall back to deriving them from the campaigns found on Drive.
-    const controlActive = !!(window.Control && window.Control.available() && window.Control.isReady());
     if (visible.length || visibleMarkers.length || (controlActive && members.length)) {
       campaigns = visible.map(normalizeCampaign);
       if (!controlActive) members = deriveMembersFromCampaigns(campaigns, visibleMarkers);
