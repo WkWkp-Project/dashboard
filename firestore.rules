@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// ============================================================================
+// Wakuwaku Dashboard — control plane rules
+// ----------------------------------------------------------------------------
+// Only the lightweight control data lives in Firestore:
+//   /control_members/{email} → { email, name, role, campaignFolderIds[], ... }
+// Campaign JSON + media stay on Google Drive (NOT here).
+//
+// Deploy:  firebase deploy --only firestore:rules
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Is the caller an admin? (their own control doc has role == 'admin')
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/control_members/$(request.auth.token.email))
+        && get(/databases/$(database)/documents/control_members/$(request.auth.token.email)).data.role == 'admin';
+    }
+
+    // Bootstrap admin by email domain — lets the very first admin create their
+    // own doc before any admin exists. Tighten this domain to your org.
+    function isBootstrapAdmin() {
+      return request.auth != null
+        && request.auth.token.email.matches('.*@team[.]wkwkp[.]com');
+    }
+
+    match /control_members/{email} {
+      // Any signed-in user may read the roster (the app filters what it shows
+      // per role). Tighten to `isAdmin() || request.auth.token.email == email`
+      // if you don't want members to see each other.
+      allow read: if request.auth != null;
+
+      // Writes are admin-only. A bootstrap-domain admin may also create *their
+      // own* doc so the first login can self-provision.
+      allow write: if isAdmin()
+        || (isBootstrapAdmin() && request.auth.token.email == email);
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

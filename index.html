@@ -17,6 +17,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<!-- Control plane (members / roles / assignments → Firestore). Separate file
+     so the admin/role backend can be edited without touching campaign logic. -->
+<script src="js/control.js"></script>
 
 <style>
   :root {
@@ -1113,6 +1116,20 @@
         <label>Default Client Drive Folder URL <small class="hint-label">(optional · ถ้าใส่ แคมเปญใหม่ที่สร้างใต้ member นี้จะ default มาที่ folder นี้)</small></label>
         <input type="url" id="newMemberDriveUrl" placeholder="https://drive.google.com/drive/folders/..." />
       </div>
+      <div class="input-group">
+        <label>Role <small class="hint-label">(สิทธิ์การใช้งาน)</small></label>
+        <select id="newMemberRole" onchange="syncMemberCampaignsVisibility()">
+          <option value="customer">Customer · ลูกค้า — เห็นแคมตัวเอง, แก้ Section B</option>
+          <option value="viewer">Viewer — ดูแคมที่ถูก assign อย่างเดียว</option>
+          <option value="operation">Operation — แก้ Section B ของแคมที่ assign</option>
+          <option value="editor">Editor — แก้รายละเอียดแคมที่ assign (ลบ member ไม่ได้)</option>
+          <option value="admin">Admin — จัดการได้ทุกอย่าง เห็นทุกแคม</option>
+        </select>
+      </div>
+      <div class="input-group" id="newMemberCampaignsGroup">
+        <label>Assigned Campaigns <small class="hint-label">(เลือกแคมเปญที่ member นี้เห็นได้ · admin เห็นทุกแคมอยู่แล้วไม่ต้องเลือก)</small></label>
+        <div id="newMemberCampaigns" style="max-height:160px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;"></div>
+      </div>
     </div>
     <div class="simple-modal-footer">
       <button class="btn" id="deleteMemberBtn" onclick="confirmDeleteMember()" style="margin-right:auto; color:var(--err); border-color:var(--err); display:none;">🗑 Remove Member</button>
@@ -1435,15 +1452,25 @@ const firebaseConfig = {
   messagingSenderId: "956822346063",
   appId: "1:956822346063:web:58e035a01fda8bc7cd4d3a"
 };
-const ADMIN_EMAIL_DOMAIN = 'team.wkwkp.com'; // อีเมล @team.wkwkp.com = admin
+const ADMIN_EMAIL_DOMAIN = 'team.wkwkp.com'; // อีเมล @team.wkwkp.com = admin (bootstrap)
+// Lockout-safe super admins: these emails are always treated as admin even if
+// the Firestore control collection is empty or unreachable. Keep at least one.
+const SUPER_ADMINS = ['admin@team.wkwkp.com'];
 let fbApp = null, fbAuth = null, fbDb = null;
 try {
   fbApp = firebase.initializeApp(firebaseConfig);
   fbAuth = firebase.auth();
   fbDb = firebase.firestore();
 } catch(e) { console.error('Firebase init failed:', e); }
+// Wire the control plane (members/roles/assignments live in Firestore so every
+// admin sees the same data in real time).
+if (window.Control) {
+  window.Control.init(fbDb, { adminDomain: ADMIN_EMAIL_DOMAIN, superAdmins: SUPER_ADMINS });
+}
 let currentUserEmail = '';
 let isAdmin = false;
+let userRoleControl = null;       // resolved role from control plane: admin|editor|operation|viewer|customer|null
+let assignedCampaignFolderIds = []; // campaigns this user may see (non-admin)
 let fbDbUnsub = null;
 
 // ============================================================================
@@ -1664,6 +1691,109 @@ function handleRealGoogleLogin() {
   });
 }
 
+// ============================================================================
+// CONTROL PLANE ROLE RESOLUTION (members/roles/assignments from Firestore)
+// ============================================================================
+// Maps the fine-grained control-plane role (admin|editor|operation|viewer|
+// customer) onto the legacy coarse role (internal|operator|client) that the
+// existing UI gates understand, then layers fine-grained checks via
+// controlCan() at the sensitive call sites.
+function applyControlRole(resolved) {
+  userRoleControl = resolved && resolved.role ? resolved.role : null;
+  const m = resolved && resolved.member;
+  assignedCampaignFolderIds = (m && Array.isArray(m.campaignFolderIds)) ? m.campaignFolderIds.slice() : [];
+  isAdmin = userRoleControl === 'admin';
+  if (userRoleControl === 'admin' || userRoleControl === 'editor') userRole = 'internal';
+  else if (userRoleControl === 'operation' || userRoleControl === 'customer') userRole = 'operator';
+  else userRole = 'client'; // viewer, or null (no access)
+}
+
+// Fine-grained capability check. Falls back to isAdmin if control plane is off.
+function controlCan(action) {
+  if (window.Control && userRoleControl) return window.Control.can(userRoleControl, action);
+  return isAdmin;
+}
+
+// Block an action unless the current role has the capability. Returns true if blocked.
+function blockUnless(action, label) {
+  if (controlCan(action)) return false;
+  showToast(label || 'คุณไม่มีสิทธิ์ทำรายการนี้', 'warn');
+  return true;
+}
+
+async function resolveUserRoleFromControl(email, displayName) {
+  email = (email || '').toLowerCase();
+  // Fallback path: control plane unavailable → legacy domain/super-admin check.
+  if (!window.Control || !window.Control.available()) {
+    isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
+    userRoleControl = isAdmin ? 'admin' : 'viewer';
+    userRole = isAdmin ? 'internal' : 'client';
+    assignedCampaignFolderIds = [];
+    return;
+  }
+  try {
+    const resolved = await window.Control.resolveRole(email, displayName);
+    applyControlRole(resolved);
+    // Populate the roster once up-front so the first render has data, then
+    // attach the real-time listener so every admin stays in sync (bug #6 fix).
+    await window.Control.listMembers().catch(e => { console.warn('listMembers failed:', e); });
+    onControlMembersChanged(window.Control.cachedMembers());
+    window.Control.subscribe(onControlMembersChanged);
+  } catch(e) {
+    console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
+    isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
+    userRoleControl = isAdmin ? 'admin' : 'viewer';
+    userRole = isAdmin ? 'internal' : 'client';
+    assignedCampaignFolderIds = [];
+  }
+}
+
+// Filter a list of campaigns down to what the current role may see:
+//   admin / seeAllCampaigns → everything
+//   customer               → campaigns whose clientEmail is the user
+//   editor/operation/viewer → campaigns whose driveFolderId was assigned
+function filterVisibleCampaigns(all) {
+  all = all || [];
+  if (isAdmin || controlCan('seeAllCampaigns')) return all;
+  if (userRoleControl === 'customer') {
+    return all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+  }
+  if (assignedCampaignFolderIds && assignedCampaignFolderIds.length) {
+    const own = all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+    const assigned = all.filter(c => c.driveFolderId && assignedCampaignFolderIds.indexOf(c.driveFolderId) >= 0);
+    // union (assigned + any of their own), de-duped by id
+    const seen = {};
+    return own.concat(assigned).filter(c => { if (seen[c.id]) return false; seen[c.id] = 1; return true; });
+  }
+  // No explicit assignment → safety net: only their own-email campaigns.
+  return all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+}
+
+// Fires on every Firestore control update (real-time). Refreshes the in-memory
+// member roster + the current user's own assignment, then re-renders.
+function onControlMembersChanged(controlMembers) {
+  // Mirror control members into the legacy members[] used by the UI.
+  members = (controlMembers || []).map(m => ({
+    email: m.email,
+    name: m.name || '',
+    role: m.role || 'viewer',
+    campaignFolderIds: m.campaignFolderIds || [],
+    driveFolderUrl: m.driveFolderUrl || '',
+    driveFolderId: m.driveFolderId || '',
+    createdAt: m.createdAt || '',
+    createdBy: m.createdBy || ''
+  }));
+  // Keep the current user's own assignment fresh (role may have changed).
+  if (currentUserEmail && !isAdmin) {
+    const me = members.find(m => m.email === currentUserEmail);
+    if (me) { assignedCampaignFolderIds = me.campaignFolderIds || []; }
+  }
+  if (typeof renderEverything === 'function' && document.getElementById('mainApp') &&
+      document.getElementById('mainApp').style.display !== 'none') {
+    renderEverything();
+  }
+}
+
 async function onLoginSuccess() {
   isOfflineMode = false;
   userRole = 'internal';
@@ -1672,11 +1802,10 @@ async function onLoginSuccess() {
   document.getElementById('authOverlay').style.display = 'none';
   document.getElementById('mainApp').style.display = 'grid';
   setSaveStatus('idle', 'Connected');
-  // 0) Firebase user → email + role gate
+  // 0) Firebase user → email + role gate (resolved from the control plane)
   const fbUser = fbAuth && fbAuth.currentUser;
   currentUserEmail = ((fbUser && fbUser.email) || '').toLowerCase();
-  isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-  if (!isAdmin) { userRole = 'client'; }
+  if (currentUserEmail) await resolveUserRoleFromControl(currentUserEmail, fbUser && fbUser.displayName);
   applyRoleRestrictions();
   // 1) Profile — failure here must NOT block DB loading
   let userEmail = currentUserEmail;
@@ -1687,8 +1816,7 @@ async function onLoginSuccess() {
       userEmail = user.email || userEmail;
       if (!currentUserEmail && userEmail) {
         currentUserEmail = userEmail.toLowerCase();
-        isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-        if (!isAdmin) { userRole = 'client'; }
+        await resolveUserRoleFromControl(currentUserEmail, user.name);
         applyRoleRestrictions();
       }
       const name = user.name || user.email || (isAdmin ? 'Wakuwaku Internal' : 'Member');
@@ -1880,8 +2008,7 @@ async function tryRestoreSession() {
     });
     if (fbAuth && fbAuth.currentUser) {
       currentUserEmail = (fbAuth.currentUser.email || '').toLowerCase();
-      isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-      userRole = isAdmin ? 'internal' : 'client';
+      await resolveUserRoleFromControl(currentUserEmail, fbAuth.currentUser.displayName);
       applyRoleRestrictions();
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainApp').style.display = 'grid';
@@ -3082,11 +3209,14 @@ async function syncDatabaseFromDrive(opts) {
   try {
     const loaded = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
     const markerMembers = accessToken ? await loadMembersFromDrive().catch(e => { console.warn('loadMembersFromDrive failed:', e); return []; }) : [];
-    const visible = isAdmin ? loaded : loaded.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+    const visible = filterVisibleCampaigns(loaded);
     const visibleMarkers = isAdmin ? markerMembers : markerMembers.filter(m => m.email === currentUserEmail);
-    if (visible.length || visibleMarkers.length) {
+    // Members come from the Firestore control plane when it's active; otherwise
+    // fall back to deriving them from the campaigns found on Drive.
+    const controlActive = !!(window.Control && window.Control.available() && window.Control.isReady());
+    if (visible.length || visibleMarkers.length || (controlActive && members.length)) {
       campaigns = visible.map(normalizeCampaign);
-      members = deriveMembersFromCampaigns(campaigns, visibleMarkers);
+      if (!controlActive) members = deriveMembersFromCampaigns(campaigns, visibleMarkers);
       if (!isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
       else if (currentMemberEmail && !members.find(m => m.email === currentMemberEmail)) currentMemberEmail = null;
       if (!currentMemberEmail && !isAdmin && currentUserEmail) currentMemberEmail = currentUserEmail;
@@ -3882,7 +4012,8 @@ function renderMemberNav() {
     div.className = 'member-list-item' + (m.email === currentMemberEmail ? ' active' : '');
     div.onclick = (e) => { if (e.target.classList.contains('member-edit')) return; selectMember(m.email); };
     const editBtn = isAdmin && !m._orphan ? `<button class="member-edit" title="Edit member" onclick="event.stopPropagation(); openEditMember('${escapeHtml(m.email)}')">✎</button>` : '';
-    div.innerHTML = `<strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${count} CAMP</small>${editBtn}`;
+    const roleTag = (isAdmin && m.role && !m._orphan) ? ` · ${escapeHtml(String(m.role).toUpperCase())}` : '';
+    div.innerHTML = `<strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${count} CAMP${roleTag}</small>${editBtn}`;
     nav.appendChild(div);
   });
   if (list.length === 0) {
@@ -3924,20 +4055,57 @@ function findMember(email) {
   return members.find(m => m.email === e) || null;
 }
 
+// Render the assignable-campaign checklist inside the member modal. selectedIds
+// = folder ids already assigned to this member.
+function renderMemberCampaignChecklist(selectedIds) {
+  const box = document.getElementById('newMemberCampaigns');
+  if (!box) return;
+  selectedIds = selectedIds || [];
+  // Build a unique list of campaigns by driveFolderId (the assignment key).
+  const seen = {};
+  const opts = [];
+  (campaigns || []).forEach(c => {
+    const fid = c.driveFolderId || '';
+    if (!fid || seen[fid]) return;
+    seen[fid] = 1;
+    opts.push({ fid, label: (c.campaign || c.client || c.id || fid) });
+  });
+  if (!opts.length) {
+    box.innerHTML = '<div style="font-size:11px; color:var(--muted-2);">ยังไม่มีแคมเปญที่มี Drive folder ให้ assign</div>';
+    return;
+  }
+  box.innerHTML = opts.map(o =>
+    `<label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px;">
+       <input type="checkbox" class="member-camp-chk" value="${o.fid}" ${selectedIds.indexOf(o.fid) >= 0 ? 'checked' : ''} />
+       <span>${escapeHtml(o.label)}</span>
+     </label>`
+  ).join('');
+}
+
+// Show/hide the campaign assignment block — admins see everything so no need.
+function syncMemberCampaignsVisibility() {
+  const role = document.getElementById('newMemberRole').value;
+  const grp = document.getElementById('newMemberCampaignsGroup');
+  if (grp) grp.style.display = (role === 'admin') ? 'none' : '';
+}
+
 function openAddMemberModal() {
-  if (blockIfNotInternal('เพิ่ม member ได้เฉพาะ admin')) return;
+  if (blockUnless('manageMembers', 'เพิ่ม member ได้เฉพาะ admin')) return;
   editingMemberEmail = null;
   document.getElementById('addMemberTitle').textContent = '+ Add Member';
   document.getElementById('newMemberEmail').value = '';
   document.getElementById('newMemberEmail').disabled = false;
   document.getElementById('newMemberName').value = '';
   document.getElementById('newMemberDriveUrl').value = '';
+  document.getElementById('newMemberRole').value = 'customer';
+  renderMemberCampaignChecklist([]);
+  syncMemberCampaignsVisibility();
   document.getElementById('deleteMemberBtn').style.display = 'none';
   document.getElementById('addMemberModal').classList.add('show');
 }
 
 function openEditMember(email) {
-  if (blockIfNotInternal('แก้ไข member ได้เฉพาะ admin')) return;
+  if (blockUnless('manageMembers', 'แก้ไข member ได้เฉพาะ admin')) return;
   const m = findMember(email);
   if (!m) { showToast('ไม่พบ member นี้', 'warn'); return; }
   editingMemberEmail = m.email;
@@ -3946,6 +4114,9 @@ function openEditMember(email) {
   document.getElementById('newMemberEmail').disabled = true; // email is the identity, can't change
   document.getElementById('newMemberName').value = m.name || '';
   document.getElementById('newMemberDriveUrl').value = m.driveFolderUrl || '';
+  document.getElementById('newMemberRole').value = m.role || 'customer';
+  renderMemberCampaignChecklist(m.campaignFolderIds || []);
+  syncMemberCampaignsVisibility();
   document.getElementById('deleteMemberBtn').style.display = '';
   document.getElementById('addMemberModal').classList.add('show');
 }
@@ -3953,96 +4124,84 @@ function openEditMember(email) {
 function closeAddMemberModal() { document.getElementById('addMemberModal').classList.remove('show'); }
 
 async function saveNewMember() {
+  if (blockUnless('manageMembers', 'จัดการ member ได้เฉพาะ admin')) return;
+  if (!window.Control || !window.Control.available()) {
+    showToast('Control plane (Firestore) ใช้ไม่ได้ — จัดการ member ไม่ได้ตอนนี้', 'err');
+    return;
+  }
   const emailRaw = document.getElementById('newMemberEmail').value.trim().toLowerCase();
   const name = document.getElementById('newMemberName').value.trim();
   const driveUrl = document.getElementById('newMemberDriveUrl').value.trim();
+  const role = document.getElementById('newMemberRole').value;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) { showToast('รูปแบบอีเมลไม่ถูกต้อง', 'err'); return; }
-  const folderId = parseDriveFolderId(driveUrl);
-  if (!folderId) { showToast('ต้องกรอก Drive Folder URL ของลูกค้า (ต้องเป็น link /folders/...)', 'err'); return; }
-  if (!accessToken) { showToast('ต้อง login Google Drive ก่อนเพิ่ม member', 'err'); return; }
+  const folderId = driveUrl ? parseDriveFolderId(driveUrl) : '';
+  if (driveUrl && !folderId) { showToast('Drive Folder URL ต้องเป็น link /folders/... ', 'err'); return; }
   if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่แล้วลองใหม่', 'warn'); return; }
   const wasEditing = !!editingMemberEmail;
   if (!wasEditing && findMember(emailRaw)) { showToast('มี member อีเมลนี้อยู่แล้ว', 'warn'); return; }
 
-  // Snapshot existing state so we can rollback if Drive write fails.
-  const prevMembers = members.map(m => ({ ...m }));
-  const prevCurrentMember = currentMemberEmail;
-
-  const existing = wasEditing ? findMember(editingMemberEmail) : null;
-  const candidate = wasEditing
-    ? { ...existing, name, driveFolderUrl: driveUrl, driveFolderId: folderId }
-    : { email: emailRaw, name, driveFolderUrl: driveUrl, driveFolderId: folderId,
-        createdAt: new Date().toISOString(), createdBy: currentUserName() };
+  // Collect assigned campaigns (skip for admin — they see all).
+  let campaignFolderIds = [];
+  if (role !== 'admin') {
+    campaignFolderIds = Array.from(document.querySelectorAll('#newMemberCampaigns .member-camp-chk:checked')).map(el => el.value);
+  }
 
   isSaving = true;
-  setSaveStatus('saving', wasEditing ? 'Updating member on Drive...' : 'Saving member to Drive...');
+  setSaveStatus('saving', wasEditing ? 'Updating member...' : 'Saving member...');
   try {
-    // 1) Drive marker — source of truth. Must succeed before we touch local state.
-    await saveMemberMarkerToDrive(candidate);
-
-    // 2) Local roster.
-    if (wasEditing) {
-      const m = findMember(editingMemberEmail);
-      if (m) Object.assign(m, candidate);
-    } else {
-      members.push(candidate);
-    }
-    if (!currentMemberEmail) currentMemberEmail = emailRaw;
-    persistLocalBackup();
+    // Firestore control plane = source of truth. Real-time listener refreshes
+    // members[] for every admin (this is the bug-6 fix).
+    await window.Control.upsertMember({
+      email: emailRaw, name, role,
+      campaignFolderIds,
+      driveFolderUrl: driveUrl, driveFolderId: folderId,
+      createdBy: currentUserName()
+    });
     closeAddMemberModal();
-    logAction('MEMBER', `${wasEditing ? 'Updated' : 'Added'} member: ${emailRaw}`);
-    renderEverything();
-    setSaveStatus('saved', 'Member saved to Drive');
-    showToast('✓ Saved member to Drive: ' + emailRaw, 'ok');
+    logAction('MEMBER', `${wasEditing ? 'Updated' : 'Added'} member: ${emailRaw} (${role})`);
+    setSaveStatus('saved', 'Member saved');
+    showToast('✓ Saved member: ' + emailRaw + ' · ' + role, 'ok');
 
-    // 3) Share customer folder so member can read their own folder. Non-fatal.
-    try {
-      await shareDriveFolderWithUser(folderId, emailRaw, 'reader');
-    } catch(shareErr) {
-      console.warn('share folder failed:', shareErr);
-      showToast('⚠️ Saved แต่ share folder ให้ ' + emailRaw + ' ไม่สำเร็จ — share เองที่ Drive: ' + (shareErr.message || 'unknown'), 'warn');
+    // Best-effort: share their Drive folder so a customer can read it. Non-fatal.
+    if (folderId && accessToken && (role === 'customer' || role === 'viewer')) {
+      try { await shareDriveFolderWithUser(folderId, emailRaw, 'reader'); }
+      catch(shareErr) {
+        console.warn('share folder failed:', shareErr);
+        showToast('⚠️ Saved แต่ share folder ให้ ' + emailRaw + ' ไม่สำเร็จ — share เองที่ Drive', 'warn');
+      }
     }
   } catch(e) {
     console.error('Save member failed:', e);
-    // Rollback in-memory mutations.
-    members = prevMembers;
-    currentMemberEmail = prevCurrentMember;
     setSaveStatus('error', 'Save failed · ' + (e.message || 'unknown'));
     showToast('❌ เซฟไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
-    renderEverything();
   } finally {
     isSaving = false;
   }
 }
 
 function confirmDeleteMember() {
+  if (blockUnless('manageMembers', 'ลบ member ได้เฉพาะ admin')) return;
   if (!editingMemberEmail) return;
-  const camps = campaigns.filter(c => (c.clientEmail || '') === editingMemberEmail);
-  if (camps.length > 0) {
-    showToast(`Member นี้ยังมี ${camps.length} แคมเปญ — ลบ/ย้ายแคมก่อน`, 'warn');
+  if (!window.Control || !window.Control.available()) {
+    showToast('Control plane (Firestore) ใช้ไม่ได้ — ลบ member ไม่ได้ตอนนี้', 'err');
     return;
   }
   const toRemove = editingMemberEmail;
   const target = findMember(toRemove);
-  showConfirm('Remove member?', `ลบ ${toRemove} ออกจากรายการ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร)`, async () => {
+  showConfirm('Remove member?', `ลบ ${toRemove} ออกจากระบบ?\n(member นี้จะ login เข้ามาก็ไม่เห็นอะไร · แคมเปญบน Drive ไม่ถูกลบ)`, async () => {
     if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่', 'warn'); return; }
-    if (!accessToken) { showToast('ต้อง login Google Drive ก่อนลบ member', 'err'); return; }
     isSaving = true;
-    setSaveStatus('saving', 'Removing member from Drive...');
+    setSaveStatus('saving', 'Removing member...');
     try {
-      // Drive ops first — fail loud if marker can't be trashed.
-      if (target) await trashMemberMarkerInDrive(target);
-      members = members.filter(m => m.email !== toRemove);
+      await window.Control.removeMember(toRemove);
       if (currentMemberEmail === toRemove) currentMemberEmail = null;
       closeAddMemberModal();
       logAction('MEMBER', `Removed member: ${toRemove}`);
-      persistLocalBackup();
-      renderEverything();
       setSaveStatus('saved', 'Member removed');
       showToast('✓ Removed', 'ok');
-      // Best-effort revoke share — non-fatal.
+      // Best-effort revoke Drive share — non-fatal.
       const folderId = target && (target.driveFolderId || parseDriveFolderId(target.driveFolderUrl));
-      if (folderId) {
+      if (folderId && accessToken) {
         try { await revokeDriveFolderShare(folderId, toRemove); }
         catch(e) { console.warn('revoke share failed:', e); }
       }
@@ -4336,6 +4495,7 @@ function performLogout() {
 // ============================================================================
 function openAddCampaignModal() {
   if (blockIfNotInternal('สร้างแคมเปญใหม่ได้เฉพาะทีม Wakuwaku')) return;
+  if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
   if (!currentMemberEmail) { showToast('เลือก Member ใน sidebar ก่อนสร้างแคมเปญ', 'warn'); return; }
   ['newClient','newCampaign','newStart','newEnd'].forEach(id => document.getElementById(id).value = '');
   const m = findMember(currentMemberEmail);
@@ -4374,6 +4534,7 @@ function saveNewCampaign() {
   showToast('Campaign created');
 }
 function confirmDeleteCampaign() {
+  if (blockUnless('deleteCampaign', 'ลบแคมเปญได้เฉพาะ admin')) return;
   const c = getCurrentCampaign();
   if (!c) return;
   showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกลบถาวร`, () => {
@@ -6522,6 +6683,52 @@ window.__runTests = async function() {
     el.value = '90';
   });
   t('tokenRole select has operator option', () => { const opts = Array.from(document.getElementById('tokenRole').options).map(o=>o.value); ok(opts.includes('operator')); ok(opts.includes('client')); ok(opts.includes('internal')); });
+
+  // ---- Control plane (members / roles / assignments) ----
+  t('Control global is loaded', () => ok(window.Control && typeof window.Control.can === 'function'));
+  t('Control permission matrix: admin can manage members', () => ok(window.Control.can('admin', 'manageMembers')));
+  t('Control permission matrix: editor cannot manage members', () => ok(!window.Control.can('editor', 'manageMembers')));
+  t('Control permission matrix: editor can edit Section A+B', () => ok(window.Control.can('editor', 'editSectionA') && window.Control.can('editor', 'editSectionB')));
+  t('Control permission matrix: operation only Section B', () => ok(!window.Control.can('operation', 'editSectionA') && window.Control.can('operation', 'editSectionB')));
+  t('Control permission matrix: viewer read-only', () => ok(!window.Control.can('viewer', 'editSectionB') && !window.Control.can('viewer', 'manageMembers')));
+  t('Control permission matrix: customer edits Section B only', () => ok(window.Control.can('customer', 'editSectionB') && !window.Control.can('customer', 'editSectionA')));
+  t('Control: admin/editor cannot/can create campaign', () => ok(window.Control.can('admin', 'createCampaign') && !window.Control.can('editor', 'createCampaign')));
+  t('Control: unknown role falls back to viewer perms', () => ok(!window.Control.can('bogus', 'editSectionB')));
+  t('Control.isBootstrapAdmin matches domain', () => {
+    const sv = window.Control.bootstrap.adminDomain; window.Control.bootstrap.adminDomain = 'team.wkwkp.com';
+    const a = window.Control.isBootstrapAdmin('someone@team.wkwkp.com');
+    const b = window.Control.isBootstrapAdmin('client@gmail.com');
+    window.Control.bootstrap.adminDomain = sv;
+    ok(a === true && b === false);
+  });
+  t('Control.canSeeCampaign: admin sees all', () => ok(window.Control.canSeeCampaign('admin', [], { driveFolderId: 'x' })));
+  t('Control.canSeeCampaign: viewer sees only assigned folder', () => {
+    ok(window.Control.canSeeCampaign('viewer', ['f1'], { driveFolderId: 'f1' }) === true);
+    ok(window.Control.canSeeCampaign('viewer', ['f1'], { driveFolderId: 'f2' }) === false);
+  });
+  t('applyControlRole maps roles to legacy userRole', () => {
+    const svR = userRole, svA = isAdmin, svC = userRoleControl, svF = assignedCampaignFolderIds;
+    applyControlRole({ role: 'admin', member: { campaignFolderIds: [] } }); ok(isAdmin === true && userRole === 'internal');
+    applyControlRole({ role: 'editor', member: { campaignFolderIds: ['a'] } }); ok(isAdmin === false && userRole === 'internal' && assignedCampaignFolderIds[0] === 'a');
+    applyControlRole({ role: 'operation', member: { campaignFolderIds: [] } }); ok(userRole === 'operator');
+    applyControlRole({ role: 'customer', member: { campaignFolderIds: [] } }); ok(userRole === 'operator');
+    applyControlRole({ role: 'viewer', member: { campaignFolderIds: [] } }); ok(userRole === 'client');
+    applyControlRole({ role: null, member: null }); ok(userRole === 'client' && userRoleControl === null);
+    userRole = svR; isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF;
+  });
+  t('filterVisibleCampaigns: admin sees all', () => {
+    const svA = isAdmin, svC = userRoleControl; isAdmin = true; userRoleControl = 'admin';
+    const r = filterVisibleCampaigns([{ id: 1, driveFolderId: 'a' }, { id: 2, driveFolderId: 'b' }]);
+    isAdmin = svA; userRoleControl = svC; ok(r.length === 2);
+  });
+  t('filterVisibleCampaigns: viewer sees only assigned', () => {
+    const svA = isAdmin, svC = userRoleControl, svF = assignedCampaignFolderIds, svE = currentUserEmail;
+    isAdmin = false; userRoleControl = 'viewer'; assignedCampaignFolderIds = ['b']; currentUserEmail = 'x@y.z';
+    const r = filterVisibleCampaigns([{ id: 1, driveFolderId: 'a', clientEmail: 'other@y.z' }, { id: 2, driveFolderId: 'b', clientEmail: 'other@y.z' }]);
+    isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF; currentUserEmail = svE;
+    ok(r.length === 1 && r[0].id === 2);
+  });
+  t('newMemberRole select has all 5 roles', () => { const opts = Array.from(document.getElementById('newMemberRole').options).map(o=>o.value); ok(['admin','editor','operation','viewer','customer'].every(r => opts.includes(r))); });
   t('snapshots modal exists', () => ok(document.getElementById('snapshotsModal')));
   t('confirm typed input exists', () => ok(document.getElementById('confirm-typed-input')));
   t('token expires preset element exists', () => ok(document.getElementById('tokenExpiresPreset')));
