@@ -1,7 +1,20 @@
 // Headless self-test runner. Loads index.html in a real browser and calls
 // window.__runTests(), then prints pass/fail. Exit code 0 = all pass.
-import pkg from '/opt/node22/lib/node_modules/playwright/index.js';
-const { chromium } = pkg;
+let chromium;
+try {
+  const pkg = await import('/opt/node22/lib/node_modules/playwright/index.js');
+  chromium = pkg.chromium;
+} catch (e) {
+  try {
+    const pkg = await import('playwright');
+    chromium = pkg.chromium;
+  } catch (e2) {
+    console.error('Playwright not available in this environment.');
+    console.error('Checked: /opt/node22/lib/node_modules/playwright/index.js and node_modules/playwright');
+    console.error('Install Playwright, then run: node test/run-tests.mjs');
+    process.exit(2);
+  }
+}
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 

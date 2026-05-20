@@ -1131,9 +1131,9 @@
       <div class="input-group">
         <label>Role</label>
         <select id="tokenRole">
-          <option value="operator">Operator (ผู้ใช้โปรแกรม · แก้ Section B ได้ · ยุ่งกับ Token ไม่ได้)</option>
+          <option value="operation">Operation (ผู้ใช้โปรแกรม · แก้ Section B ได้ · ยุ่งกับ Token ไม่ได้)</option>
           <option value="client">Client (Read-Only · หลังส่งงาน)</option>
-          <option value="internal">Internal (Wakuwaku ทีม · เข้าถึงทุกอย่าง)</option>
+          <option value="admin">Admin (Wakuwaku ทีม · เข้าถึงทุกอย่าง)</option>
         </select>
       </div>
       <div class="input-group">
@@ -1434,7 +1434,8 @@ const firebaseConfig = {
   messagingSenderId: "956822346063",
   appId: "1:956822346063:web:58e035a01fda8bc7cd4d3a"
 };
-const ADMIN_EMAIL_DOMAIN = 'team.wkwkp.com'; // อีเมล @team.wkwkp.com = admin
+const ADMIN_EMAIL_DOMAIN = 'team.wkwkp.com'; // fallback เดิม (ค่อยยกเลิกหลังย้าย RBAC ครบ)
+const BOOTSTRAP_ADMIN_EMAILS = []; // optional: ['owner@company.com']
 let fbApp = null, fbAuth = null, fbDb = null;
 try {
   fbApp = firebase.initializeApp(firebaseConfig);
@@ -1451,7 +1452,7 @@ let fbDbUnsub = null;
 let accessToken = null;
 let databaseFileId = null;
 let isOfflineMode = false;
-let userRole = 'internal'; // 'internal' | 'client'
+let userRole = 'admin'; // 'admin' | 'editor' | 'operation' | 'viewer' | 'client'
 let activeAccessToken = null; // when in client mode
 let tokenClient;
 let saveTimer = null;
@@ -1522,6 +1523,20 @@ function parseDriveFolderId(input) {
 }
 let manualBackupHistory = []; // [{ts, filename, sizeKB}]
 let editingTokenId = null;
+
+const ROLE_ALIAS = { internal: 'admin', operator: 'operation' };
+function normalizeUserRole(role) {
+  const r = String(role || '').toLowerCase().trim();
+  const aliased = ROLE_ALIAS[r] || r;
+  if (['admin', 'editor', 'operation', 'viewer', 'client'].includes(aliased)) return aliased;
+  return 'client';
+}
+function isAdminRole() { return normalizeUserRole(userRole) === 'admin'; }
+function canManageMembers() { return normalizeUserRole(userRole) === 'admin'; }
+function canEditCampaignDetails() {
+  const r = normalizeUserRole(userRole);
+  return r === 'admin' || r === 'editor' || r === 'operation';
+}
 
 function getCurrentCampaign() {
   if (!currentMemberEmail) return null;
@@ -1665,7 +1680,7 @@ function handleRealGoogleLogin() {
 
 async function onLoginSuccess() {
   isOfflineMode = false;
-  userRole = 'internal';
+  userRole = 'admin';
   document.body.classList.remove('client-mode', 'operator-mode');
   _currentTokenLogin = null;
   document.getElementById('authOverlay').style.display = 'none';
@@ -1674,8 +1689,8 @@ async function onLoginSuccess() {
   // 0) Firebase user → email + role gate
   const fbUser = fbAuth && fbAuth.currentUser;
   currentUserEmail = ((fbUser && fbUser.email) || '').toLowerCase();
-  isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-  if (!isAdmin) { userRole = 'client'; }
+  isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN) || BOOTSTRAP_ADMIN_EMAILS.includes(currentUserEmail);
+  userRole = isAdmin ? 'admin' : 'viewer';
   applyRoleRestrictions();
   // 1) Profile — failure here must NOT block DB loading
   let userEmail = currentUserEmail;
@@ -1686,8 +1701,8 @@ async function onLoginSuccess() {
       userEmail = user.email || userEmail;
       if (!currentUserEmail && userEmail) {
         currentUserEmail = userEmail.toLowerCase();
-        isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-        if (!isAdmin) { userRole = 'client'; }
+        isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN) || BOOTSTRAP_ADMIN_EMAILS.includes(currentUserEmail);
+        userRole = isAdmin ? 'admin' : 'viewer';
         applyRoleRestrictions();
       }
       const name = user.name || user.email || (isAdmin ? 'Wakuwaku Internal' : 'Member');
@@ -1715,7 +1730,7 @@ async function onLoginSuccess() {
   // 2b) Announce presence on the shared DB so other Wkwk teammates see us
   // in their sidebar. Done after sync so the join log mentions the right
   // databaseFileId.
-  if (isAdmin) joinSharedSession('internal', userEmail);
+  if (isAdminRole()) joinSharedSession('admin', userEmail);
   // 3) If Drive had no DB but a local backup exists, offer to restore it
   maybeOfferLocalRestore();
   // 4) Pending follow-ups
@@ -1741,30 +1756,32 @@ function applyTokenLogin(token) {
   const match = (accessTokens || []).find(x => x.token === token);
   if (!match) { showToast('❌ Token ไม่ถูกต้อง — ไม่พบในระบบ', 'err'); setTimeout(performLogout, 1800); return; }
   if (match.expiresAt && new Date(match.expiresAt).getTime() < Date.now()) { showToast('❌ Token หมดอายุแล้ว (' + new Date(match.expiresAt).toLocaleDateString() + ')', 'err'); setTimeout(performLogout, 1800); return; }
-  if (match.role === 'internal') { showToast('Token นี้เป็น internal — เข้าระบบแบบ admin', 'ok'); return; } // stay internal
+  if (normalizeUserRole(match.role) === 'admin') { showToast('Token นี้เป็น admin', 'ok'); userRole = 'admin'; return; }
   // Scope to allowed campaigns
   if (Array.isArray(match.campaignIds) && match.campaignIds.length) {
     campaigns = campaigns.filter(c => match.campaignIds.includes(c.id));
     if (campaigns.length === 0) { showToast('❌ Token นี้ไม่มีสิทธิ์เข้าถึงแคมเปญใด', 'err'); setTimeout(performLogout, 1800); return; }
     if (!campaigns.find(c => c.id === currentCampaignId)) currentCampaignId = campaigns[0].id;
   }
-  userRole = (match.role === 'client') ? 'client' : 'operator';
+  userRole = normalizeUserRole(match.role || 'viewer');
   _currentTokenLogin = token;
-  document.getElementById('sb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
-  document.getElementById('sb-avatar').textContent = userRole === 'operator' ? '🛠' : '👁';
-  document.getElementById('tb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
-  document.getElementById('tb-avatar').textContent = userRole === 'operator' ? '🛠' : '👁';
-  document.getElementById('sb-mode-tag').textContent = userRole === 'operator' ? 'Operator · Token Access' : 'Client · Token (Read-Only)';
+  const roleLabel = { admin:'Admin', editor:'Editor', operation:'Operation', viewer:'Viewer', client:'Client' }[userRole] || 'User';
+  const roleAvatar = { admin:'🛡', editor:'✍️', operation:'🛠', viewer:'👁', client:'👁' }[userRole] || '👤';
+  document.getElementById('sb-name').textContent = match.name || roleLabel;
+  document.getElementById('sb-avatar').textContent = roleAvatar;
+  document.getElementById('tb-name').textContent = match.name || roleLabel;
+  document.getElementById('tb-avatar').textContent = roleAvatar;
+  document.getElementById('sb-mode-tag').textContent = `${roleLabel} · Token Access`;
   document.getElementById('sb-mode-tag').style.color = 'var(--gold)';
   applyRoleRestrictions();
   renderEverything();
   switchView('overview');
   logAction('SYSTEM', `Token login: ${match.name || 'token'} as ${userRole}`);
-  showToast(`✓ เข้าระบบเป็น ${userRole === 'operator' ? 'Operator' : 'Client'}${match.name ? ' · ' + match.name : ''}`, 'ok');
+  showToast(`✓ เข้าระบบเป็น ${roleLabel}${match.name ? ' · ' + match.name : ''}`, 'ok');
   saveSession();
   // Operators are Wkwk team — announce them on the shared presence list
   // (clients are excluded by renderPresenceSidebar).
-  if (userRole === 'operator') joinSharedSession('operator', token);
+  if (userRole !== 'client' && userRole !== 'viewer') joinSharedSession(userRole, token);
 }
 
 // ============================================================================
@@ -1831,13 +1848,13 @@ function restoreFromLocalBackup() {
 
 function saveSession() {
   try {
-    const googleAuthed = (userRole === 'internal' || userRole === 'operator') && !isOfflineMode && !!accessToken;
+    const googleAuthed = (userRole === 'admin' || userRole === 'editor' || userRole === 'operation') && !isOfflineMode && !!accessToken;
     const meta = {
       ts: Date.now(),
       userRole, isOfflineMode,
       accessToken: googleAuthed ? accessToken : null,
       tokenExpiresAt: googleAuthed ? (Date.now() + 50*60*1000) : null,
-      operatorToken: userRole === 'operator' ? _currentTokenLogin : null,
+      operatorToken: userRole === 'operation' ? _currentTokenLogin : null,
       databaseFileId,
       currentCampaignId,
       profileName: document.getElementById('sb-name')?.textContent || '',
@@ -1879,8 +1896,8 @@ async function tryRestoreSession() {
     });
     if (fbAuth && fbAuth.currentUser) {
       currentUserEmail = (fbAuth.currentUser.email || '').toLowerCase();
-      isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN);
-      userRole = isAdmin ? 'internal' : 'client';
+      isAdmin = currentUserEmail.endsWith('@' + ADMIN_EMAIL_DOMAIN) || BOOTSTRAP_ADMIN_EMAILS.includes(currentUserEmail);
+      userRole = isAdmin ? 'admin' : 'viewer';
       applyRoleRestrictions();
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainApp').style.display = 'grid';
@@ -1893,7 +1910,7 @@ async function tryRestoreSession() {
       document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
-      if (isAdmin) joinSharedSession('internal', currentUserEmail);
+      if (isAdmin) joinSharedSession('admin', currentUserEmail);
       setSaveStatus('idle', 'Connected');
       showToast('Session restored');
       return true;
@@ -1906,7 +1923,8 @@ async function tryRestoreSession() {
     if (!s || !s.ts) return false;
     if (Date.now() - s.ts > 6*60*60*1000) { clearSession(); return false; } // 6hr cap
 
-    if ((s.userRole === 'internal' || s.userRole === 'operator') && s.accessToken && Date.now() < (s.tokenExpiresAt || 0)) {
+    const restoredRole = normalizeUserRole(s.userRole);
+    if ((restoredRole === 'admin' || restoredRole === 'editor' || restoredRole === 'operation') && s.accessToken && Date.now() < (s.tokenExpiresAt || 0)) {
       accessToken = s.accessToken;
       databaseFileId = s.databaseFileId || null;
       // Verify token by fetching profile
@@ -1914,7 +1932,7 @@ async function tryRestoreSession() {
         const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } });
         if (!r.ok) throw new Error('token invalid');
         const user = await r.json();
-        isOfflineMode = false; userRole = 'internal';
+        isOfflineMode = false; userRole = restoredRole === 'client' ? 'viewer' : restoredRole;
         document.body.classList.remove('client-mode', 'operator-mode');
         document.getElementById('authOverlay').style.display = 'none';
         document.getElementById('mainApp').style.display = 'grid';
@@ -1926,8 +1944,8 @@ async function tryRestoreSession() {
         document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
         document.getElementById('sb-mode-tag').style.color = "var(--connect)";
         await syncDatabaseFromDrive();
-        if (s.userRole === 'operator' && s.operatorToken) { applyTokenLogin(s.operatorToken); }
-        else { joinSharedSession('internal', user.email || ''); showToast('Session restored'); }
+        if (restoredRole === 'operation' && s.operatorToken) { applyTokenLogin(s.operatorToken); }
+        else { joinSharedSession(userRole, user.email || ''); showToast('Session restored'); }
         return true;
       } catch(e) {
         clearSession();
@@ -1941,7 +1959,7 @@ async function tryRestoreSession() {
       accessTokens = data.accessTokens || [];
       currentCampaignId = s.currentCampaignId || (campaigns[0] && campaigns[0].id);
       isOfflineMode = !!s.isOfflineMode;
-      userRole = s.userRole;
+      userRole = normalizeUserRole(s.userRole);
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainApp').style.display = 'grid';
       setSaveStatus('offline', 'Offline preview · changes won\'t persist');
@@ -1950,7 +1968,7 @@ async function tryRestoreSession() {
       document.getElementById('sb-mode-tag').textContent = userRole === 'client' ? 'Client View · Read Only' : 'Offline Preview';
       document.getElementById('sb-mode-tag').style.color = "var(--gold)";
       renderEverything();
-      if (userRole === 'client' || userRole === 'operator') applyRoleRestrictions();
+      if (userRole === 'client' || userRole === 'operation' || userRole === 'viewer') applyRoleRestrictions();
       if (data._stripped) showToast('Session restored (media ใหญ่เกิน — กรุณา re-import bundle เพื่อโหลดสื่อ)', 'warn');
       else showToast('Session restored');
       return true;
@@ -3309,7 +3327,7 @@ function renderPresenceSidebar() {
   if (userRole === 'client' || isOfflineMode) { section.style.display = 'none'; return; }
   prunePresence();
   // Only show Wkwk team (internal + operator), not clients
-  const team = (presence || []).filter(p => p.role === 'internal' || p.role === 'operator');
+  const team = (presence || []).filter(p => normalizeUserRole(p.role) !== 'client' && normalizeUserRole(p.role) !== 'viewer');
   if (team.length === 0) { section.style.display = 'none'; return; }
   team.sort((a, b) => (a.loginAt || '').localeCompare(b.loginAt || ''));
   section.style.display = '';
@@ -3321,7 +3339,7 @@ function renderPresenceSidebar() {
     return `<div class="presence-item" title="${escapeHtml(tip)}">
       <div class="presence-avatar${isSelf ? ' self' : ''}">${av}</div>
       <div class="presence-name">${escapeHtml(p.name || '—')}${isSelf ? ' <small>(คุณ)</small>' : ''}</div>
-      <div class="presence-role">${p.role === 'internal' ? 'INT' : 'OP'}</div>
+      <div class="presence-role">${({admin:'ADM',editor:'EDT',operation:'OPS',viewer:'VWR',client:'CLT'}[normalizeUserRole(p.role)] || 'USR')}</div>
     </div>`;
   }).join('');
 }
@@ -3349,7 +3367,7 @@ function joinSharedSession(role, identifier, label) {
   // identifier: email for internal, token for operator. Used to build a stable
   // key that survives reloads so the same human doesn't appear twice.
   const id = identifier || ('anon-' + Math.random().toString(36).slice(2, 8));
-  const nextKey = (role === 'internal' ? 'g:' : 'op:') + id;
+  const nextKey = (normalizeUserRole(role) === 'admin' ? 'g:' : 'op:') + id;
   // If we previously joined under a different key in this session
   // (e.g. internal user entered an operator token mid-session), drop the
   // stale entry so teammates don't see us twice in their sidebar.
@@ -3481,7 +3499,7 @@ function renderSnapshotsModal() {
       const d = s.data || {};
       const nAssets = (d.assets || []).length;
       const nLogs = (d.log || []).length;
-      const canRevert = userRole === 'internal' || userRole === 'operator';
+      const canRevert = canEditCampaignDetails();
       return `<div class="snap-item">
         <div>
           <strong>v${snaps.length - i}</strong> · ${escapeHtml(s.label || 'snapshot')}<br>
@@ -4287,7 +4305,7 @@ function performLogout() {
   accessToken = null;
   databaseFileId = null;
   pendingChanges = false;
-  userRole = 'internal';
+  userRole = 'admin';
   isOfflineMode = false;
   _currentTokenLogin = null;
   document.body.classList.remove('client-mode', 'operator-mode');
@@ -4947,7 +4965,7 @@ function renderAccessTable() {
 function openAddTokenModal() {
   if (blockIfNotInternal('จัดการ Token ได้เฉพาะทีม Wakuwaku')) return;
   document.getElementById('tokenName').value = '';
-  document.getElementById('tokenRole').value = 'operator';
+  document.getElementById('tokenRole').value = 'operation';
   document.getElementById('tokenExpiresPreset').value = '90';
   document.getElementById('tokenExpires').value = 90;
   document.getElementById('tokenExpires').style.display = 'none';
@@ -5043,20 +5061,20 @@ function applyRoleRestrictions() {
   const navHub = document.getElementById('nav-hub');
   if (navAccess) navAccess.classList.remove('hidden');
   if (navHub) navHub.classList.remove('hidden');
-  if (userRole === 'client') {
+  if (userRole === 'client' || userRole === 'viewer') {
     document.body.classList.add('client-mode');
     if (navAccess) navAccess.classList.add('hidden');
     CLIENT_DISABLED_SELECTORS.forEach(sel => document.querySelectorAll(sel).forEach(el => {
       if (el.closest('.client-allow') || el.dataset.alwaysOn === '1') return;
       el.classList.add('client-disabled'); el.setAttribute('disabled', 'disabled'); el.setAttribute('aria-disabled', 'true');
-      el.title = 'Client view · อ่านอย่างเดียว';
+      el.title = userRole === 'viewer' ? 'Viewer · อ่านอย่างเดียว' : 'Client view · อ่านอย่างเดียว';
     }));
-  } else if (userRole === 'operator') {
+  } else if (userRole === 'operation' || userRole === 'editor') {
     document.body.classList.add('operator-mode');
     if (navAccess) navAccess.classList.add('hidden');
     OPERATOR_DISABLED_SELECTORS.forEach(sel => document.querySelectorAll(sel).forEach(el => {
       el.classList.add('client-disabled'); el.setAttribute('disabled', 'disabled'); el.setAttribute('aria-disabled', 'true');
-      el.title = 'Operator · เฉพาะทีม Wakuwaku เท่านั้น';
+      el.title = userRole === 'editor' ? 'Editor · สิทธิ์จัดการระบบถูกจำกัด' : 'Operation · สิทธิ์จัดการระบบถูกจำกัด';
     }));
     // If we're currently on a hidden view, bounce to overview
     const active = document.querySelector('.view-container.active');
@@ -5068,20 +5086,22 @@ function applyClientModeRestrictions() { applyRoleRestrictions(); }
 
 // Guard for read-only client. Returns true if action should be blocked.
 function blockIfClient(actionLabel) {
-  if (userRole === 'client') {
+  if (userRole === 'client' || userRole === 'viewer') {
     showToast('👁 Client view · ' + (actionLabel || 'อ่านอย่างเดียว — ไม่สามารถแก้ไขได้'), 'warn');
     return true;
   }
   return false;
 }
-// Guard for wakuwaku-only features (token mgmt, new campaign, Connect Drive, Hub, backup).
-function blockIfNotInternal(actionLabel) {
-  if (userRole !== 'internal') {
-    showToast('🔒 เฉพาะทีม Wakuwaku · ' + (actionLabel || 'ใช้ส่วนนี้ไม่ได้'), 'warn');
+// Guard for admin-only features (member/role management).
+function blockIfNotAdmin(actionLabel) {
+  if (!canManageMembers()) {
+    showToast('🔒 เฉพาะ admin · ' + (actionLabel || 'ใช้ส่วนนี้ไม่ได้'), 'warn');
     return true;
   }
   return false;
 }
+// Back-compat guard name used by existing call sites/tests.
+function blockIfNotInternal(actionLabel) { return blockIfNotAdmin(actionLabel); }
 
 // ============================================================================
 // PRE-HANDOFF CHECKLIST
@@ -5809,7 +5829,7 @@ function loadDataOffline(data, providedToken) {
   document.getElementById('sb-mode-tag').style.color = "var(--gold)";
 
   renderEverything();
-  if (userRole === 'client' || userRole === 'operator') applyRoleRestrictions();
+  if (userRole === 'client' || userRole === 'operation' || userRole === 'viewer') applyRoleRestrictions();
   showToast('✓ Project loaded · ' + (userRole === 'client' ? 'read-only' : 'offline edit'));
   logAction('IMPORT', `Bundle loaded (${userRole} mode)`);
   saveSession();
@@ -6414,11 +6434,11 @@ window.__runTests = async function() {
   });
 
   // ---- Roles / token login ----
-  t('blockIfNotInternal blocks operator', () => { const sv = userRole; userRole = 'operator'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === true); });
-  t('blockIfNotInternal passes internal', () => { const sv = userRole; userRole = 'internal'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === false); });
-  t('blockIfClient still blocks client only', () => { const sv = userRole; userRole = 'operator'; const r1 = blockIfClient(); userRole = 'client'; const r2 = blockIfClient(); userRole = sv; ok(r1 === false && r2 === true); });
+  t('blockIfNotInternal blocks operation', () => { const sv = userRole; userRole = 'operation'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === true); });
+  t('blockIfNotInternal passes internal', () => { const sv = userRole; userRole = 'admin'; const r = blockIfNotInternal('x'); userRole = sv; ok(r === false); });
+  t('blockIfClient blocks viewer/client', () => { const sv = userRole; userRole = 'operation'; const r1 = blockIfClient(); userRole = 'viewer'; const r2 = blockIfClient(); userRole = 'client'; const r3 = blockIfClient(); userRole = sv; ok(r1 === false && r2 === true && r3 === true); });
   t('applyRoleRestrictions operator hides access nav but keeps hub visible', () => {
-    const sv = userRole; userRole = 'operator'; applyRoleRestrictions();
+    const sv = userRole; userRole = 'operation'; applyRoleRestrictions();
     ok(document.getElementById('nav-access').classList.contains('hidden'));
     ok(!document.getElementById('nav-hub').classList.contains('hidden'));
     ok(document.body.classList.contains('operator-mode'));
@@ -6431,7 +6451,7 @@ window.__runTests = async function() {
     el.value = 'custom'; document.getElementById('tokenExpires').value = '42'; eq(getTokenExpiryDays(), 42);
     el.value = '90';
   });
-  t('tokenRole select has operator option', () => { const opts = Array.from(document.getElementById('tokenRole').options).map(o=>o.value); ok(opts.includes('operator')); ok(opts.includes('client')); ok(opts.includes('internal')); });
+  t('tokenRole select has operator option', () => { const opts = Array.from(document.getElementById('tokenRole').options).map(o=>o.value); ok(opts.includes('operation')); ok(opts.includes('client')); ok(opts.includes('admin')); });
   t('snapshots modal exists', () => ok(document.getElementById('snapshotsModal')));
   t('confirm typed input exists', () => ok(document.getElementById('confirm-typed-input')));
   t('token expires preset element exists', () => ok(document.getElementById('tokenExpiresPreset')));
@@ -6762,7 +6782,7 @@ window.__runTests = async function() {
   });
   t('upsertPresence inserts then refreshes (no duplicate)', () => {
     const save = { presence, presenceKey, userRole };
-    presence = []; presenceKey = 'g:test@wkwk.com'; userRole = 'internal';
+    presence = []; presenceKey = 'g:test@wkwk.com'; userRole = 'admin';
     upsertPresence(); upsertPresence();
     eq(presence.length, 1, 'one entry for same key');
     ok(presence[0].loginAt && presence[0].lastSeen, 'has timestamps');
@@ -6773,8 +6793,8 @@ window.__runTests = async function() {
     const stale = new Date(Date.now() - (PRESENCE_TIMEOUT_MS + 10000)).toISOString();
     const fresh = new Date().toISOString();
     presence = [
-      { key: 'g:old@x', name: 'Old', role: 'internal', lastSeen: stale, loginAt: stale },
-      { key: 'g:new@x', name: 'New', role: 'internal', lastSeen: fresh, loginAt: fresh }
+      { key: 'g:old@x', name: 'Old', role: 'admin', lastSeen: stale, loginAt: stale },
+      { key: 'g:new@x', name: 'New', role: 'admin', lastSeen: fresh, loginAt: fresh }
     ];
     prunePresence();
     eq(presence.length, 1);
@@ -6784,9 +6804,9 @@ window.__runTests = async function() {
   t('joinSharedSession dedupes when role switches mid-session', () => {
     const save = { presence, presenceKey, userRole };
     presence = []; presenceKey = null;
-    userRole = 'internal'; joinSharedSession('internal', 'op@wkwk.com');
+    userRole = 'admin'; joinSharedSession('admin', 'op@wkwk.com');
     const firstKey = presenceKey;
-    userRole = 'operator'; joinSharedSession('operator', 'tok-xyz');
+    userRole = 'operation'; joinSharedSession('operation', 'tok-xyz');
     const internalEntries = presence.filter(p => p.key === firstKey);
     eq(internalEntries.length, 0, 'old internal entry was dropped');
     eq(presence.filter(p => p.key === presenceKey).length, 1, 'new operator entry exists');
@@ -6800,9 +6820,9 @@ window.__runTests = async function() {
   });
   t('renderPresenceSidebar excludes client entries from Wkwk team view', () => {
     const save = { presence, userRole, isOfflineMode };
-    userRole = 'internal'; isOfflineMode = false;
+    userRole = 'admin'; isOfflineMode = false;
     presence = [
-      { key:'g:a@x', name:'A', role:'internal', avatar:'A', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() },
+      { key:'g:a@x', name:'A', role:'admin', avatar:'A', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() },
       { key:'c:tok1', name:'ClientGuest', role:'client', avatar:'C', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() }
     ];
     renderPresenceSidebar();
