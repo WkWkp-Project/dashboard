@@ -132,6 +132,22 @@
   .member-add-camp { margin-top:4px; background:none; border:1px dashed var(--ink-3); color:var(--muted); cursor:pointer; font-size:10px; padding:5px; border-radius:4px; font-family:'Geist Mono',monospace; }
   .member-add-camp:hover { color:var(--gold); border-color:var(--gold); }
 
+  /* Campaign assignment picker (in member modal) */
+  .assign-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .assign-search { flex:1; padding:7px 10px; font-size:12px; border:1px solid var(--line); border-radius:6px; background:var(--paper); }
+  .assign-count { font-size:10px; font-family:'Geist Mono',monospace; color:var(--gold); white-space:nowrap; }
+  .assign-empty { font-size:12px; color:var(--muted-2); padding:10px; text-align:center; }
+  .assign-rows { display:flex; flex-direction:column; gap:4px; max-height:240px; overflow:auto; }
+  .assign-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; transition:all .12s; }
+  .assign-row:hover { border-color:var(--gold); background:var(--paper-2); }
+  .assign-row.on { border-color:var(--gold); background:linear-gradient(0deg, rgba(184,146,72,0.08), rgba(184,146,72,0.08)); }
+  .assign-row input[type=checkbox] { display:none; }
+  .assign-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  .assign-name { font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .assign-sub { font-size:10px; color:var(--muted-2); font-family:'Geist Mono',monospace; }
+  .assign-tick { width:20px; height:20px; border-radius:50%; border:1.5px solid var(--line); color:transparent; display:grid; place-items:center; font-size:11px; flex-shrink:0; transition:all .12s; }
+  .assign-row.on .assign-tick { background:var(--gold); border-color:var(--gold); color:#fff; }
+
   /* Online presence (Wkwk team) */
   .presence-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; font-size: 12px; color: rgba(250,250,247,0.85); margin-bottom: 1px; }
   .presence-item:hover { background: var(--ink-2); }
@@ -1137,10 +1153,6 @@
       <div class="input-group">
         <label>Display Name <small class="hint-label">(ชื่อที่จะโชว์ใน sidebar)</small></label>
         <input type="text" id="newMemberName" placeholder="ABC Co." />
-      </div>
-      <div class="input-group">
-        <label>Default Client Drive Folder URL <small class="hint-label">(optional · ถ้าใส่ แคมเปญใหม่ที่สร้างใต้ member นี้จะ default มาที่ folder นี้)</small></label>
-        <input type="url" id="newMemberDriveUrl" placeholder="https://drive.google.com/drive/folders/..." />
       </div>
       <div class="input-group">
         <label>Role <small class="hint-label">(สิทธิ์การใช้งาน)</small></label>
@@ -3336,6 +3348,15 @@ async function syncDatabaseFromDrive(opts) {
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
+    // A page refresh restores the Firebase session but NOT the Google Drive
+    // access token (it lives only in memory). Without this, campaigns (stored
+    // on Drive) silently vanish after refresh while Firestore members still
+    // show. Re-acquire the token (silent GIS refresh) before loading.
+    if (!accessToken && fbAuth && fbAuth.currentUser && !isOfflineMode) {
+      if (!silent) setSaveStatus('saving', 'Reconnecting Drive...');
+      try { const t = await waitForFreshToken(); if (t) accessToken = t; }
+      catch(e) { console.warn('Drive token reacquire failed:', e); }
+    }
     const searched = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
     // Augment Drive search with campaigns from the shared index (created by
     // other admins, possibly in folders not surfaced by our own search).
@@ -3369,6 +3390,11 @@ async function syncDatabaseFromDrive(opts) {
       setSaveStatus('saved', silent ? 'Synced from Drive' : 'Loaded campaign JSON from Drive');
       if (lastSaveTime) { const m = document.getElementById('meta-saved'); if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }); }
       if (!silent) showToast(`Loaded ${campaigns.length} campaign · ${members.length} member(s) from Drive`);
+    } else if (!accessToken) {
+      // Couldn't get a Drive token — DON'T wipe what we have; surface the issue
+      // so the user can reconnect instead of seeing a silently empty list.
+      setSaveStatus('error', 'เชื่อม Drive ไม่ได้ · กดเพื่อ login ใหม่');
+      renderEverything();
     } else {
       if (!isAdmin) { campaigns = []; currentCampaignId = null; }
       setSaveStatus('idle', isAdmin ? 'No Drive campaign JSON yet' : 'No campaigns shared with you yet');
@@ -4317,15 +4343,50 @@ function renderMemberCampaignChecklist(selectedIds) {
     opts.push({ fid, label: (c.campaign || c.client || c.id || fid) });
   });
   if (!opts.length) {
-    box.innerHTML = '<div style="font-size:11px; color:var(--muted-2);">ยังไม่มีแคมเปญที่มี Drive folder ให้ assign</div>';
+    box.innerHTML = '<div class="assign-empty">ยังไม่มีแคมเปญให้ assign — สร้างแคมเปญก่อน</div>';
     return;
   }
-  box.innerHTML = opts.map(o =>
-    `<label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px;">
-       <input type="checkbox" class="member-camp-chk" value="${o.fid}" ${selectedIds.indexOf(o.fid) >= 0 ? 'checked' : ''} />
-       <span>${escapeHtml(o.label)}</span>
-     </label>`
-  ).join('');
+  // Enrich with client name for the subtitle.
+  const byFid = {};
+  (campaigns || []).forEach(c => { if (c.driveFolderId && !byFid[c.driveFolderId]) byFid[c.driveFolderId] = c; });
+  box.innerHTML =
+    `<div class="assign-toolbar">
+       <input type="text" class="assign-search" placeholder="🔍 ค้นหาแคมเปญ..." oninput="filterAssignList(this.value)" />
+       <span class="assign-count" id="assign-count"></span>
+     </div>
+     <div class="assign-rows" id="assign-rows">` +
+    opts.map(o => {
+      const c = byFid[o.fid] || {};
+      const checked = selectedIds.indexOf(o.fid) >= 0;
+      return `<label class="assign-row${checked ? ' on' : ''}" data-label="${escapeHtml((o.label + ' ' + (c.client||'')).toLowerCase())}">
+         <input type="checkbox" class="member-camp-chk" value="${escapeHtml(o.fid)}" ${checked ? 'checked' : ''} onchange="onAssignToggle(this)" />
+         <span class="assign-info">
+           <span class="assign-name">${escapeHtml(o.label)}</span>
+           <span class="assign-sub">${escapeHtml(c.client || '—')}${c.assets ? ' · ' + c.assets.length + ' assets' : ''}</span>
+         </span>
+         <span class="assign-tick">✓</span>
+       </label>`;
+    }).join('') +
+    `</div>`;
+  updateAssignCount();
+}
+
+function onAssignToggle(cb) {
+  const row = cb.closest('.assign-row');
+  if (row) row.classList.toggle('on', cb.checked);
+  updateAssignCount();
+}
+function updateAssignCount() {
+  const el = document.getElementById('assign-count');
+  if (!el) return;
+  const n = document.querySelectorAll('#newMemberCampaigns .member-camp-chk:checked').length;
+  el.textContent = n ? `เลือก ${n}` : '';
+}
+function filterAssignList(q) {
+  q = (q || '').toLowerCase().trim();
+  document.querySelectorAll('#assign-rows .assign-row').forEach(row => {
+    row.style.display = (!q || (row.dataset.label || '').includes(q)) ? '' : 'none';
+  });
 }
 
 // Show/hide the campaign assignment block — admins see everything so no need.
@@ -4342,7 +4403,6 @@ function openAddMemberModal() {
   document.getElementById('newMemberEmail').value = '';
   document.getElementById('newMemberEmail').disabled = false;
   document.getElementById('newMemberName').value = '';
-  document.getElementById('newMemberDriveUrl').value = '';
   document.getElementById('newMemberRole').value = 'customer';
   renderMemberCampaignChecklist([]);
   syncMemberCampaignsVisibility();
@@ -4359,7 +4419,6 @@ function openEditMember(email) {
   document.getElementById('newMemberEmail').value = m.email;
   document.getElementById('newMemberEmail').disabled = true; // email is the identity, can't change
   document.getElementById('newMemberName').value = m.name || '';
-  document.getElementById('newMemberDriveUrl').value = m.driveFolderUrl || '';
   document.getElementById('newMemberRole').value = m.role || 'customer';
   renderMemberCampaignChecklist(m.campaignFolderIds || []);
   syncMemberCampaignsVisibility();
@@ -4377,11 +4436,8 @@ async function saveNewMember() {
   }
   const emailRaw = document.getElementById('newMemberEmail').value.trim().toLowerCase();
   const name = document.getElementById('newMemberName').value.trim();
-  const driveUrl = document.getElementById('newMemberDriveUrl').value.trim();
   const role = document.getElementById('newMemberRole').value;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) { showToast('รูปแบบอีเมลไม่ถูกต้อง', 'err'); return; }
-  const folderId = driveUrl ? parseDriveFolderId(driveUrl) : '';
-  if (driveUrl && !folderId) { showToast('Drive Folder URL ต้องเป็น link /folders/... ', 'err'); return; }
   if (isSaving) { showToast('กำลังเซฟอยู่ — รอสักครู่แล้วลองใหม่', 'warn'); return; }
   const wasEditing = !!editingMemberEmail;
   if (!wasEditing && findMember(emailRaw)) { showToast('มี member อีเมลนี้อยู่แล้ว', 'warn'); return; }
@@ -4400,7 +4456,6 @@ async function saveNewMember() {
     await window.Control.upsertMember({
       email: emailRaw, name, role,
       campaignFolderIds,
-      driveFolderUrl: driveUrl, driveFolderId: folderId,
       createdBy: currentUserName()
     });
     closeAddMemberModal();
@@ -4408,13 +4463,15 @@ async function saveNewMember() {
     setSaveStatus('saved', 'Member saved');
     showToast('✓ Saved member: ' + emailRaw + ' · ' + role, 'ok');
 
-    // Best-effort: share their Drive folder so a customer can read it. Non-fatal.
-    if (folderId && accessToken && (role === 'customer' || role === 'viewer')) {
-      try { await shareDriveFolderWithUser(folderId, emailRaw, 'reader'); }
-      catch(shareErr) {
-        console.warn('share folder failed:', shareErr);
-        showToast('⚠️ Saved แต่ share folder ให้ ' + emailRaw + ' ไม่สำเร็จ — share เองที่ Drive', 'warn');
+    // Share each assigned campaign folder with this member so customers/viewers
+    // can actually read them on Drive. Best-effort, non-fatal.
+    if (accessToken && (role === 'customer' || role === 'viewer') && campaignFolderIds.length) {
+      let shareFail = 0;
+      for (const fid of campaignFolderIds) {
+        try { await shareDriveFolderWithUser(fid, emailRaw, 'reader'); }
+        catch(shareErr) { shareFail++; console.warn('share assigned folder failed:', fid, shareErr); }
       }
+      if (shareFail) showToast(`⚠️ Saved แต่ share ${shareFail} folder ให้ ${emailRaw} ไม่สำเร็จ — share เองที่ Drive`, 'warn');
     }
   } catch(e) {
     console.error('Save member failed:', e);
@@ -7015,6 +7072,9 @@ window.__runTests = async function() {
     ok(n.id === 'cX' && n.name === 'N' && n.clientEmail === 'a@b.c' && n.driveDbFileId === 'f1');
   });
   t('Add Campaign modal requires Drive URL field', () => ok(document.getElementById('newCampaignDriveUrl')));
+  t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
+  t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
+  t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
   t('Campaigns nav section hidden (campaigns live in member cards)', () => ok(document.getElementById('campaigns-nav-section').style.display === 'none'));
   t('loadCampaignsFromIndex + onControlCampaignsChanged defined', () => ok(typeof loadCampaignsFromIndex === 'function' && typeof onControlCampaignsChanged === 'function'));
