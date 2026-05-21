@@ -2581,7 +2581,9 @@ async function trashMemberMarkerInDrive(member) {
 async function shareDriveFolderWithUser(folderId, email, role) {
   if (!folderId || !email) return null;
   const body = { role: role || 'reader', type: 'user', emailAddress: email };
-  const url = `https://www.googleapis.com/drive/v3/files/${folderId}/permissions?sendNotificationEmail=true&supportsAllDrives=true`;
+  // sendNotificationEmail=false — silent share. Auto-sharing campaign folders
+  // with every admin on each save would otherwise spam everyone's inbox.
+  const url = `https://www.googleapis.com/drive/v3/files/${folderId}/permissions?sendNotificationEmail=false&supportsAllDrives=true`;
   const r = await authFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
