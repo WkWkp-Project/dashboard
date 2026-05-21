@@ -1645,6 +1645,7 @@ function initGoogleAuth() {
       client_id: CLIENT_ID, scope: SCOPES,
       callback: (resp) => {
         if (resp.access_token) {
+          _silentRefreshInFlight = false;
           accessToken = resp.access_token;
           // Schedule the next silent refresh ~5 min before expiry
           if (refreshTimer) clearTimeout(refreshTimer);
@@ -1661,9 +1662,12 @@ function initGoogleAuth() {
         }
       },
       error_callback: (err) => {
+        console.warn('OAuth error_callback:', err);
+        // A silent (prompt:'') refresh that needs interaction → fall back to
+        // the Firebase popup quietly instead of surfacing an error.
+        if (_silentRefreshInFlight) { _silentRefreshInFlight = false; refreshTokenViaPopup(); return; }
         _drainTokenWaiters(null);
         _isInitialLogin = false;
-        console.warn('OAuth error_callback:', err);
         if (err && err.type === 'popup_closed') return;
         showToast('Login error: ' + (err && err.type || 'unknown'), 'err');
       }
@@ -1672,9 +1676,21 @@ function initGoogleAuth() {
 }
 let refreshTimer = null;
 let _isInitialLogin = false;
+let _silentRefreshInFlight = false;
+// Refresh the Drive access token. Tries GIS silent refresh first (no popup);
+// the tokenClient error_callback falls back to refreshTokenViaPopup() if the
+// silent attempt needs user interaction.
 function refreshToken() {
   if (!fbAuth || !fbAuth.currentUser || isOfflineMode) return;
-  // Firebase doesn't auto-refresh Google access tokens; reauth via popup.
+  if (tokenClient) {
+    _silentRefreshInFlight = true;
+    try { tokenClient.requestAccessToken({ prompt: '' }); return; }
+    catch(e) { _silentRefreshInFlight = false; console.warn('silent refresh threw, popup fallback:', e); }
+  }
+  refreshTokenViaPopup();
+}
+function refreshTokenViaPopup() {
+  if (!fbAuth || !fbAuth.currentUser || isOfflineMode) return;
   const provider = new firebase.auth.GoogleAuthProvider();
   SCOPES.split(' ').forEach(s => provider.addScope(s));
   fbAuth.currentUser.reauthenticateWithPopup(provider)
@@ -1912,6 +1928,7 @@ async function onLoginSuccess() {
   try { await syncDatabaseFromDrive(); }
   catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
   _controlLiveRender = true; // initial load done → control real-time updates may re-render now
+  startAutoResync(); // keep Drive data fresh while the tab is open
   // 2b) Announce presence on the shared DB so other Wkwk teammates see us
   // in their sidebar. Done after sync so the join log mentions the right
   // databaseFileId.
@@ -2093,6 +2110,7 @@ async function tryRestoreSession() {
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
       _controlLiveRender = true; // initial load done → control real-time updates may re-render now
+      startAutoResync(); // keep Drive data fresh while the tab is open
       if (isAdmin) joinSharedSession('internal', currentUserEmail);
       setSaveStatus('idle', 'Connected');
       showToast('Session restored');
@@ -3527,6 +3545,40 @@ function stopRemotePolling() {
   if (remotePollTimer) { clearInterval(remotePollTimer); remotePollTimer = null; }
 }
 
+// ---- Auto re-sync (keep data fresh after the tab sits idle) ----------------
+// The campaign content lives on Drive and isn't real-time, so without this a
+// long-idle tab shows stale data even though the status says "synced". We
+// re-pull when the tab regains focus/visibility and on a slow background
+// interval. Guarded so it never clobbers unsaved local edits.
+let _autoResyncTimer = null;
+let _lastResyncTs = 0;
+const AUTO_RESYNC_INTERVAL_MS = 120000; // 2 min
+const RESYNC_COOLDOWN_MS = 8000;
+async function maybeResync(reason) {
+  if (!accessToken || isOfflineMode) return;
+  if (!_readyToSave) return;
+  if (isSaving || saveTimer || pendingChanges) return; // don't overwrite local edits
+  if (typeof document !== 'undefined' && document.hidden) return;
+  const now = Date.now();
+  if (now - _lastResyncTs < RESYNC_COOLDOWN_MS) return;
+  _lastResyncTs = now;
+  try { await syncDatabaseFromDrive({ silent: true }); }
+  catch(e) { console.warn('auto-resync failed (' + reason + '):', e); }
+}
+function startAutoResync() {
+  stopAutoResync();
+  _autoResyncTimer = setInterval(() => { maybeResync('interval'); }, AUTO_RESYNC_INTERVAL_MS);
+}
+function stopAutoResync() {
+  if (_autoResyncTimer) { clearInterval(_autoResyncTimer); _autoResyncTimer = null; }
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') maybeResync('visible');
+  });
+  window.addEventListener('focus', () => maybeResync('focus'));
+}
+
 // ---- Presence (online Wkwk teammates) -------------------------------------
 function prunePresence() {
   const cutoff = Date.now() - PRESENCE_TIMEOUT_MS;
@@ -4637,6 +4689,7 @@ function performLogout() {
   // block logout on the network.
   stopPresenceHeartbeat();
   stopRemotePolling();
+  stopAutoResync();
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (presenceKey && Array.isArray(presence)) {
     presence = presence.filter(p => p.key !== presenceKey);
@@ -6939,6 +6992,15 @@ window.__runTests = async function() {
   t('Campaigns nav section hidden (campaigns live in member cards)', () => ok(document.getElementById('campaigns-nav-section').style.display === 'none'));
   t('loadCampaignsFromIndex + onControlCampaignsChanged defined', () => ok(typeof loadCampaignsFromIndex === 'function' && typeof onControlCampaignsChanged === 'function'));
   t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
+  t('auto-resync API defined', () => ok(typeof maybeResync === 'function' && typeof startAutoResync === 'function' && typeof stopAutoResync === 'function'));
+  t('silent token refresh path defined', () => ok(typeof refreshTokenViaPopup === 'function'));
+  t('refreshToken prefers GIS silent (no forced consent)', () => { const src = refreshToken.toString(); ok(/requestAccessToken/.test(src) && !/prompt:\s*['"]consent['"]/.test(src)); });
+  t('maybeResync skips when offline/no token', async () => {
+    const svT = accessToken, svO = isOfflineMode; accessToken = null; isOfflineMode = false;
+    let called = false; const realSync = window.syncDatabaseFromDrive; window.syncDatabaseFromDrive = async () => { called = true; };
+    await maybeResync('test'); window.syncDatabaseFromDrive = realSync; accessToken = svT; isOfflineMode = svO;
+    ok(called === false);
+  });
   t('snapshots modal exists', () => ok(document.getElementById('snapshotsModal')));
   t('confirm typed input exists', () => ok(document.getElementById('confirm-typed-input')));
   t('token expires preset element exists', () => ok(document.getElementById('tokenExpiresPreset')));
