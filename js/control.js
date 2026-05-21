@@ -21,6 +21,7 @@
 
   var COLLECTION = 'control_members';
   var COLLECTION_CAMPAIGNS = 'control_campaigns';
+  var COLLECTION_PRESENCE = 'control_presence';
 
   // --- Role / permission matrix --------------------------------------------
   // Keep this declarative so UI gates read from one place.
@@ -336,6 +337,48 @@
       if (!id) return Promise.reject(new Error('removeCampaign: id required'));
       if (!this._db) return Promise.reject(new Error('Firestore not available'));
       return this._db.collection(COLLECTION_CAMPAIGNS).doc(id).delete();
+    },
+
+    // --- Presence (online Wkwk team) -----------------------------------------
+    // Real-time online list shared across the team. Each member writes their
+    // own doc (heartbeat) and everyone subscribes; stale entries are pruned by
+    // lastSeen on the client side.
+    _presence: [],
+    _presenceUnsub: null,
+    _onPresenceChange: null,
+
+    heartbeatPresence: function (entry) {
+      if (!entry || !entry.key || !this._db) return Promise.resolve();
+      return this._db.collection(COLLECTION_PRESENCE).doc(entry.key).set({
+        key: entry.key,
+        name: entry.name || '',
+        role: entry.role || '',
+        avatar: entry.avatar || '',
+        email: normEmail(entry.email || ''),
+        lastSeen: new Date().toISOString()
+      }, { merge: true });
+    },
+
+    subscribePresence: function (onChange) {
+      var self = this;
+      this._onPresenceChange = typeof onChange === 'function' ? onChange : null;
+      if (!this._db) { if (self._onPresenceChange) self._onPresenceChange([]); return function () {}; }
+      if (this._presenceUnsub) { try { this._presenceUnsub(); } catch (e) {} this._presenceUnsub = null; }
+      this._presenceUnsub = this._db.collection(COLLECTION_PRESENCE).onSnapshot(function (snap) {
+        var list = [];
+        snap.forEach(function (doc) { list.push(doc.data()); });
+        self._presence = list;
+        if (self._onPresenceChange) self._onPresenceChange(list.slice());
+      }, function (err) {
+        console.error('[Control] presence snapshot error:', err);
+        if (self._onPresenceChange) self._onPresenceChange(self._presence.slice());
+      });
+      return this._presenceUnsub;
+    },
+
+    removePresence: function (key) {
+      if (!key || !this._db) return Promise.resolve();
+      return this._db.collection(COLLECTION_PRESENCE).doc(key).delete();
     }
   };
 

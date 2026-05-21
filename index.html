@@ -1786,6 +1786,8 @@ async function resolveUserRoleFromControl(email, displayName) {
     // regardless of who created them (bug: admins not seeing each other's camps).
     await window.Control.listCampaigns().catch(e => { console.warn('listCampaigns failed:', e); });
     window.Control.subscribeCampaigns(onControlCampaignsChanged);
+    // Shared online presence — see teammates in real time.
+    window.Control.subscribePresence(onControlPresenceChanged);
   } catch(e) {
     console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
     isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
@@ -1932,7 +1934,7 @@ async function onLoginSuccess() {
   // 2b) Announce presence on the shared DB so other Wkwk teammates see us
   // in their sidebar. Done after sync so the join log mentions the right
   // databaseFileId.
-  if (isAdmin) joinSharedSession('internal', userEmail);
+  if (isTeamRole()) joinSharedSession(userRole === 'operator' ? 'operator' : 'internal', userEmail || currentUserEmail);
   // 3) If Drive had no DB but a local backup exists, offer to restore it
   maybeOfferLocalRestore();
   // 4) Pending follow-ups
@@ -2111,7 +2113,7 @@ async function tryRestoreSession() {
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
       _controlLiveRender = true; // initial load done → control real-time updates may re-render now
       startAutoResync(); // keep Drive data fresh while the tab is open
-      if (isAdmin) joinSharedSession('internal', currentUserEmail);
+      if (isTeamRole()) joinSharedSession(userRole === 'operator' ? 'operator' : 'internal', currentUserEmail);
       setSaveStatus('idle', 'Connected');
       showToast('Session restored');
       return true;
@@ -3589,6 +3591,14 @@ function prunePresence() {
   });
 }
 
+// Only actual Wkwk team roles appear on the online sidebar (not customers).
+// When the control-plane role is known, trust it (customer maps to the legacy
+// 'operator' bucket, so we must NOT fall through to userRole for them).
+function isTeamRole() {
+  if (userRoleControl) return ['admin', 'editor', 'operation'].indexOf(userRoleControl) >= 0;
+  return userRole === 'internal' || userRole === 'operator';
+}
+
 function upsertPresence() {
   if (!presenceKey) return;
   const name = currentUserName();
@@ -3605,6 +3615,19 @@ function upsertPresence() {
     presence.push({ key: presenceKey, name, role: userRole, avatar, loginAt: now, lastSeen: now, app: APP_VERSION });
   }
   prunePresence();
+  // Publish our heartbeat to the shared control plane so other teammates see
+  // us in real time (Drive no longer carries a single shared presence list).
+  if (window.Control && window.Control.available() && isTeamRole()) {
+    window.Control.heartbeatPresence({ key: presenceKey, name, role: userRole, avatar, email: currentUserEmail })
+      .catch(e => console.warn('presence heartbeat failed:', e));
+  }
+}
+
+// Real-time presence updates from the control plane → refresh the sidebar.
+function onControlPresenceChanged(list) {
+  presence = (list || []).slice();
+  prunePresence();
+  renderPresenceSidebar();
 }
 
 function renderPresenceSidebar() {
@@ -4690,6 +4713,10 @@ function performLogout() {
   stopPresenceHeartbeat();
   stopRemotePolling();
   stopAutoResync();
+  // Drop our shared presence entry so teammates' sidebars update immediately.
+  if (window.Control && window.Control.available() && presenceKey) {
+    try { window.Control.removePresence(presenceKey); } catch(e) {}
+  }
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (presenceKey && Array.isArray(presence)) {
     presence = presence.filter(p => p.key !== presenceKey);
@@ -6994,6 +7021,18 @@ window.__runTests = async function() {
   t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
   t('auto-resync API defined', () => ok(typeof maybeResync === 'function' && typeof startAutoResync === 'function' && typeof stopAutoResync === 'function'));
   t('silent token refresh path defined', () => ok(typeof refreshTokenViaPopup === 'function'));
+  t('Control presence API defined', () => ok(typeof window.Control.heartbeatPresence === 'function' && typeof window.Control.subscribePresence === 'function' && typeof window.Control.removePresence === 'function'));
+  t('isTeamRole + onControlPresenceChanged defined', () => ok(typeof isTeamRole === 'function' && typeof onControlPresenceChanged === 'function'));
+  t('isTeamRole: admin/editor/operation true, customer/viewer false', () => {
+    const svC = userRoleControl, svR = userRole;
+    userRoleControl='admin'; userRole='internal'; const a=isTeamRole();
+    userRoleControl='editor'; const e=isTeamRole();
+    userRoleControl='operation'; userRole='operator'; const o=isTeamRole();
+    userRoleControl='customer'; userRole='operator'; const c=isTeamRole();
+    userRoleControl='viewer'; userRole='client'; const v=isTeamRole();
+    userRoleControl=svC; userRole=svR;
+    ok(a && e && o && !c && !v);
+  });
   t('refreshToken prefers GIS silent (no forced consent)', () => { const src = refreshToken.toString(); ok(/requestAccessToken/.test(src) && !/prompt:\s*['"]consent['"]/.test(src)); });
   t('maybeResync skips when offline/no token', async () => {
     const svT = accessToken, svO = isOfflineMode; accessToken = null; isOfflineMode = false;
