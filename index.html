@@ -113,6 +113,25 @@
   .member-edit { position:absolute; top:6px; right:6px; opacity:0; background:none; border:none; color:var(--muted-2); cursor:pointer; font-size:11px; padding:2px 4px; }
   .member-edit:hover { color:var(--paper); }
 
+  /* Member accordion (collapsible cards) */
+  .member-search { width:100%; box-sizing:border-box; margin:0 0 6px; padding:6px 8px; font-size:11px; border-radius:4px; border:1px solid var(--ink-3); background:var(--ink-2); color:var(--paper); font-family:'Geist Mono',monospace; }
+  .member-search::placeholder { color:var(--muted-2); }
+  .member-card { border-radius:5px; margin-bottom:3px; background:rgba(255,255,255,0.02); overflow:hidden; }
+  .member-card.expanded { background:var(--ink-2); }
+  .member-card-head { display:flex; align-items:center; gap:6px; padding:8px 10px; cursor:pointer; border-left:2px solid transparent; position:relative; }
+  .member-card.expanded > .member-card-head { border-left-color:var(--gold); }
+  .member-card-head:hover { background:var(--ink-2); }
+  .member-card-head:hover .member-edit { opacity:1; }
+  .member-chevron { font-size:9px; color:var(--muted-2); width:10px; flex-shrink:0; }
+  .member-card-info { flex:1; min-width:0; }
+  .member-card-info strong { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; color:var(--paper); }
+  .member-card-info small { font-size:9px; color:var(--muted-2); font-family:'Geist Mono',monospace; letter-spacing:0.5px; }
+  .member-role-badge { font-size:8px; font-family:'Geist Mono',monospace; padding:2px 5px; border-radius:3px; background:var(--ink-3); color:var(--gold); letter-spacing:0.5px; flex-shrink:0; }
+  .member-card-body { padding:4px 8px 8px 18px; display:flex; flex-direction:column; gap:2px; }
+  .member-empty { font-size:10px; color:var(--muted-2); padding:4px 2px; }
+  .member-add-camp { margin-top:4px; background:none; border:1px dashed var(--ink-3); color:var(--muted); cursor:pointer; font-size:10px; padding:5px; border-radius:4px; font-family:'Geist Mono',monospace; }
+  .member-add-camp:hover { color:var(--gold); border-color:var(--gold); }
+
   /* Online presence (Wkwk team) */
   .presence-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; font-size: 12px; color: rgba(250,250,247,0.85); margin-bottom: 1px; }
   .presence-item:hover { background: var(--ink-2); }
@@ -558,10 +577,13 @@
         <span>Members</span>
         <button class="add-btn" onclick="openAddMemberModal()" title="เพิ่ม member (อีเมลลูกค้า)">+</button>
       </div>
+      <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member..." oninput="onMemberSearch(this.value)" />
       <div id="member-list-nav"></div>
     </div>
 
-    <div class="nav-section">
+    <!-- Campaigns live inside each member card now; this section is kept for
+         back-compat (renderCampaignNav) but hidden. -->
+    <div class="nav-section" id="campaigns-nav-section" style="display:none;">
       <div class="nav-label">
         <span>Campaigns</span>
         <button class="add-btn" onclick="openAddCampaignModal()" title="เพิ่มแคมเปญใหม่ภายใต้ member ที่เลือก">+</button>
@@ -1090,6 +1112,10 @@
       </div>
       <div class="input-group"><label>Client Name <small class="hint-label">(ชื่อบริษัทลูกค้า)</small></label><input type="text" id="newClient" placeholder="e.g. Ocean Bites Co., Ltd." /></div>
       <div class="input-group"><label>Campaign Name</label><input type="text" id="newCampaign" placeholder="e.g. Songkran 2026" /></div>
+      <div class="input-group">
+        <label>Client Drive Folder URL <span class="req">*</span> <small class="hint-label">(บังคับ · โฟลเดอร์ Drive ที่จะเก็บ JSON + media ของแคมเปญนี้ · กันข้อมูลทับกัน)</small></label>
+        <input type="url" id="newCampaignDriveUrl" placeholder="https://drive.google.com/drive/folders/..." />
+      </div>
       <div class="date-row">
         <div class="input-group"><label>Start Period</label><input type="text" id="newStart" placeholder="May 2026" /></div>
         <div class="input-group"><label>End Period</label><input type="text" id="newEnd" placeholder="Aug 2026" /></div>
@@ -1740,6 +1766,10 @@ async function resolveUserRoleFromControl(email, displayName) {
     await window.Control.listMembers().catch(e => { console.warn('listMembers failed:', e); });
     onControlMembersChanged(window.Control.cachedMembers());
     window.Control.subscribe(onControlMembersChanged);
+    // Same for the campaign index, so every admin discovers the same campaigns
+    // regardless of who created them (bug: admins not seeing each other's camps).
+    await window.Control.listCampaigns().catch(e => { console.warn('listCampaigns failed:', e); });
+    window.Control.subscribeCampaigns(onControlCampaignsChanged);
   } catch(e) {
     console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
     isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
@@ -1797,6 +1827,41 @@ function onControlMembersChanged(controlMembers) {
       document.getElementById('mainApp').style.display !== 'none') {
     renderEverything();
   }
+}
+
+// Fires when the shared campaign index changes (another admin added/edited a
+// campaign). After initial load, re-sync silently to pull the new campaign(s).
+function onControlCampaignsChanged() {
+  if (!_controlLiveRender || isSaving || isOfflineMode || !accessToken) return;
+  syncDatabaseFromDrive({ silent: true }).catch(e => console.warn('campaign-index resync failed:', e));
+}
+
+// Fetch campaigns listed in the shared Firestore index that the plain Drive
+// search didn't already return (e.g. created by another admin). Skips ones we
+// can't access. alreadyLoadedFileIds = Set of driveDbFileId already loaded.
+async function loadCampaignsFromIndex(alreadyLoadedFileIds) {
+  if (!accessToken || !window.Control || !window.Control.available()) return [];
+  const idx = window.Control.cachedCampaignIndex();
+  const out = [];
+  for (const entry of idx) {
+    const fid = entry.driveDbFileId;
+    if (!fid || alreadyLoadedFileIds.has(fid)) continue;
+    try {
+      const cr = await authFetch(`https://www.googleapis.com/drive/v3/files/${fid}?alt=media`);
+      if (!cr.ok) continue; // no access / trashed → skip silently
+      const data = await cr.json();
+      const raw = data.campaign || (Array.isArray(data.campaigns) && data.campaigns[0]);
+      if (!raw) continue;
+      const camp = normalizeCampaign(raw);
+      camp.driveDbFileId = fid;
+      if (!camp.driveFolderId && entry.driveFolderId) {
+        camp.driveFolderId = entry.driveFolderId;
+        camp.driveFolderUrl = entry.driveFolderUrl || `https://drive.google.com/drive/folders/${entry.driveFolderId}`;
+      }
+      out.push(camp);
+    } catch(e) { console.warn('index campaign fetch failed:', fid, e); }
+  }
+  return out;
 }
 
 async function onLoginSuccess() {
@@ -3087,7 +3152,41 @@ async function saveCampaignJsonToDrive(camp) {
   if (!res || !res.id) throw new Error('Drive JSON save returned no file id');
   camp.driveDbFileId = res.id;
   camp.driveDbModifiedTime = res.modifiedTime || new Date().toISOString();
+  // Make the campaign visible to every admin: share the folder with all admins
+  // and register it in the shared Firestore index. Both best-effort/non-fatal
+  // so a Firestore or permission hiccup never blocks the Drive save itself.
+  try { await shareCampaignFolderWithAdmins(camp.driveFolderId); } catch(e) { console.warn('share campaign folder with admins failed:', e); }
+  try { await registerCampaignInIndex(camp); } catch(e) { console.warn('campaign index upsert failed:', e); }
   return res;
+}
+
+// Share a campaign's Drive folder with every admin email known to the control
+// plane (plus the current user) so all admins can load it via Drive.
+async function shareCampaignFolderWithAdmins(folderId) {
+  if (!folderId || !accessToken || !window.Control) return;
+  const admins = window.Control.cachedMembers().filter(m => m.role === 'admin').map(m => m.email);
+  const targets = Array.from(new Set([...admins, currentUserEmail].filter(Boolean)));
+  for (const email of targets) {
+    if (email === currentUserEmail) continue; // already owns/has access
+    try { await shareDriveFolderWithUser(folderId, email, 'writer'); }
+    catch(e) { console.warn('share campaign folder to admin failed:', email, e); }
+  }
+}
+
+// Register / update a campaign in the shared Firestore index (discovery only —
+// the content stays on Drive).
+async function registerCampaignInIndex(camp) {
+  if (!camp || !camp.id || !window.Control || !window.Control.available()) return;
+  return window.Control.upsertCampaign({
+    id: camp.id,
+    name: camp.campaign || '',
+    client: camp.client || '',
+    clientEmail: camp.clientEmail || '',
+    driveFolderId: camp.driveFolderId || '',
+    driveFolderUrl: camp.driveFolderUrl || '',
+    driveDbFileId: camp.driveDbFileId || '',
+    updatedBy: currentUserEmail
+  });
 }
 
 async function saveCurrentCampaignJsonToDrive(notify) {
@@ -3217,7 +3316,12 @@ async function syncDatabaseFromDrive(opts) {
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
-    const loaded = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
+    const searched = accessToken ? await loadCampaignJsonFilesFromDrive() : [];
+    // Augment Drive search with campaigns from the shared index (created by
+    // other admins, possibly in folders not surfaced by our own search).
+    const loadedFileIds = new Set(searched.map(c => c.driveDbFileId).filter(Boolean));
+    const fromIndex = await loadCampaignsFromIndex(loadedFileIds).catch(e => { console.warn('loadCampaignsFromIndex failed:', e); return []; });
+    const loaded = searched.concat(fromIndex);
     // Members come from the Firestore control plane when it's active; otherwise
     // fall back to deriving them from the campaigns + Drive marker files.
     const controlActive = !!(window.Control && window.Control.available() && window.Control.isReady());
@@ -3997,6 +4101,22 @@ function updateMainEmptyState() {
   }
 }
 
+let memberSearchQuery = '';
+function onMemberSearch(v) { memberSearchQuery = (v || '').toLowerCase().trim(); renderMemberNav(); }
+
+// Toggle a member card: clicking the open one collapses it; clicking another
+// selects + expands it (accordion).
+function toggleMemberCard(email) {
+  email = (email || '').toLowerCase();
+  if (currentMemberEmail === email) {
+    currentMemberEmail = null;
+    currentCampaignId = null;
+    renderEverything();
+  } else {
+    selectMember(email);
+  }
+}
+
 function renderMemberNav() {
   const nav = document.getElementById('member-list-nav');
   if (!nav) return;
@@ -4017,26 +4137,65 @@ function renderMemberNav() {
       }
     });
   }
-  list.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
-  list.forEach(m => {
-    const count = campaigns.filter(c => (c.clientEmail || '') === m.email).length;
-    const div = document.createElement('div');
-    div.className = 'member-list-item' + (m.email === currentMemberEmail ? ' active' : '');
-    div.onclick = (e) => { if (e.target.classList.contains('member-edit')) return; selectMember(m.email); };
-    const editBtn = isAdmin && !m._orphan ? `<button class="member-edit" title="Edit member" onclick="event.stopPropagation(); openEditMember('${escapeHtml(m.email)}')">✎</button>` : '';
-    const roleTag = (isAdmin && m.role && !m._orphan) ? ` · ${escapeHtml(String(m.role).toUpperCase())}` : '';
-    div.innerHTML = `<strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${count} CAMP${roleTag}</small>${editBtn}`;
-    nav.appendChild(div);
-  });
-  if (list.length === 0) {
-    nav.innerHTML = isAdmin
-      ? '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ยังไม่มี member — กด + เพิ่ม</div>'
-      : '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">No campaigns assigned to you</div>';
+  if (memberSearchQuery) {
+    list = list.filter(m => (m.name || '').toLowerCase().includes(memberSearchQuery) || m.email.toLowerCase().includes(memberSearchQuery));
   }
+  list.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+  if (list.length === 0) {
+    nav.innerHTML = memberSearchQuery
+      ? '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ไม่พบ member ที่ค้นหา</div>'
+      : (isAdmin
+        ? '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ยังไม่มี member — กด + เพิ่ม</div>'
+        : '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">No campaigns assigned to you</div>');
+    return;
+  }
+  list.forEach(m => {
+    const myCamps = campaigns.filter(c => (c.clientEmail || '') === m.email);
+    const expanded = m.email === currentMemberEmail;
+    const card = document.createElement('div');
+    card.className = 'member-card' + (expanded ? ' expanded' : '');
+
+    const head = document.createElement('div');
+    head.className = 'member-card-head';
+    head.onclick = (e) => { if (e.target.closest('.member-edit')) return; toggleMemberCard(m.email); };
+    const editBtn = isAdmin && !m._orphan ? `<button class="member-edit" title="Edit member" onclick="event.stopPropagation(); openEditMember('${escapeHtml(m.email)}')">✎</button>` : '';
+    const roleBadge = (isAdmin && m.role && !m._orphan) ? `<span class="member-role-badge">${escapeHtml(String(m.role).toUpperCase())}</span>` : '';
+    head.innerHTML =
+      `<span class="member-chevron">${expanded ? '▾' : '▸'}</span>` +
+      `<span class="member-card-info"><strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${myCamps.length} CAMP</small></span>` +
+      roleBadge + editBtn;
+    card.appendChild(head);
+
+    if (expanded) {
+      const body = document.createElement('div');
+      body.className = 'member-card-body';
+      if (myCamps.length) {
+        myCamps.forEach(c => {
+          const ci = document.createElement('div');
+          ci.className = 'camp-list-item' + (c.id === currentCampaignId ? ' active' : '');
+          ci.onclick = (e) => { e.stopPropagation(); currentCampaignId = c.id; renderEverything(); switchView('overview'); };
+          ci.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${escapeHtml(c.client || '—')} · ${c.assets.length} ASSETS</small>`;
+          body.appendChild(ci);
+        });
+      } else {
+        body.innerHTML = '<div class="member-empty">ยังไม่มีแคมเปญใต้ member นี้</div>';
+      }
+      if (controlCan('createCampaign')) {
+        const addBtn = document.createElement('button');
+        addBtn.className = 'member-add-camp';
+        addBtn.textContent = '+ Add campaign';
+        addBtn.onclick = (e) => { e.stopPropagation(); openAddCampaignModal(); };
+        body.appendChild(addBtn);
+      }
+      card.appendChild(body);
+    }
+    nav.appendChild(card);
+  });
 }
 
 function renderCampaignNav() {
   const nav = document.getElementById('campaign-list-nav');
+  if (!nav) return;
   nav.innerHTML = '';
   if (!currentMemberEmail) {
     nav.innerHTML = '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">เลือก member ก่อน ↑</div>';
@@ -4509,19 +4668,29 @@ function openAddCampaignModal() {
   if (blockIfNotInternal('สร้างแคมเปญใหม่ได้เฉพาะทีม Wakuwaku')) return;
   if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
   if (!currentMemberEmail) { showToast('เลือก Member ใน sidebar ก่อนสร้างแคมเปญ', 'warn'); return; }
-  ['newClient','newCampaign','newStart','newEnd'].forEach(id => document.getElementById(id).value = '');
+  ['newClient','newCampaign','newStart','newEnd','newCampaignDriveUrl'].forEach(id => document.getElementById(id).value = '');
   const m = findMember(currentMemberEmail);
+  // Prefill name + Drive folder from the member's defaults to reduce typos.
+  if (m && m.name) document.getElementById('newClient').value = m.name;
+  if (m && m.driveFolderUrl) document.getElementById('newCampaignDriveUrl').value = m.driveFolderUrl;
   const label = document.getElementById('newCampaignMemberLabel');
   if (label) label.textContent = (m && m.name ? `${m.name} · ` : '') + currentMemberEmail;
   document.getElementById('addCampaignModal').classList.add('show');
 }
 function closeAddCampaignModal() { document.getElementById('addCampaignModal').classList.remove('show'); }
-function saveNewCampaign() {
+async function saveNewCampaign() {
+  if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
   if (!currentMemberEmail) { showToast('เลือก Member ก่อน', 'warn'); return; }
   const client = document.getElementById('newClient').value.trim();
   const campaign = document.getElementById('newCampaign').value.trim();
-  if (!client || !campaign) { showToast('Please fill client name and campaign name', 'warn'); return; }
-  const m = findMember(currentMemberEmail);
+  const driveUrl = document.getElementById('newCampaignDriveUrl').value.trim();
+  if (!client || !campaign) { showToast('กรอกชื่อลูกค้าและชื่อแคมเปญ', 'warn'); return; }
+  const folderId = parseDriveFolderId(driveUrl);
+  if (!folderId) { showToast('ต้องกรอก Client Drive Folder URL (link /folders/...) — กันข้อมูลทับกัน', 'err'); return; }
+  // Guard against two campaigns pointing at the same folder (would overwrite
+  // each other's wakuwaku_campaign.json).
+  const clash = campaigns.find(c => c.driveFolderId === folderId);
+  if (clash) { showToast(`โฟลเดอร์นี้ถูกใช้โดยแคมเปญ "${clash.campaign || clash.id}" แล้ว — ใช้โฟลเดอร์อื่น`, 'err'); return; }
   const c = {
     id: 'camp-' + Date.now() + Math.random().toString(36).slice(2,7),
     clientEmail: currentMemberEmail,
@@ -4533,9 +4702,8 @@ function saveNewCampaign() {
     schema: defaultSchema(), excelData: null,
     driveLinks: [{name:"Product_Info",url:""},{name:"Content_Dir",url:""},{name:"CI_Design",url:""},{name:"Cat_Map",url:""}],
     linkedFilesCount: 0,
-    // Default the campaign's Drive folder to the member's default if set
-    driveFolderUrl: (m && m.driveFolderUrl) || '',
-    driveFolderId: (m && m.driveFolderUrl) ? parseDriveFolderId(m.driveFolderUrl) : '',
+    driveFolderUrl: driveUrl,
+    driveFolderId: folderId,
     mediaFolderId: ''
   };
   campaigns.push(c);
@@ -4543,19 +4711,39 @@ function saveNewCampaign() {
   closeAddCampaignModal();
   renderEverything();
   logAction('CREATE', `New campaign for ${currentMemberEmail}: ${campaign}`);
-  showToast('Campaign created');
+  // Persist immediately to Drive + register in the shared index so other admins
+  // see it right away (don't wait for a debounced save).
+  if (accessToken && !isOfflineMode) {
+    setSaveStatus('saving', 'Creating campaign JSON on Drive...');
+    try {
+      await saveCampaignJsonToDrive(c);   // writes JSON + shares folder + indexes
+      setSaveStatus('saved', 'Campaign created');
+      showToast('✓ Campaign created + saved to Drive', 'ok');
+    } catch(e) {
+      console.error('create campaign save failed:', e);
+      setSaveStatus('error', 'Created locally · Drive save failed');
+      showToast('⚠️ สร้างแล้วแต่เซฟ Drive ไม่สำเร็จ: ' + (e.message || 'unknown'), 'warn');
+    }
+  } else {
+    showToast('Campaign created (offline — ยังไม่เซฟ Drive)', 'warn');
+  }
 }
 function confirmDeleteCampaign() {
   if (blockUnless('deleteCampaign', 'ลบแคมเปญได้เฉพาะ admin')) return;
   const c = getCurrentCampaign();
   if (!c) return;
-  showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกลบถาวร`, () => {
+  const removedId = c.id;
+  showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกลบถาวร`, async () => {
     campaigns = campaigns.filter(x => x.id !== currentCampaignId);
     const myCamps = currentMemberEmail ? campaigns.filter(x => (x.clientEmail || '') === currentMemberEmail) : [];
     currentCampaignId = myCamps[0] ? myCamps[0].id : null;
     closeEditModal();
     renderEverything();
     showToast('Campaign deleted');
+    // Remove from the shared index so it disappears for other admins too.
+    if (window.Control && window.Control.available()) {
+      window.Control.removeCampaign(removedId).catch(e => console.warn('index removeCampaign failed:', e));
+    }
     scheduleSave();
   });
 }
@@ -6741,6 +6929,16 @@ window.__runTests = async function() {
     ok(r.length === 1 && r[0].id === 2);
   });
   t('newMemberRole select has all 5 roles', () => { const opts = Array.from(document.getElementById('newMemberRole').options).map(o=>o.value); ok(['admin','editor','operation','viewer','customer'].every(r => opts.includes(r))); });
+  t('Control campaign-index API present', () => ok(typeof window.Control.upsertCampaign === 'function' && typeof window.Control.subscribeCampaigns === 'function' && typeof window.Control.removeCampaign === 'function'));
+  t('Control._normCampaign normalizes fields', () => {
+    const n = window.Control._normCampaign('cX', { name:'N', clientEmail:'A@B.C', driveDbFileId:'f1' });
+    ok(n.id === 'cX' && n.name === 'N' && n.clientEmail === 'a@b.c' && n.driveDbFileId === 'f1');
+  });
+  t('Add Campaign modal requires Drive URL field', () => ok(document.getElementById('newCampaignDriveUrl')));
+  t('member search box exists', () => ok(document.getElementById('member-search')));
+  t('Campaigns nav section hidden (campaigns live in member cards)', () => ok(document.getElementById('campaigns-nav-section').style.display === 'none'));
+  t('loadCampaignsFromIndex + onControlCampaignsChanged defined', () => ok(typeof loadCampaignsFromIndex === 'function' && typeof onControlCampaignsChanged === 'function'));
+  t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
   t('snapshots modal exists', () => ok(document.getElementById('snapshotsModal')));
   t('confirm typed input exists', () => ok(document.getElementById('confirm-typed-input')));
   t('token expires preset element exists', () => ok(document.getElementById('tokenExpiresPreset')));

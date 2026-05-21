@@ -38,6 +38,14 @@ service cloud.firestore {
         || (isBootstrapAdmin() && request.auth.token.email == email);
     }
 
+    // Shared campaign index (discovery metadata only — content stays on Drive).
+    // Any signed-in user may read; admins (or bootstrap-domain admins, e.g. the
+    // first admin before any admin doc exists) may write.
+    match /control_campaigns/{campaignId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin() || isBootstrapAdmin();
+    }
+
     // Everything else is closed.
     match /{document=**} {
       allow read, write: if false;

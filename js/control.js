@@ -20,6 +20,7 @@
   'use strict';
 
   var COLLECTION = 'control_members';
+  var COLLECTION_CAMPAIGNS = 'control_campaigns';
 
   // --- Role / permission matrix --------------------------------------------
   // Keep this declarative so UI gates read from one place.
@@ -250,6 +251,91 @@
       var fid = campaign.driveFolderId || '';
       if (fid && assignedFolderIds && assignedFolderIds.indexOf(fid) >= 0) return true;
       return false;
+    },
+
+    // --- Campaign index ------------------------------------------------------
+    // A lightweight, shared index of every campaign (NOT the campaign content —
+    // that stays on Drive). Lets every admin discover the same campaigns
+    // regardless of who created them. doc id = campaign id.
+    _campaigns: [],
+    _campUnsub: null,
+    _onCampChange: null,
+    _campReady: false,
+
+    campaignsReady: function () { return this._campReady; },
+    cachedCampaignIndex: function () { return this._campaigns.slice(); },
+
+    _normCampaign: function (id, data) {
+      data = data || {};
+      return {
+        id: data.id || id,
+        name: data.name || '',
+        client: data.client || '',
+        clientEmail: normEmail(data.clientEmail || ''),
+        driveFolderId: data.driveFolderId || '',
+        driveFolderUrl: data.driveFolderUrl || '',
+        driveDbFileId: data.driveDbFileId || '',
+        updatedAt: data.updatedAt || '',
+        updatedBy: data.updatedBy || ''
+      };
+    },
+
+    subscribeCampaigns: function (onChange) {
+      var self = this;
+      this._onCampChange = typeof onChange === 'function' ? onChange : null;
+      if (!this._db) {
+        self._campReady = true;
+        if (self._onCampChange) self._onCampChange(self.cachedCampaignIndex());
+        return function () {};
+      }
+      if (this._campUnsub) { try { this._campUnsub(); } catch (e) {} this._campUnsub = null; }
+      this._campUnsub = this._db.collection(COLLECTION_CAMPAIGNS).onSnapshot(function (snap) {
+        var list = [];
+        snap.forEach(function (doc) { list.push(self._normCampaign(doc.id, doc.data())); });
+        self._campaigns = list;
+        self._campReady = true;
+        if (self._onCampChange) self._onCampChange(self.cachedCampaignIndex());
+      }, function (err) {
+        console.error('[Control] campaign snapshot error:', err);
+        self._campReady = true;
+        if (self._onCampChange) self._onCampChange(self.cachedCampaignIndex());
+      });
+      return this._campUnsub;
+    },
+
+    listCampaigns: function () {
+      var self = this;
+      if (!this._db) return Promise.resolve(this.cachedCampaignIndex());
+      return this._db.collection(COLLECTION_CAMPAIGNS).get().then(function (snap) {
+        var list = [];
+        snap.forEach(function (doc) { list.push(self._normCampaign(doc.id, doc.data())); });
+        self._campaigns = list;
+        self._campReady = true;
+        return self.cachedCampaignIndex();
+      });
+    },
+
+    upsertCampaign: function (meta) {
+      if (!meta || !meta.id) return Promise.reject(new Error('upsertCampaign: id required'));
+      if (!this._db) return Promise.reject(new Error('Firestore not available'));
+      var doc = {
+        id: meta.id,
+        name: meta.name || '',
+        client: meta.client || '',
+        clientEmail: normEmail(meta.clientEmail || ''),
+        driveFolderId: meta.driveFolderId || '',
+        driveFolderUrl: meta.driveFolderUrl || '',
+        driveDbFileId: meta.driveDbFileId || '',
+        updatedAt: new Date().toISOString(),
+        updatedBy: meta.updatedBy || ''
+      };
+      return this._db.collection(COLLECTION_CAMPAIGNS).doc(meta.id).set(doc, { merge: true });
+    },
+
+    removeCampaign: function (id) {
+      if (!id) return Promise.reject(new Error('removeCampaign: id required'));
+      if (!this._db) return Promise.reject(new Error('Firestore not available'));
+      return this._db.collection(COLLECTION_CAMPAIGNS).doc(id).delete();
     }
   };
 
