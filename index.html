@@ -1604,10 +1604,16 @@ let manualBackupHistory = []; // [{ts, filename, sizeKB}]
 let editingTokenId = null;
 
 function getCurrentCampaign() {
-  if (!currentMemberEmail) return null;
-  const matching = campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail);
-  if (matching.length === 0) return null;
-  return matching.find(c => c.id === currentCampaignId) || matching[0];
+  if (!currentMemberEmail) return null; // admin must pick a member first
+  // Return the selected campaign by id from the visible set. This lets a user
+  // open a campaign ASSIGNED to them even though its clientEmail belongs to
+  // someone else (the old clientEmail-only filter hid the content entirely).
+  if (currentCampaignId) {
+    const byId = campaigns.find(c => c.id === currentCampaignId);
+    if (byId) return byId;
+  }
+  const mine = campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail);
+  return mine[0] || null;
 }
 
 // ============================================================================
@@ -6584,9 +6590,14 @@ async function uploadInputThumb(i, inputEl) {
     if (!res || !res.id) throw new Error('upload returned no id');
     if (!camp.driveLinks[i]) camp.driveLinks[i] = { name: '', url: '' };
     camp.driveLinks[i].thumbFileId = res.id;
+    // Seed the media cache with the local image so it shows instantly without
+    // waiting for a Drive round-trip (and survives the next silent re-sync).
+    try { const localUrl = await blobToDataUrl(file); if (localUrl) _mediaCache.set(res.id, localUrl); } catch(e) {}
     renderInputPreview(i);
-    showToast('✓ อัปโหลดรูปแล้ว', 'ok');
-    pendingChanges = true; scheduleSave();
+    // Persist immediately so a background re-sync can't reload the old JSON
+    // (without the thumb) over our in-memory change.
+    try { await saveCampaignJsonToDrive(camp); showToast('✓ อัปโหลดรูปแล้ว', 'ok'); }
+    catch(saveErr) { console.warn('thumb save failed, will retry on debounce:', saveErr); pendingChanges = true; scheduleSave(); showToast('✓ อัปโหลดรูปแล้ว (กำลังเซฟ)', 'ok'); }
   } catch(e) {
     console.error('thumb upload failed:', e);
     showToast('❌ อัปโหลดไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
@@ -7130,6 +7141,14 @@ window.__runTests = async function() {
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
   t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
   t('Section A thumbnail helpers defined', () => ok(typeof renderInputPreview === 'function' && typeof uploadInputThumb === 'function'));
+  t('getCurrentCampaign returns selected campaign even if clientEmail differs (assigned)', () => {
+    const svC = campaigns, svId = currentCampaignId, svM = currentMemberEmail;
+    campaigns = [{ id: 'cA', clientEmail: 'me@x.com' }, { id: 'cB', clientEmail: 'other@x.com' }];
+    currentMemberEmail = 'me@x.com'; currentCampaignId = 'cB';
+    const got = getCurrentCampaign();
+    campaigns = svC; currentCampaignId = svId; currentMemberEmail = svM;
+    ok(got && got.id === 'cB');
+  });
   t('filterVisibleCampaigns: customer sees assigned campaign (not just own)', () => {
     const svA = isAdmin, svC = userRoleControl, svF = assignedCampaignFolderIds, svE = currentUserEmail;
     isAdmin = false; userRoleControl = 'customer'; assignedCampaignFolderIds = ['f2']; currentUserEmail = 'c1@x.com';
