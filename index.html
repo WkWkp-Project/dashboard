@@ -85,6 +85,7 @@
   .brand-logo svg { display: block; }
   .sb-email { display: block; font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
   .user-chip { display: none !important; }
+  body.hide-audit-log #overview-audit-log { display: none !important; }
   .brand-name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; letter-spacing: 0.5px; line-height: 1.1; }
   .brand-name small { display: block; font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 2px; color: var(--muted-2); text-transform: uppercase; font-weight: 400; margin-top: 2px; }
   .sidebar-user { margin: 0 16px 16px; padding: 12px; border: 1px solid var(--ink-3); border-radius: 6px; background: rgba(255,255,255,0.03); display: flex; align-items: center; gap: 10px; }
@@ -802,7 +803,7 @@
       </div>
 
       <!-- HISTORY -->
-      <div class="history-panel">
+      <div class="history-panel" id="overview-audit-log">
         <div class="history-header">
           <span>Production Audit Trail</span>
           <span style="display:flex; align-items:center; gap:8px;">
@@ -1855,10 +1856,21 @@ function onControlMembersChanged(controlMembers) {
     createdAt: m.createdAt || '',
     createdBy: m.createdBy || ''
   }));
-  // Keep the current user's own assignment fresh (role may have changed).
-  if (currentUserEmail && !isAdmin) {
+  // Live-apply role/permission changes to the CURRENT user: if an admin changes
+  // this person's role (or assignment) from another session, their power must
+  // update without forcing a re-login. Only do this when their control doc
+  // exists — never downgrade a bootstrap admin who has no doc yet.
+  if (currentUserEmail) {
     const me = members.find(m => m.email === currentUserEmail);
-    if (me) { assignedCampaignFolderIds = me.campaignFolderIds || []; }
+    if (me) {
+      const prevRole = userRoleControl;
+      applyControlRole({ role: me.role, member: me });
+      if (me.role !== prevRole) {
+        applyRoleRestrictions();
+        setSaveStatus('idle', 'สิทธิ์ของคุณถูกอัปเดตเป็น ' + me.role);
+        showToast('🔑 สิทธิ์ของคุณถูกเปลี่ยนเป็น ' + me.role, 'warn');
+      }
+    }
   }
   // Only re-render for genuine real-time updates *after* the initial login load
   // has rendered (the login/sync path renders once campaigns are in). This
@@ -5583,6 +5595,8 @@ const OPERATOR_DISABLED_SELECTORS = [
 
 function applyRoleRestrictions() {
   document.body.classList.remove('client-mode', 'operator-mode');
+  // Hide the production audit-log for non-team roles (customer / viewer).
+  document.body.classList.toggle('hide-audit-log', !isTeamRole());
   const navAccess = document.getElementById('nav-access');
   const navHub = document.getElementById('nav-hub');
   if (navAccess) navAccess.classList.remove('hidden');
@@ -7141,6 +7155,16 @@ window.__runTests = async function() {
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
   t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
   t('Section A thumbnail helpers defined', () => ok(typeof renderInputPreview === 'function' && typeof uploadInputThumb === 'function'));
+  t('applyRoleRestrictions hides audit log for customer, shows for admin', () => {
+    const svR = userRole, svC = userRoleControl;
+    userRoleControl = 'customer'; userRole = 'operator'; applyRoleRestrictions();
+    const hiddenForCustomer = document.body.classList.contains('hide-audit-log');
+    userRoleControl = 'admin'; userRole = 'internal'; applyRoleRestrictions();
+    const shownForAdmin = !document.body.classList.contains('hide-audit-log');
+    userRoleControl = svC; userRole = svR; applyRoleRestrictions();
+    ok(hiddenForCustomer && shownForAdmin);
+  });
+  t('overview audit-log element exists', () => ok(document.getElementById('overview-audit-log')));
   t('getCurrentCampaign returns selected campaign even if clientEmail differs (assigned)', () => {
     const svC = campaigns, svId = currentCampaignId, svM = currentMemberEmail;
     campaigns = [{ id: 'cA', clientEmail: 'me@x.com' }, { id: 'cB', clientEmail: 'other@x.com' }];
