@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Wakuwaku Production — Content Creation Dashboard</title>
+<title>WakuWaku DB</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -81,7 +81,10 @@
   .sidebar { background: var(--ink); color: var(--paper); border-right: 1px solid var(--ink-2); padding: 24px 0; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
   .brand { padding: 0 24px 20px; border-bottom: 1px solid var(--ink-2); margin-bottom: 16px; }
   .brand-mark { display: flex; align-items: center; gap: 10px; }
-  .brand-logo { width: 32px; height: 32px; background: var(--paper); color: var(--ink); display: grid; place-items: center; font-family: 'Fraunces', serif; font-weight: 900; font-size: 18px; font-style: italic; }
+  .brand-logo { width: 32px; height: 32px; display: grid; place-items: center; flex-shrink: 0; }
+  .brand-logo svg { display: block; }
+  .sb-email { display: block; font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
+  .user-chip { display: none !important; }
   .brand-name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; letter-spacing: 0.5px; line-height: 1.1; }
   .brand-name small { display: block; font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 2px; color: var(--muted-2); text-transform: uppercase; font-weight: 400; margin-top: 2px; }
   .sidebar-user { margin: 0 16px 16px; padding: 12px; border: 1px solid var(--ink-3); border-radius: 6px; background: rgba(255,255,255,0.03); display: flex; align-items: center; gap: 10px; }
@@ -250,7 +253,10 @@
   .input-meta { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--muted); letter-spacing: 0.3px; }
   .source-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 3px; font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 6px; }
   .source-tag.drive { background: #E8F0FE; color: #1967D2; } .source-tag.local { background: var(--paper-3); color: var(--ink); } .source-tag.notion { background: #F4F0EA; color: #37352F; }
-  .input-preview { aspect-ratio: 4/3; background: var(--paper-2); }
+  .input-preview { aspect-ratio: 4/3; background: var(--paper-2); position: relative; }
+  .thumb-upload-btn { position: absolute; bottom: 6px; right: 6px; background: rgba(14,17,22,0.78); color: #fff; border: none; border-radius: 4px; font-size: 10px; padding: 4px 8px; cursor: pointer; font-family: 'Geist Mono', monospace; opacity: 0; transition: opacity .15s; }
+  .input-card:hover .thumb-upload-btn { opacity: 1; }
+  .thumb-upload-btn:hover { background: var(--ink); }
   .input-card-actions { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
   .input-card-actions button { padding: 10px; border: none; background: var(--paper); font-family: 'Geist', sans-serif; font-size: 12px; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); transition: background 0.15s; }
   .input-card-actions button:last-child { border-right: none; }
@@ -575,15 +581,22 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark">
-        <div class="brand-logo">W</div>
-        <div class="brand-name">Wakuwaku<small>Production Studio</small></div>
+        <div class="brand-logo">
+          <svg viewBox="0 0 100 100" width="32" height="32" aria-label="WakuWaku">
+            <rect x="5" y="5" width="90" height="90" fill="#fff" stroke="#0E1116" stroke-width="9"/>
+            <text x="50" y="63" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="54" fill="#0E1116">W</text>
+            <rect x="33" y="75" width="34" height="7" fill="#0E1116"/>
+          </svg>
+        </div>
+        <div class="brand-name">WakuWaku<small>DB</small></div>
       </div>
     </div>
 
     <div class="sidebar-user">
       <div class="sb-avatar" id="sb-avatar">W</div>
       <div style="overflow:hidden; min-width:0;">
-        <span class="sb-name" id="sb-name">Wakuwaku Admin</span>
+        <span class="sb-name" id="sb-name">—</span>
+        <span class="sb-email" id="sb-email"></span>
         <span class="sb-role-tag" id="sb-mode-tag">Cloud Linked</span>
       </div>
     </div>
@@ -1798,8 +1811,6 @@ async function resolveUserRoleFromControl(email, displayName) {
     // regardless of who created them (bug: admins not seeing each other's camps).
     await window.Control.listCampaigns().catch(e => { console.warn('listCampaigns failed:', e); });
     window.Control.subscribeCampaigns(onControlCampaignsChanged);
-    // Shared online presence — see teammates in real time.
-    window.Control.subscribePresence(onControlPresenceChanged);
   } catch(e) {
     console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
     isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
@@ -1816,18 +1827,12 @@ async function resolveUserRoleFromControl(email, displayName) {
 function filterVisibleCampaigns(all) {
   all = all || [];
   if (isAdmin || controlCan('seeAllCampaigns')) return all;
-  if (userRoleControl === 'customer') {
-    return all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
-  }
-  if (assignedCampaignFolderIds && assignedCampaignFolderIds.length) {
-    const own = all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
-    const assigned = all.filter(c => c.driveFolderId && assignedCampaignFolderIds.indexOf(c.driveFolderId) >= 0);
-    // union (assigned + any of their own), de-duped by id
-    const seen = {};
-    return own.concat(assigned).filter(c => { if (seen[c.id]) return false; seen[c.id] = 1; return true; });
-  }
-  // No explicit assignment → safety net: only their own-email campaigns.
-  return all.filter(c => (c.clientEmail || '').toLowerCase() === currentUserEmail);
+  // Every non-admin role (customer/editor/operation/viewer) sees their own
+  // campaigns PLUS any campaign explicitly assigned to them.
+  return all.filter(c =>
+    (c.clientEmail || '').toLowerCase() === currentUserEmail ||
+    (c.driveFolderId && assignedCampaignFolderIds.indexOf(c.driveFolderId) >= 0)
+  );
 }
 
 // Fires on every Firestore control update (real-time). Refreshes the in-memory
@@ -1922,9 +1927,8 @@ async function onLoginSuccess() {
       const name = user.name || user.email || (isAdmin ? 'Wakuwaku Internal' : 'Member');
       const initial = (user.given_name || name)[0] || (isAdmin ? 'W' : 'M');
       document.getElementById('sb-name').textContent = name;
+      const sbEmail = document.getElementById('sb-email'); if (sbEmail) sbEmail.textContent = userEmail || currentUserEmail || '';
       document.getElementById('sb-avatar').textContent = initial;
-      document.getElementById('tb-name').textContent = name;
-      document.getElementById('tb-avatar').textContent = initial;
     } else { throw new Error('userinfo HTTP ' + userResp.status); }
   } catch(e) {
     console.warn('Profile load failed:', e);
@@ -2117,9 +2121,8 @@ async function tryRestoreSession() {
       const name = fbAuth.currentUser.displayName || currentUserEmail;
       const initial = (name || '?')[0] || '?';
       document.getElementById('sb-name').textContent = name;
+      const sbEmail2 = document.getElementById('sb-email'); if (sbEmail2) sbEmail2.textContent = currentUserEmail || '';
       document.getElementById('sb-avatar').textContent = initial;
-      document.getElementById('tb-name').textContent = name;
-      document.getElementById('tb-avatar').textContent = initial;
       document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
@@ -3641,12 +3644,6 @@ function upsertPresence() {
     presence.push({ key: presenceKey, name, role: userRole, avatar, loginAt: now, lastSeen: now, app: APP_VERSION });
   }
   prunePresence();
-  // Publish our heartbeat to the shared control plane so other teammates see
-  // us in real time (Drive no longer carries a single shared presence list).
-  if (window.Control && window.Control.available() && isTeamRole()) {
-    window.Control.heartbeatPresence({ key: presenceKey, name, role: userRole, avatar, email: currentUserEmail })
-      .catch(e => console.warn('presence heartbeat failed:', e));
-  }
 }
 
 // Real-time presence updates from the control plane → refresh the sidebar.
@@ -3657,7 +3654,11 @@ function onControlPresenceChanged(list) {
 }
 
 function renderPresenceSidebar() {
+  // Team online-presence feature removed. Keep the element hidden and bail.
   const section = document.getElementById('presence-section');
+  if (section) section.style.display = 'none';
+  return;
+  // eslint-disable-next-line no-unreachable
   const list = document.getElementById('presence-list');
   const countEl = document.getElementById('presence-count');
   if (!section || !list) return;
@@ -4251,7 +4252,9 @@ function renderMemberNav() {
     return;
   }
   list.forEach(m => {
-    const myCamps = campaigns.filter(c => (c.clientEmail || '') === m.email);
+    // Admin groups campaigns by the member's email; a non-admin sees their full
+    // visible set (own + assigned) under their single card.
+    const myCamps = isAdmin ? campaigns.filter(c => (c.clientEmail || '') === m.email) : campaigns.slice();
     const expanded = m.email === currentMemberEmail;
     const card = document.createElement('div');
     card.className = 'member-card' + (expanded ? ' expanded' : '');
@@ -6534,8 +6537,60 @@ function restoreLinkedDriveCards() {
       meta.style.color = '';
       if (refBtn) { refBtn.style.background = ''; refBtn.style.color = ''; refBtn.innerHTML = 'Use as Ref'; }
     }
+    renderInputPreview(i);
   }
   document.getElementById('linked-files-count').textContent = `${camp.linkedFilesCount} OF 4 LINKED`;
+}
+
+// Section A: render the thumbnail box for input card i. Thumbnails are stored
+// on Drive (driveLinks[i].thumbFileId) — NOT as base64 in the campaign JSON,
+// which would trip the embedded-media guard and block every save.
+function renderInputPreview(i) {
+  const camp = getCurrentCampaign();
+  const card = document.getElementById(`input-card-${i}`);
+  if (!card || !camp) return;
+  const prev = card.querySelector('.input-preview');
+  if (!prev) return;
+  const link = (camp.driveLinks && camp.driveLinks[i]) || {};
+  const canEdit = controlCan('editSectionA');
+  const uploadBtn = canEdit
+    ? `<button class="thumb-upload-btn" onclick="event.stopPropagation(); document.getElementById('thumbFile${i}').click()">${link.thumbFileId ? '🔄 เปลี่ยน' : '📷 อัปโหลดรูป'}</button>` +
+      `<input type="file" id="thumbFile${i}" accept="image/*" style="display:none" onchange="uploadInputThumb(${i}, this)" />`
+    : '';
+  if (link.thumbFileId) {
+    prev.style.cssText = 'aspect-ratio:4/3; position:relative; overflow:hidden; background:var(--paper-2);';
+    prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${uploadBtn}`;
+    getFileDataUrl({ driveFileId: link.thumbFileId }).then(url => {
+      const img = prev.querySelector(`img[data-thumb="${i}"]`); if (img) img.src = url;
+    }).catch(e => console.warn('thumb load failed', i, e));
+  } else {
+    prev.style.cssText = 'aspect-ratio:4/3; position:relative; display:grid; place-items:center; background:var(--paper-2);';
+    prev.innerHTML = `<div style="text-align:center; font-size:11px; color:var(--muted-2); padding:12px; font-family:'Fraunces',serif;">${escapeHtml(link.name || ('0'+(i+1)))}</div>${uploadBtn}`;
+  }
+}
+
+async function uploadInputThumb(i, inputEl) {
+  if (blockIfClient('อัปโหลดรูป Section A เฉพาะทีม')) { inputEl.value=''; return; }
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  if (!accessToken) { showToast('ต้อง login Google Drive ก่อน', 'err'); inputEl.value=''; return; }
+  const camp = getCurrentCampaign();
+  if (!camp || !camp.driveFolderId) { showToast('แคมเปญนี้ยังไม่มี Drive folder', 'err'); inputEl.value=''; return; }
+  showToast('กำลังอัปโหลดรูป...', 'ok');
+  try {
+    const folderId = await ensureCampaignMediaFolder(camp);
+    const ext = (file.name.split('.').pop() || 'jpg').replace(/[^\w]/g, '');
+    const res = await uploadFileToDrive(`thumb_secA_${i}_${Date.now()}.${ext}`, file, folderId);
+    if (!res || !res.id) throw new Error('upload returned no id');
+    if (!camp.driveLinks[i]) camp.driveLinks[i] = { name: '', url: '' };
+    camp.driveLinks[i].thumbFileId = res.id;
+    renderInputPreview(i);
+    showToast('✓ อัปโหลดรูปแล้ว', 'ok');
+    pendingChanges = true; scheduleSave();
+  } catch(e) {
+    console.error('thumb upload failed:', e);
+    showToast('❌ อัปโหลดไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
+  } finally { inputEl.value = ''; }
 }
 
 function openConnectModal() {
@@ -7074,6 +7129,20 @@ window.__runTests = async function() {
   t('Add Campaign modal requires Drive URL field', () => ok(document.getElementById('newCampaignDriveUrl')));
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
   t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
+  t('Section A thumbnail helpers defined', () => ok(typeof renderInputPreview === 'function' && typeof uploadInputThumb === 'function'));
+  t('filterVisibleCampaigns: customer sees assigned campaign (not just own)', () => {
+    const svA = isAdmin, svC = userRoleControl, svF = assignedCampaignFolderIds, svE = currentUserEmail;
+    isAdmin = false; userRoleControl = 'customer'; assignedCampaignFolderIds = ['f2']; currentUserEmail = 'c1@x.com';
+    const r = filterVisibleCampaigns([
+      { id: 1, driveFolderId: 'f1', clientEmail: 'c1@x.com' },   // own
+      { id: 2, driveFolderId: 'f2', clientEmail: 'c2@x.com' },   // assigned
+      { id: 3, driveFolderId: 'f3', clientEmail: 'c3@x.com' }    // neither
+    ]);
+    isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF; currentUserEmail = svE;
+    ok(r.length === 2 && r.some(c => c.id === 1) && r.some(c => c.id === 2));
+  });
+  t('brand renamed to WakuWaku DB', () => ok(/WakuWaku/.test(document.querySelector('.brand-name')?.textContent || '')));
+  t('topbar user-chip hidden / sb-email present', () => ok(document.getElementById('sb-email')));
   t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
   t('Campaigns nav section hidden (campaigns live in member cards)', () => ok(document.getElementById('campaigns-nav-section').style.display === 'none'));
