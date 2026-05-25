@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>WakuWaku DB</title>
+<title>Content Asset DB</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -538,8 +538,8 @@
 <div class="auth-overlay" id="authOverlay">
   <div class="auth-box">
     <div class="auth-head">
-      <div class="auth-logo">W</div>
-      <h2>Wakuwaku Studio</h2>
+      <div class="auth-logo">C</div>
+      <h2>Content Asset DB</h2>
       <p>Content Production Dashboard · เลือกวิธีเข้าใช้งาน</p>
     </div>
 
@@ -583,7 +583,7 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark">
-        <img src="assets/wakuwaku-logo-white.png" alt="WakuWaku" class="brand-logo-img" />
+        <span class="brand-name">Content Asset</span>
         <span class="brand-db-tag">DB</span>
       </div>
     </div>
@@ -7181,7 +7181,7 @@ window.__runTests = async function() {
     isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF; currentUserEmail = svE;
     ok(r.length === 2 && r.some(c => c.id === 1) && r.some(c => c.id === 2));
   });
-  t('brand uses real logo image + DB tag', () => ok(document.querySelector('.brand-logo-img') && /DB/.test(document.querySelector('.brand-db-tag')?.textContent || '')));
+  t('brand shows program name + DB tag', () => ok(/Content Asset/.test(document.querySelector('.brand-name')?.textContent || '') && /DB/.test(document.querySelector('.brand-db-tag')?.textContent || '')));
   t('topbar user-chip hidden / sb-email present', () => ok(document.getElementById('sb-email')));
   t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
