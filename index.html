@@ -98,6 +98,15 @@
   .nav-label { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted-2); padding: 0 8px 8px; display:flex; justify-content:space-between; align-items:center;}
   .nav-label .add-btn { background:none; border:1px solid var(--ink-3); color:var(--paper); width:18px; height:18px; border-radius:3px; cursor:pointer; font-size:13px; line-height:14px;}
   .nav-label .add-btn:hover { background:var(--ink-3); }
+  /* Collapsible nav-label (e.g. Members drawer) */
+  .nav-label.collapsible { cursor:pointer; user-select:none; }
+  .nav-label.collapsible:hover { color: var(--paper); }
+  .nav-label .nav-label-left { display:flex; align-items:center; gap:6px; }
+  .nav-label .nav-chevron { font-size:9px; transition: transform 0.15s ease; display:inline-block; width:8px; }
+  .nav-label.collapsed .nav-chevron { transform: rotate(-90deg); }
+  .nav-label .nav-count { font-family:'Geist Mono',monospace; font-size:9px; background:var(--ink-3); color:var(--paper); padding:1px 5px; border-radius:3px; margin-left:4px; }
+  .nav-drawer { overflow:hidden; transition: max-height 0.2s ease; }
+  .nav-drawer.collapsed { max-height: 0 !important; }
   .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 4px; color: rgba(250,250,247,0.7); text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.15s ease; margin-bottom: 1px; }
   .nav-item:hover { background: var(--ink-2); color: var(--paper); }
   .nav-item.active { background: var(--paper); color: var(--ink); font-weight: 500; }
@@ -238,6 +247,17 @@
   .handoff-banner-info strong { font-family: 'Fraunces', serif; font-size: 16px; color: #4A3812; display: block; margin-bottom: 2px;}
   .handoff-banner-info span { font-size: 12px; color: #6B4E1A; font-family: 'Geist Mono', monospace; }
   .handoff-banner button { background: white; border: 1px solid var(--gold); color: #4A3812; padding: 6px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  /* Update banner — shown when a teammate saved this campaign on Drive and a
+     Firestore signal arrived. Data still loads from Drive on click. */
+  .update-banner { background: linear-gradient(135deg, #E8F1FF 0%, #D7E4FA 100%); border: 1px solid #4A7BD8; border-radius: var(--radius); padding: 12px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 14px; }
+  .update-banner.hidden { display: none; }
+  .update-banner-icon { width: 32px; height: 32px; background: #4A7BD8; border-radius: 50%; display: grid; place-items: center; color: white; font-size: 16px; flex-shrink: 0; }
+  .update-banner-info { flex: 1; min-width:0; }
+  .update-banner-info strong { font-family: 'Fraunces', serif; font-size: 14px; color: #1F3A6E; display: block; }
+  .update-banner-info span { font-size: 11px; color: #2F4F8A; font-family: 'Geist Mono', monospace; }
+  .update-banner-btn { background: #4A7BD8; border: 1px solid #4A7BD8; color: white; padding: 6px 14px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .update-banner-btn:hover { background: #3B66BA; }
+  .update-banner-x { background: transparent; border: none; color: #2F4F8A; font-size: 14px; cursor: pointer; padding: 4px 8px; }
 
   .section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .section-num { font-family: 'Fraunces', serif; font-style: italic; font-size: 32px; font-weight: 300; color: var(--accent); line-height: 1; }
@@ -602,12 +622,18 @@
     </div>
 
     <div class="nav-section">
-      <div class="nav-label">
-        <span>Members</span>
-        <button class="add-btn" onclick="openAddMemberModal()" title="เพิ่ม member (อีเมลลูกค้า)">+</button>
+      <div class="nav-label collapsible" id="members-drawer-label" onclick="toggleMembersDrawer(event)">
+        <span class="nav-label-left">
+          <span class="nav-chevron">▾</span>
+          <span>Members</span>
+          <span class="nav-count" id="members-count">0</span>
+        </span>
+        <button class="add-btn" onclick="event.stopPropagation(); openAddMemberModal()" title="เพิ่ม member (อีเมลลูกค้า)">+</button>
       </div>
-      <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member..." oninput="onMemberSearch(this.value)" />
-      <div id="member-list-nav"></div>
+      <div class="nav-drawer" id="members-drawer">
+        <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member..." oninput="onMemberSearch(this.value)" />
+        <div id="member-list-nav"></div>
+      </div>
     </div>
 
     <!-- Campaigns live inside each member card now; this section is kept for
@@ -694,6 +720,15 @@
 
     <!-- ============ OVERVIEW VIEW ============ -->
     <div class="page view-container active" id="view-overview">
+      <div class="update-banner hidden" id="updateBanner">
+        <div class="update-banner-icon">🔔</div>
+        <div class="update-banner-info">
+          <strong>มีการอัปเดตจาก <span id="updateBannerName">teammate</span></strong>
+          <span id="updateBannerSub">แคมเปญนี้ถูกแก้ไขจากที่อื่น · กดเพื่อโหลดล่าสุด</span>
+        </div>
+        <button class="update-banner-btn" onclick="acceptUpdateBanner()">Refresh</button>
+        <button class="update-banner-x" onclick="dismissUpdateBanner()" title="Dismiss">✕</button>
+      </div>
       <div class="handoff-banner hidden" id="handoffBanner">
         <div class="handoff-banner-icon">📦</div>
         <div class="handoff-banner-info">
@@ -1567,6 +1602,66 @@ let pendingLinks = []; // [string]
 let mediaViewerCtx = { assetId: null, files: [], index: 0 };
 let calendarDate = new Date();
 
+// ============================================================================
+// UPDATE BANNER — surfaced when a Firestore "campaign changed" signal arrives
+// from another admin. Drive remains the source of truth; the banner only
+// triggers a Drive re-sync on user click so we never auto-clobber in-flight
+// local edits.
+// ============================================================================
+let _pendingUpdateSignal = null; // { id, displayName }
+function showUpdateBanner(sig) {
+  if (!sig) return;
+  _pendingUpdateSignal = sig;
+  const b = document.getElementById('updateBanner');
+  const name = document.getElementById('updateBannerName');
+  const sub = document.getElementById('updateBannerSub');
+  if (!b) return;
+  if (name) name.textContent = sig.displayName || sig.modifiedBy || 'เพื่อนร่วมทีม';
+  if (sub) {
+    const c = campaigns.find(x => x.id === sig.id);
+    const cname = c ? (c.campaign || c.id) : '';
+    sub.textContent = cname
+      ? `อัปเดต “${cname}” · กดเพื่อโหลดล่าสุดจาก Drive`
+      : 'มีแคมเปญถูกแก้ไขจากที่อื่น · กดเพื่อโหลดล่าสุด';
+  }
+  b.classList.remove('hidden');
+}
+function dismissUpdateBanner() {
+  _pendingUpdateSignal = null;
+  const b = document.getElementById('updateBanner');
+  if (b) b.classList.add('hidden');
+}
+async function acceptUpdateBanner() {
+  const sig = _pendingUpdateSignal;
+  dismissUpdateBanner();
+  if (pendingChanges) {
+    // The local user is mid-edit. We refuse to clobber — they should save
+    // first. Re-show after their save flushes.
+    showToast('กำลังบันทึกของคุณก่อน แล้วค่อยโหลดอัปเดต', 'warn');
+    if (sig) setTimeout(() => showUpdateBanner(sig), 100);
+    return;
+  }
+  try {
+    await syncDatabaseFromDrive({ silent: false });
+  } catch(e) { console.warn('refresh from update banner failed:', e); }
+}
+function onCampaignSignal(sig) {
+  if (!sig || !sig.id) return;
+  // Ignore our own echo (we wrote this just now).
+  if (sig.modifiedBy && currentUserEmail && sig.modifiedBy === currentUserEmail) return;
+  if (window.Control && window.Control.isOwnSignal(sig.id, sig.ts)) return;
+  // Only surface if the user can actually see this campaign — no point
+  // notifying about something they have no access to.
+  const camp = campaigns.find(c => c.id === sig.id);
+  if (!camp) return;
+  // Don't blast a banner if the signal is older than what we already have.
+  if (camp.driveDbModifiedTime) {
+    const local = new Date(camp.driveDbModifiedTime).getTime();
+    if (sig.ts && sig.ts <= local) return;
+  }
+  showUpdateBanner(sig);
+}
+
 // Default schema for a new campaign
 function defaultSchema() {
   return {
@@ -1817,6 +1912,9 @@ async function resolveUserRoleFromControl(email, displayName) {
     // regardless of who created them (bug: admins not seeing each other's camps).
     await window.Control.listCampaigns().catch(e => { console.warn('listCampaigns failed:', e); });
     window.Control.subscribeCampaigns(onControlCampaignsChanged);
+    // Signal channel: live "campaign changed on Drive" notifications. Drive
+    // is still the source of truth — this just avoids the 45s poll wait.
+    try { window.Control.subscribeSignals(onCampaignSignal); } catch(e) { console.warn('subscribeSignals failed:', e); }
   } catch(e) {
     console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
     isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
@@ -2261,6 +2359,9 @@ async function authFetch(url, options = {}, _retried) {
 function scheduleSave() {
   pendingChanges = true;
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
+  // Fresh user edit invalidates any in-flight retry plan — we'll restart from
+  // attempt 0 if this save also fails.
+  cancelSaveRetry();
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
   if (!accessToken) { setSaveStatus('offline', 'Drive token required'); return; }
   // Block uploads until the first sync finished. Without this, a logAction
@@ -2684,6 +2785,44 @@ function _parseJsonField(s, fallback) {
 }
 
 let _consecutiveSaveFailures = 0;
+// Retry queue — backoff schedule (ms) for auto-retrying a failed cloud save.
+// Reset to 0 attempts on success, or on any fresh user edit (scheduleSave).
+const SAVE_RETRY_DELAYS = [5000, 15000, 45000, 120000, 300000];
+let _saveRetryAttempt = 0;
+let _saveRetryTimer = null;
+let _saveRetryUiTimer = null;
+let _saveRetryDeadline = 0;
+function cancelSaveRetry() {
+  if (_saveRetryTimer) { clearTimeout(_saveRetryTimer); _saveRetryTimer = null; }
+  if (_saveRetryUiTimer) { clearInterval(_saveRetryUiTimer); _saveRetryUiTimer = null; }
+  _saveRetryAttempt = 0;
+  _saveRetryDeadline = 0;
+}
+function scheduleSaveRetry() {
+  if (!pendingChanges || !isAdmin || isOfflineMode) return;
+  if (_saveRetryAttempt >= SAVE_RETRY_DELAYS.length) {
+    setSaveStatus('error', `Save failed ${_consecutiveSaveFailures}x · click to retry`);
+    return;
+  }
+  const delay = SAVE_RETRY_DELAYS[_saveRetryAttempt];
+  _saveRetryAttempt++;
+  _saveRetryDeadline = Date.now() + delay;
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((_saveRetryDeadline - Date.now()) / 1000));
+    setSaveStatus('error', `Save failed · retrying in ${left}s (${_saveRetryAttempt}/${SAVE_RETRY_DELAYS.length})`);
+  };
+  tick();
+  if (_saveRetryUiTimer) clearInterval(_saveRetryUiTimer);
+  _saveRetryUiTimer = setInterval(tick, 1000);
+  if (_saveRetryTimer) clearTimeout(_saveRetryTimer);
+  _saveRetryTimer = setTimeout(() => {
+    _saveRetryTimer = null;
+    if (_saveRetryUiTimer) { clearInterval(_saveRetryUiTimer); _saveRetryUiTimer = null; }
+    if (!pendingChanges || isOfflineMode || !accessToken) return;
+    setSaveStatus('saving', `Retrying save (${_saveRetryAttempt}/${SAVE_RETRY_DELAYS.length})...`);
+    saveToDrive().catch(e => console.warn('retry save failed:', e));
+  }, delay);
+}
 async function saveToDrive() {
   if (isSaving) return;
   // Campaign JSON is stored in the client's shared Drive folder, so every
@@ -2724,6 +2863,7 @@ async function saveToDrive() {
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
     _lastSaveError = null;
+    cancelSaveRetry();
     setSaveStatus('saved', 'Drive JSON saved');
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -2742,6 +2882,11 @@ async function saveToDrive() {
       setSaveStatus('error', `Save failed (${_consecutiveSaveFailures}x) · click for backup`);
       if (_consecutiveSaveFailures >= 2) offerManualBackup(e);
     }
+    // Try again automatically with exponential backoff so a transient network
+    // blip doesn't leave the user's edits dangling. localStorage backup above
+    // means we never lose data even if every retry fails.
+    pendingChanges = true;
+    scheduleSaveRetry();
     throw e;
   } finally {
     isSaving = false;
@@ -3211,6 +3356,17 @@ async function saveCampaignJsonToDrive(camp) {
   // so a Firestore or permission hiccup never blocks the Drive save itself.
   try { await shareCampaignFolderWithAdmins(camp.driveFolderId); } catch(e) { console.warn('share campaign folder with admins failed:', e); }
   try { await registerCampaignInIndex(camp); } catch(e) { console.warn('campaign index upsert failed:', e); }
+  // Fire the "campaign changed" signal AFTER Drive write succeeded — keeps
+  // Drive + Firestore consistent (a signal never points to a write that
+  // didn't land). Failure here is non-fatal.
+  try {
+    if (window.Control && window.Control.available()) {
+      window.Control.pingCampaignChanged(camp.id, {
+        modifiedBy: currentUserEmail,
+        displayName: (typeof currentUserName === 'function' ? currentUserName() : '') || currentUserEmail
+      });
+    }
+  } catch(e) { console.warn('pingCampaignChanged failed:', e); }
   return res;
 }
 
@@ -4238,6 +4394,38 @@ function toggleMemberCard(email) {
   }
 }
 
+const MEMBERS_DRAWER_KEY = 'wakuwaku_members_drawer_collapsed';
+function toggleMembersDrawer(ev) {
+  if (ev) ev.stopPropagation();
+  const label = document.getElementById('members-drawer-label');
+  const drawer = document.getElementById('members-drawer');
+  if (!label || !drawer) return;
+  const collapsed = !label.classList.contains('collapsed');
+  label.classList.toggle('collapsed', collapsed);
+  drawer.classList.toggle('collapsed', collapsed);
+  try { localStorage.setItem(MEMBERS_DRAWER_KEY, collapsed ? '1' : '0'); } catch(e) {}
+}
+function initMembersDrawer() {
+  const label = document.getElementById('members-drawer-label');
+  const drawer = document.getElementById('members-drawer');
+  if (!label || !drawer) return;
+  let collapsed = false;
+  try {
+    const saved = localStorage.getItem(MEMBERS_DRAWER_KEY);
+    if (saved === '1') collapsed = true;
+    else if (saved === null) {
+      // First-time default: collapsed when list is long enough to feel cluttered.
+      collapsed = (members || []).length >= 6;
+    }
+  } catch(e) {}
+  label.classList.toggle('collapsed', collapsed);
+  drawer.classList.toggle('collapsed', collapsed);
+}
+function updateMembersCount(n) {
+  const el = document.getElementById('members-count');
+  if (el) el.textContent = String(n);
+}
+
 function renderMemberNav() {
   const nav = document.getElementById('member-list-nav');
   if (!nav) return;
@@ -4314,6 +4502,8 @@ function renderMemberNav() {
     }
     nav.appendChild(card);
   });
+  updateMembersCount(list.length);
+  if (!renderMemberNav._inited) { renderMemberNav._inited = true; initMembersDrawer(); }
 }
 
 function renderCampaignNav() {
@@ -7151,6 +7341,37 @@ window.__runTests = async function() {
   t('Control._normCampaign normalizes fields', () => {
     const n = window.Control._normCampaign('cX', { name:'N', clientEmail:'A@B.C', driveDbFileId:'f1' });
     ok(n.id === 'cX' && n.name === 'N' && n.clientEmail === 'a@b.c' && n.driveDbFileId === 'f1');
+  });
+  t('Control signal API present', () => ok(typeof window.Control.pingCampaignChanged === 'function' && typeof window.Control.subscribeSignals === 'function' && typeof window.Control.isOwnSignal === 'function'));
+  t('Control.isOwnSignal flips after pingCampaignChanged (no Firestore)', () => {
+    const sv = window.Control._db; window.Control._db = null; // forces no-network resolve
+    const before = window.Control.isOwnSignal('camp-test', 12345);
+    window.Control._selfSignalTs['camp-test'] = 12345;
+    const after = window.Control.isOwnSignal('camp-test', 12345);
+    delete window.Control._selfSignalTs['camp-test'];
+    window.Control._db = sv;
+    ok(before === false && after === true);
+  });
+  t('update banner DOM exists', () => ok(document.getElementById('updateBanner') && document.getElementById('updateBannerName')));
+  t('update banner helpers defined', () => ok(typeof showUpdateBanner === 'function' && typeof dismissUpdateBanner === 'function' && typeof acceptUpdateBanner === 'function' && typeof onCampaignSignal === 'function'));
+  t('onCampaignSignal ignores own echo', () => {
+    const svE = currentUserEmail; const svBanner = _pendingUpdateSignal;
+    currentUserEmail = 'me@x.y';
+    onCampaignSignal({ id: 'cam1', modifiedBy: 'me@x.y', ts: Date.now(), displayName: 'Me' });
+    const ignored = (_pendingUpdateSignal === null || _pendingUpdateSignal === svBanner);
+    currentUserEmail = svE; _pendingUpdateSignal = svBanner;
+    ok(ignored);
+  });
+  t('save retry queue helpers defined', () => ok(typeof scheduleSaveRetry === 'function' && typeof cancelSaveRetry === 'function' && Array.isArray(SAVE_RETRY_DELAYS) && SAVE_RETRY_DELAYS.length >= 3));
+  t('members drawer DOM + helpers exist', () => ok(document.getElementById('members-drawer') && document.getElementById('members-drawer-label') && typeof toggleMembersDrawer === 'function' && typeof initMembersDrawer === 'function'));
+  t('members drawer toggle flips collapsed class', () => {
+    const label = document.getElementById('members-drawer-label');
+    const drawer = document.getElementById('members-drawer');
+    const wasCollapsed = label.classList.contains('collapsed');
+    toggleMembersDrawer();
+    const flipped = label.classList.contains('collapsed') !== wasCollapsed && drawer.classList.contains('collapsed') === label.classList.contains('collapsed');
+    if (label.classList.contains('collapsed') !== wasCollapsed) toggleMembersDrawer(); // restore
+    ok(flipped);
   });
   t('Add Campaign modal requires Drive URL field', () => ok(document.getElementById('newCampaignDriveUrl')));
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));

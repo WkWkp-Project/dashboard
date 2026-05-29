@@ -22,6 +22,12 @@
   var COLLECTION = 'control_members';
   var COLLECTION_CAMPAIGNS = 'control_campaigns';
   var COLLECTION_PRESENCE = 'control_presence';
+  // Lightweight signal channel — small docs (~100 bytes) that announce
+  // "this campaign was changed on Drive at ts by modifiedBy". Data itself
+  // stays on Drive; this is *only* a notification so other admins don't
+  // have to wait for the 45s poll. Keeps Drive as the single source of
+  // truth for customer data.
+  var COLLECTION_SIGNALS = 'control_signals';
 
   // --- Role / permission matrix --------------------------------------------
   // Keep this declarative so UI gates read from one place.
@@ -379,6 +385,79 @@
     removePresence: function (key) {
       if (!key || !this._db) return Promise.resolve();
       return this._db.collection(COLLECTION_PRESENCE).doc(key).delete();
+    },
+
+    // --- Signal channel (campaign change notifications) ----------------------
+    // After saving a campaign JSON to Drive, the writer pings the corresponding
+    // signal doc. Other clients listen via onSnapshot and surface a "Refresh"
+    // banner. Drive remains the source of truth — the signal carries no data,
+    // just { id, ts, modifiedBy, displayName }.
+    _signals: {},           // id -> last seen signal { id, ts, modifiedBy, displayName }
+    _signalUnsub: null,
+    _onSignal: null,
+    _selfSignalTs: {},      // id -> ts the local user wrote (to ignore own echoes)
+
+    pingCampaignChanged: function (id, opts) {
+      if (!id || !this._db) return Promise.resolve();
+      opts = opts || {};
+      var ts = Date.now();
+      this._selfSignalTs[id] = ts;
+      var doc = {
+        id: id,
+        ts: ts,
+        iso: new Date(ts).toISOString(),
+        modifiedBy: normEmail(opts.modifiedBy || ''),
+        displayName: opts.displayName || ''
+      };
+      return this._db.collection(COLLECTION_SIGNALS).doc(id).set(doc, { merge: true })
+        .catch(function (e) {
+          // Non-fatal: Drive save already succeeded; signal is a courtesy only.
+          console.warn('[Control] pingCampaignChanged failed (non-fatal):', e);
+        });
+    },
+
+    cachedSignals: function () {
+      var out = {};
+      for (var k in this._signals) if (this._signals.hasOwnProperty(k)) out[k] = this._signals[k];
+      return out;
+    },
+
+    subscribeSignals: function (onSignal) {
+      var self = this;
+      this._onSignal = typeof onSignal === 'function' ? onSignal : null;
+      if (!this._db) return function () {};
+      if (this._signalUnsub) { try { this._signalUnsub(); } catch (e) {} this._signalUnsub = null; }
+      // Track first-snapshot so we don't blast banners for every doc that
+      // already existed when the listener attached.
+      var firstSnapshot = true;
+      this._signalUnsub = this._db.collection(COLLECTION_SIGNALS).onSnapshot(function (snap) {
+        snap.docChanges().forEach(function (change) {
+          var data = change.doc.data() || {};
+          var id = data.id || change.doc.id;
+          var prev = self._signals[id];
+          self._signals[id] = {
+            id: id,
+            ts: +data.ts || 0,
+            iso: data.iso || '',
+            modifiedBy: normEmail(data.modifiedBy || ''),
+            displayName: data.displayName || ''
+          };
+          if (firstSnapshot) return;                 // skip initial backfill
+          if (change.type === 'removed') return;
+          if (prev && prev.ts === self._signals[id].ts) return; // dedupe
+          if (self._onSignal) self._onSignal(self._signals[id]);
+        });
+        firstSnapshot = false;
+      }, function (err) {
+        console.error('[Control] signal snapshot error:', err);
+      });
+      return this._signalUnsub;
+    },
+
+    // Returns true if this signal's ts was written by the local user (so the
+    // caller can ignore its own echo without needing the email comparison).
+    isOwnSignal: function (id, ts) {
+      return this._selfSignalTs[id] === ts;
     }
   };
 
