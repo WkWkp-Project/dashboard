@@ -1650,9 +1650,25 @@ function onCampaignSignal(sig) {
   // Ignore our own echo (we wrote this just now).
   if (sig.modifiedBy && currentUserEmail && sig.modifiedBy === currentUserEmail) return;
   if (window.Control && window.Control.isOwnSignal(sig.id, sig.ts)) return;
+  const camp = campaigns.find(c => c.id === sig.id);
+  // --- Delete signal ------------------------------------------------------
+  // Drive file is already trashed by the deleter; here we just reflect that
+  // in our local list so the campaign vanishes without a refresh.
+  if (sig.deleted) {
+    if (!camp) return; // already not in our list
+    const name = camp.campaign || camp.id;
+    campaigns = campaigns.filter(c => c.id !== sig.id);
+    if (currentCampaignId === sig.id) {
+      const myCamps = currentMemberEmail ? campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail) : campaigns;
+      currentCampaignId = myCamps[0] ? myCamps[0].id : null;
+    }
+    if (typeof renderEverything === 'function') renderEverything();
+    showToast(`🗑️ ${sig.displayName || sig.modifiedBy || 'ทีม'} ลบ "${name}"`, 'warn');
+    return;
+  }
+  // --- Update signal ------------------------------------------------------
   // Only surface if the user can actually see this campaign — no point
   // notifying about something they have no access to.
-  const camp = campaigns.find(c => c.id === sig.id);
   if (!camp) return;
   // Don't blast a banner if the signal is older than what we already have.
   if (camp.driveDbModifiedTime) {
@@ -2662,6 +2678,24 @@ async function saveMemberMarkerToDrive(member) {
   if (!res || !res.id) throw new Error('Drive marker save returned no file id');
   member.markerFileId = res.id;
   return res;
+}
+
+// Trash (don't hard-delete) a campaign's wakuwaku_campaign.json in Drive when
+// the campaign is deleted. Drive purges trash after 30 days automatically, and
+// the customer can recover it from their own Drive trash in the meantime —
+// keeping the "customer owns the data" architectural promise intact. Without
+// this, Drive search still finds the orphaned JSON on the next sync and the
+// "deleted" campaign zombies back into the list for every admin.
+async function trashCampaignJsonInDrive(camp) {
+  if (!camp || !camp.driveDbFileId) return false;
+  if (!accessToken) return false;
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.driveDbFileId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true })
+  });
+  if (!r.ok) throw await driveError(r);
+  return true;
 }
 
 async function trashMemberMarkerInDrive(member) {
@@ -5082,18 +5116,42 @@ function confirmDeleteCampaign() {
   const c = getCurrentCampaign();
   if (!c) return;
   const removedId = c.id;
-  showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกลบถาวร`, async () => {
-    campaigns = campaigns.filter(x => x.id !== currentCampaignId);
+  const removedCampSnap = c; // keep a reference for the async cleanup below
+  showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกย้ายลง Drive Trash (กู้คืนได้ภายใน 30 วัน)`, async () => {
+    // 1) Trash the campaign JSON in Drive FIRST. Without this the next sync
+    //    finds the file again and "undeletes" the campaign for everyone.
+    //    Media subfolders are intentionally left untouched — customer may
+    //    want to keep the rendered assets.
+    try {
+      if (removedCampSnap.driveDbFileId && accessToken) {
+        await trashCampaignJsonInDrive(removedCampSnap);
+      }
+    } catch(e) {
+      console.warn('trash campaign JSON failed:', e);
+      showToast('⚠️ ลบไฟล์ใน Drive ไม่สำเร็จ — แคมเปญอาจกลับมาเมื่อ sync ครั้งหน้า', 'err');
+    }
+    // 2) Update local state.
+    campaigns = campaigns.filter(x => x.id !== removedId);
     const myCamps = currentMemberEmail ? campaigns.filter(x => (x.clientEmail || '') === currentMemberEmail) : [];
     currentCampaignId = myCamps[0] ? myCamps[0].id : null;
     closeEditModal();
     renderEverything();
-    showToast('Campaign deleted');
-    // Remove from the shared index so it disappears for other admins too.
+    showToast('Campaign moved to Drive trash');
+    // 3) Remove from the shared Firestore index so admins stop seeing it.
     if (window.Control && window.Control.available()) {
       window.Control.removeCampaign(removedId).catch(e => console.warn('index removeCampaign failed:', e));
+      // 4) Broadcast a delete signal so other admins remove it from their
+      //    local view immediately, instead of waiting for the next sync.
+      try {
+        window.Control.pingCampaignDeleted(removedId, {
+          modifiedBy: currentUserEmail,
+          displayName: (typeof currentUserName === 'function' ? currentUserName() : '') || currentUserEmail
+        });
+      } catch(e) { console.warn('pingCampaignDeleted failed:', e); }
     }
-    scheduleSave();
+    // No scheduleSave here — the remaining campaigns are already on Drive
+    // and re-uploading them adds no value; saving for the sake of deleting
+    // was the wrong default in the old flow.
   });
 }
 
@@ -7342,7 +7400,28 @@ window.__runTests = async function() {
     const n = window.Control._normCampaign('cX', { name:'N', clientEmail:'A@B.C', driveDbFileId:'f1' });
     ok(n.id === 'cX' && n.name === 'N' && n.clientEmail === 'a@b.c' && n.driveDbFileId === 'f1');
   });
-  t('Control signal API present', () => ok(typeof window.Control.pingCampaignChanged === 'function' && typeof window.Control.subscribeSignals === 'function' && typeof window.Control.isOwnSignal === 'function'));
+  t('Control signal API present', () => ok(typeof window.Control.pingCampaignChanged === 'function' && typeof window.Control.subscribeSignals === 'function' && typeof window.Control.isOwnSignal === 'function' && typeof window.Control.pingCampaignDeleted === 'function'));
+  t('trashCampaignJsonInDrive defined', () => ok(typeof trashCampaignJsonInDrive === 'function'));
+  t('onCampaignSignal removes campaign on deleted signal', () => {
+    const svC = campaigns.slice(); const svId = currentCampaignId; const svE = currentUserEmail;
+    currentUserEmail = 'me@x.y';
+    campaigns = [{ id:'doomed', campaign:'X', clientEmail:'c@x.y', assets:[] }, { id:'safe', campaign:'Y', clientEmail:'c@x.y', assets:[] }];
+    currentCampaignId = 'doomed';
+    onCampaignSignal({ id:'doomed', deleted:true, modifiedBy:'other@x.y', displayName:'Other', ts: Date.now() });
+    const gone = !campaigns.find(c => c.id === 'doomed');
+    const moved = currentCampaignId !== 'doomed';
+    campaigns = svC; currentCampaignId = svId; currentUserEmail = svE;
+    ok(gone && moved);
+  });
+  t('onCampaignSignal ignores deleted signal for unknown campaign', () => {
+    const svC = campaigns.slice(); const svE = currentUserEmail;
+    currentUserEmail = 'me@x.y';
+    campaigns = [{ id:'x1', campaign:'X', clientEmail:'c@x.y', assets:[] }];
+    onCampaignSignal({ id:'never-existed', deleted:true, modifiedBy:'other@x.y', ts: Date.now() });
+    const unchanged = campaigns.length === 1 && campaigns[0].id === 'x1';
+    campaigns = svC; currentUserEmail = svE;
+    ok(unchanged);
+  });
   t('Control.isOwnSignal flips after pingCampaignChanged (no Firestore)', () => {
     const sv = window.Control._db; window.Control._db = null; // forces no-network resolve
     const before = window.Control.isOwnSignal('camp-test', 12345);

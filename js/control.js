@@ -407,12 +407,35 @@
         ts: ts,
         iso: new Date(ts).toISOString(),
         modifiedBy: normEmail(opts.modifiedBy || ''),
-        displayName: opts.displayName || ''
+        displayName: opts.displayName || '',
+        deleted: false
       };
       return this._db.collection(COLLECTION_SIGNALS).doc(id).set(doc, { merge: true })
         .catch(function (e) {
           // Non-fatal: Drive save already succeeded; signal is a courtesy only.
           console.warn('[Control] pingCampaignChanged failed (non-fatal):', e);
+        });
+    },
+
+    // Same channel, but flags the doc as a deletion. The receiver removes the
+    // campaign from its local list. Drive is still source of truth — the file
+    // was already trashed in the customer's Drive folder before this fires.
+    pingCampaignDeleted: function (id, opts) {
+      if (!id || !this._db) return Promise.resolve();
+      opts = opts || {};
+      var ts = Date.now();
+      this._selfSignalTs[id] = ts;
+      var doc = {
+        id: id,
+        ts: ts,
+        iso: new Date(ts).toISOString(),
+        modifiedBy: normEmail(opts.modifiedBy || ''),
+        displayName: opts.displayName || '',
+        deleted: true
+      };
+      return this._db.collection(COLLECTION_SIGNALS).doc(id).set(doc, { merge: true })
+        .catch(function (e) {
+          console.warn('[Control] pingCampaignDeleted failed (non-fatal):', e);
         });
     },
 
@@ -440,7 +463,8 @@
             ts: +data.ts || 0,
             iso: data.iso || '',
             modifiedBy: normEmail(data.modifiedBy || ''),
-            displayName: data.displayName || ''
+            displayName: data.displayName || '',
+            deleted: !!data.deleted
           };
           if (firstSnapshot) return;                 // skip initial backfill
           if (change.type === 'removed') return;

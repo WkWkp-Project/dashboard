@@ -46,6 +46,15 @@ service cloud.firestore {
       allow write: if isAdmin() || isBootstrapAdmin();
     }
 
+    // Lightweight signal channel — { ts, modifiedBy, displayName, deleted? }
+    // pinged after a successful Drive write or campaign delete, so other admins
+    // see a live "Refresh" banner instead of waiting for the 45s poll. Carries
+    // no campaign content; Drive remains the source of truth.
+    match /control_signals/{campaignId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin() || isBootstrapAdmin();
+    }
+
     // Online presence (Wkwk team). Any signed-in user may read; a user may only
     // write a presence doc whose key contains their own email (key format is
     // "g:<email>" or "op:<token>"; team members use their email).
