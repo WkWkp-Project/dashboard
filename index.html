@@ -2210,13 +2210,27 @@ function maybeOfferLocalRestore() {
   if (userRole === 'client' || isOfflineMode) return;
   const bk = readLocalBackup();
   if (!bk || !bk.db || !Array.isArray(bk.db.campaigns)) return;
-  // Only offer if Drive currently shows nothing meaningful (no fileId or 0/1 empty campaign)
+  // Two reasons to offer restore:
+  //   1. Drive currently looks empty       → first-run / DB lost
+  //   2. localStorage backup is NEWER than Drive's latest save → the user
+  //      typed work that never made it to Drive (network blip, refresh
+  //      mid-save, token expiry, etc.). The old code missed this case and
+  //      silently let the un-uploaded edits sit in localStorage unused.
   const driveEmpty = !databaseFileId || (campaigns.length <= 1 && campaigns.every(c => (c.assets || []).length === 0 && (c.log || []).length <= 1));
   const backupHasData = bk.db.campaigns.some(c => (c.assets || []).length > 0 || (c.log || []).length > 1) || bk.db.campaigns.length > 1;
-  if (!driveEmpty || !backupHasData) return;
+  // 5-second margin to absorb client/Drive clock skew so a fresh just-saved
+  // session doesn't keep nagging "restore?" right after a successful save.
+  const SKEW_MS = 5000;
+  const driveTs = lastSaveTime ? lastSaveTime.getTime() : 0;
+  const localIsNewer = bk.ts && bk.ts > driveTs + SKEW_MS;
+  if (!backupHasData) return;
+  if (!driveEmpty && !localIsNewer) return;
   const when = new Date(bk.ts).toLocaleString();
+  const reason = driveEmpty
+    ? 'Drive ไม่มีข้อมูล'
+    : `งานในเครื่องใหม่กว่า Drive (Drive: ${lastSaveTime ? lastSaveTime.toLocaleString() : 'ไม่ทราบ'})`;
   showConfirm('💾 พบ backup ในเครื่อง',
-    `Drive ไม่มีข้อมูล แต่เครื่องนี้มี backup จาก ${when} (โดย ${bk.by || '?'})${bk.stripped ? '\n\n⚠️ backup นี้ไม่มีไฟล์สื่อที่ฝัง (offloaded media ยังอยู่)' : ''}\n\nกู้คืนข้อมูลจาก backup นี้?`,
+    `${reason} · backup นี้บันทึก ${when} (โดย ${bk.by || '?'})${bk.stripped ? '\n\n⚠️ backup นี้ไม่มีไฟล์สื่อที่ฝัง (offloaded media ยังอยู่)' : ''}\n\nกู้คืนข้อมูลจาก backup นี้?`,
     () => { restoreFromLocalBackup(); });
 }
 function restoreFromLocalBackup() {
@@ -7601,6 +7615,12 @@ window.__runTests = async function() {
     const src = saveToDrive.toString();
     // The fallback chain: dirty.length ? dirty : targets — never under-saves.
     ok(/dirty\.length\s*\?\s*dirty\s*:\s*targets/.test(src));
+  });
+  // maybeOfferLocalRestore Fix D — offer when localStorage is newer than Drive,
+  // not just when Drive is empty. Earlier behaviour silently stranded edits.
+  t('maybeOfferLocalRestore source compares localStorage ts to Drive (newer-than guard)', () => {
+    const src = maybeOfferLocalRestore.toString();
+    ok(/localIsNewer/.test(src) && /bk\.ts/.test(src) && /lastSaveTime/.test(src));
   });
   t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
