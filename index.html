@@ -2315,6 +2315,10 @@ async function tryRestoreSession() {
       startAutoResync(); // keep Drive data fresh while the tab is open
       if (isTeamRole()) joinSharedSession(userRole === 'operator' ? 'operator' : 'internal', currentUserEmail);
       setSaveStatus('idle', 'Connected');
+      // Refresh path was bypassing this check — if the user typed work that
+      // never got to Drive (token expiry / crash / network blip), localStorage
+      // is the only copy. Offer restore when bk.ts > Drive's lastSaveTime.
+      maybeOfferLocalRestore();
       showToast('Session restored');
       return true;
     }
@@ -2346,6 +2350,9 @@ async function tryRestoreSession() {
         document.getElementById('sb-mode-tag').textContent = "Cloud Sync Active";
         document.getElementById('sb-mode-tag').style.color = "var(--connect)";
         await syncDatabaseFromDrive();
+        // Same fix as the Firebase-auth path above — refresh after a failed
+        // save would otherwise silently strand the local backup.
+        maybeOfferLocalRestore();
         if (s.userRole === 'operator' && s.operatorToken) { applyTokenLogin(s.operatorToken); }
         else { joinSharedSession('internal', user.email || ''); showToast('Session restored'); }
         return true;
@@ -7621,6 +7628,13 @@ window.__runTests = async function() {
   t('maybeOfferLocalRestore source compares localStorage ts to Drive (newer-than guard)', () => {
     const src = maybeOfferLocalRestore.toString();
     ok(/localIsNewer/.test(src) && /bk\.ts/.test(src) && /lastSaveTime/.test(src));
+  });
+  t('tryRestoreSession wires maybeOfferLocalRestore in both restore paths (source guard)', () => {
+    const src = tryRestoreSession.toString();
+    // Should appear twice — once in the Firebase-auth path, once in the
+    // localStorage-session-with-token fallback. Both used to silently skip it.
+    const matches = src.match(/maybeOfferLocalRestore\(\)/g) || [];
+    ok(matches.length >= 2);
   });
   t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
