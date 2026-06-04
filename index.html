@@ -2459,8 +2459,27 @@ async function authFetch(url, options = {}, _retried) {
 // ============================================================================
 // SAVE / SYNC
 // ============================================================================
-function scheduleSave() {
+// Per-campaign dirty tracker — fixes the "saveToDrive uploads every campaign"
+// concurrent-edit clobber: when admin A edits campaign X, admin B's in-flight
+// edit on campaign Y was being overwritten by A's stale snapshot of Y. With
+// this set we only upload the campaigns the user actually touched.
+//
+// Pass an id to mark a specific campaign dirty. Pass 'all' for global state
+// changes that affect every campaign payload (Hub config, etc.). Default
+// (no arg) marks the currently open campaign — which covers ~95% of edits.
+const _dirtyCampaignIds = new Set();
+function markCampaignDirty(id) {
+  if (id === 'all') {
+    campaigns.forEach(c => { if (c && c.id) _dirtyCampaignIds.add(c.id); });
+  } else if (id) {
+    _dirtyCampaignIds.add(id);
+  } else if (currentCampaignId) {
+    _dirtyCampaignIds.add(currentCampaignId);
+  }
+}
+function scheduleSave(campaignId) {
   pendingChanges = true;
+  markCampaignDirty(campaignId);
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   // Fresh user edit invalidates any in-flight retry plan — we'll restart from
   // attempt 0 if this save also fails. Also re-arm the emergency-backup latch
@@ -2987,10 +3006,19 @@ async function saveToDrive() {
     const current = getCurrentCampaign();
     if (current && !current.driveFolderId) throw new Error('กรุณาตั้ง Client Drive Folder URL ของแคมเปญนี้ก่อนเซฟ JSON');
     if (!targets.length) throw new Error('ยังไม่มีแคมเปญที่มี Client Drive Folder URL สำหรับเซฟ JSON');
+    // Filter to only the campaigns the user actually changed. If the dirty
+    // set is empty (e.g. forceSave / login flush / migration) we fall back
+    // to "save all" — that's the original behaviour and stays safe because
+    // it can never under-save.
+    const dirty = _dirtyCampaignIds.size > 0
+      ? targets.filter(c => _dirtyCampaignIds.has(c.id))
+      : targets;
+    const toSave = dirty.length ? dirty : targets;
     let savedCount = 0;
-    for (const c of targets) {
-      setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}/${targets.length})...`);
+    for (const c of toSave) {
+      setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}/${toSave.length})...`);
       await saveCampaignJsonToDrive(c);
+      _dirtyCampaignIds.delete(c.id);
       savedCount++;
     }
     databaseFileId = (current && current.driveDbFileId) || (targets[0] && targets[0].driveDbFileId) || 'drive:campaign-json';
@@ -7598,6 +7626,35 @@ window.__runTests = async function() {
     ok(ignored);
   });
   t('save retry queue helpers defined', () => ok(typeof scheduleSaveRetry === 'function' && typeof cancelSaveRetry === 'function' && Array.isArray(SAVE_RETRY_DELAYS) && SAVE_RETRY_DELAYS.length >= 3));
+  // Per-campaign dirty tracking (Fix A) — concurrent-edit safety.
+  t('markCampaignDirty + _dirtyCampaignIds defined', () => ok(typeof markCampaignDirty === 'function' && _dirtyCampaignIds instanceof Set));
+  t('scheduleSave default marks currentCampaignId dirty', () => {
+    const svId = currentCampaignId; const svSet = new Set(_dirtyCampaignIds); _dirtyCampaignIds.clear();
+    const svOff = isOfflineMode; isOfflineMode = true; // short-circuit the rest of scheduleSave
+    currentCampaignId = 'cur-1';
+    scheduleSave();
+    const ok1 = _dirtyCampaignIds.has('cur-1');
+    _dirtyCampaignIds.clear();
+    scheduleSave('explicit-id');
+    const ok2 = _dirtyCampaignIds.has('explicit-id');
+    _dirtyCampaignIds.clear();
+    const svCamps = campaigns; campaigns = [{ id:'a' }, { id:'b' }, { id:'c' }];
+    scheduleSave('all');
+    const ok3 = _dirtyCampaignIds.has('a') && _dirtyCampaignIds.has('b') && _dirtyCampaignIds.has('c');
+    // restore
+    campaigns = svCamps; currentCampaignId = svId; isOfflineMode = svOff;
+    _dirtyCampaignIds.clear(); svSet.forEach(x => _dirtyCampaignIds.add(x));
+    ok(ok1 && ok2 && ok3);
+  });
+  t('saveToDrive only loops dirty campaigns (source guard)', () => {
+    const src = saveToDrive.toString();
+    ok(/_dirtyCampaignIds/.test(src) && /toSave/.test(src) && /_dirtyCampaignIds\.delete/.test(src));
+  });
+  t('saveToDrive falls back to save-all when dirty set is empty (source guard)', () => {
+    const src = saveToDrive.toString();
+    // The fallback chain: dirty.length ? dirty : targets — never under-saves.
+    ok(/dirty\.length\s*\?\s*dirty\s*:\s*targets/.test(src));
+  });
   t('REMOTE_POLL_MS is 30s', () => ok(REMOTE_POLL_MS === 30000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
     const src = pollRemoteChanges.toString();
