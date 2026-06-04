@@ -246,15 +246,12 @@
   .handoff-banner button { background: white; border: 1px solid var(--gold); color: #4A3812; padding: 6px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; }
   /* Update banner — shown when a teammate saved this campaign on Drive and a
      Firestore signal arrived. Data still loads from Drive on click. */
-  .update-banner { background: linear-gradient(135deg, #E8F1FF 0%, #D7E4FA 100%); border: 1px solid #4A7BD8; border-radius: var(--radius); padding: 12px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 14px; }
-  .update-banner.hidden { display: none; }
-  .update-banner-icon { width: 32px; height: 32px; background: #4A7BD8; border-radius: 50%; display: grid; place-items: center; color: white; font-size: 16px; flex-shrink: 0; }
-  .update-banner-info { flex: 1; min-width:0; }
-  .update-banner-info strong { font-family: 'Fraunces', serif; font-size: 14px; color: #1F3A6E; display: block; }
-  .update-banner-info span { font-size: 11px; color: #2F4F8A; font-family: 'Geist Mono', monospace; }
-  .update-banner-btn { background: #4A7BD8; border: 1px solid #4A7BD8; color: white; padding: 6px 14px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .update-banner-btn:hover { background: #3B66BA; }
-  .update-banner-x { background: transparent; border: none; color: #2F4F8A; font-size: 14px; cursor: pointer; padding: 4px 8px; }
+  /* Center-screen save-success popup — appears for ~1.5s on successful Drive
+     save, fades in/out, never blocks clicks (pointer-events:none). */
+  .save-success-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.92); z-index: 9999; background: rgba(30, 50, 35, 0.94); color: #E8F5EA; padding: 22px 38px; border-radius: 10px; font-family: 'Fraunces', serif; font-size: 22px; font-weight: 500; letter-spacing: 0.3px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease; pointer-events: none; backdrop-filter: blur(4px); }
+  .save-success-popup.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .save-success-popup.hidden { display: none; }
+  .save-success-popup-text { display: inline-block; }
   /* Save-failure recovery banner — global, sits just under the sticky topbar. */
   .save-failure-banner { position: sticky; top: 64px; z-index: 9; background: linear-gradient(135deg, #FFE8E8 0%, #FAD7D7 100%); border-bottom: 1px solid #D84A4A; padding: 10px 18px; display: flex; align-items: center; gap: 12px; }
   .save-failure-banner.hidden { display: none; }
@@ -735,17 +732,14 @@
       <button class="save-failure-x" onclick="dismissSaveFailureBanner()" title="ปิด">✕</button>
     </div>
 
+    <!-- Save success popup — brief center-screen confirmation when our own
+         save lands. Auto-dismisses in 1.5s; never blocks interaction. -->
+    <div class="save-success-popup hidden" id="saveSuccessPopup" aria-live="polite">
+      <span class="save-success-popup-text">✓ บันทึกแล้ว</span>
+    </div>
+
     <!-- ============ OVERVIEW VIEW ============ -->
     <div class="page view-container active" id="view-overview">
-      <div class="update-banner hidden" id="updateBanner">
-        <div class="update-banner-icon">🔔</div>
-        <div class="update-banner-info">
-          <strong>มีการอัปเดตจาก <span id="updateBannerName">teammate</span></strong>
-          <span id="updateBannerSub">แคมเปญนี้ถูกแก้ไขจากที่อื่น · กดเพื่อโหลดล่าสุด</span>
-        </div>
-        <button class="update-banner-btn" onclick="acceptUpdateBanner()">Refresh</button>
-        <button class="update-banner-x" onclick="dismissUpdateBanner()" title="Dismiss">✕</button>
-      </div>
       <div class="handoff-banner hidden" id="handoffBanner">
         <div class="handoff-banner-icon">📦</div>
         <div class="handoff-banner-info">
@@ -1628,59 +1622,28 @@ let mediaViewerCtx = { assetId: null, files: [], index: 0 };
 let calendarDate = new Date();
 
 // ============================================================================
-// UPDATE BANNER — surfaced when a Firestore "campaign changed" signal arrives
-// from another admin. Drive remains the source of truth; the banner only
-// triggers a Drive re-sync on user click so we never auto-clobber in-flight
-// local edits.
+// SAVE SUCCESS POPUP — brief center-screen confirmation when our own save
+// to Drive lands. Replaces the older "teammate updated" banner which had
+// become noisy and conflated remote-edit signals with our own success.
+// Remote signals still arrive via onCampaignSignal — they now drive a
+// background refresh on next focus instead of an in-your-face banner.
 // ============================================================================
-let _pendingUpdateSignal = null; // { id, displayName }
-// id → last ts the user explicitly ack'd (dismissed or refreshed). Future
-// signals for the same campaign with ts <= acked are suppressed, so a chatty
-// teammate hitting save every 2.5s doesn't re-pop a banner that was just
-// closed. Cleared on page refresh — that's acceptable; refresh = fresh state.
-const _ackedSignalTs = {};
-function _ackCurrentBannerSignal() {
-  if (_pendingUpdateSignal && _pendingUpdateSignal.id && _pendingUpdateSignal.ts) {
-    const prev = _ackedSignalTs[_pendingUpdateSignal.id] || 0;
-    if (_pendingUpdateSignal.ts > prev) _ackedSignalTs[_pendingUpdateSignal.id] = _pendingUpdateSignal.ts;
-  }
-}
-function showUpdateBanner(sig) {
-  if (!sig) return;
-  _pendingUpdateSignal = sig;
-  const b = document.getElementById('updateBanner');
-  const name = document.getElementById('updateBannerName');
-  const sub = document.getElementById('updateBannerSub');
-  if (!b) return;
-  if (name) name.textContent = sig.displayName || sig.modifiedBy || 'เพื่อนร่วมทีม';
-  if (sub) {
-    const c = campaigns.find(x => x.id === sig.id);
-    const cname = c ? (c.campaign || c.id) : '';
-    sub.textContent = cname
-      ? `อัปเดต “${cname}” · กดเพื่อโหลดล่าสุดจาก Drive`
-      : 'มีแคมเปญถูกแก้ไขจากที่อื่น · กดเพื่อโหลดล่าสุด';
-  }
-  b.classList.remove('hidden');
-}
-function dismissUpdateBanner() {
-  _ackCurrentBannerSignal();
-  _pendingUpdateSignal = null;
-  const b = document.getElementById('updateBanner');
-  if (b) b.classList.add('hidden');
-}
-async function acceptUpdateBanner() {
-  const sig = _pendingUpdateSignal;
-  dismissUpdateBanner();
-  if (pendingChanges) {
-    // The local user is mid-edit. We refuse to clobber — they should save
-    // first. Re-show after their save flushes.
-    showToast('กำลังบันทึกของคุณก่อน แล้วค่อยโหลดอัปเดต', 'warn');
-    if (sig) setTimeout(() => showUpdateBanner(sig), 100);
-    return;
-  }
-  try {
-    await syncDatabaseFromDrive({ silent: false });
-  } catch(e) { console.warn('refresh from update banner failed:', e); }
+let _saveSuccessPopupTimer = null;
+function showSaveSuccessPopup(message) {
+  const el = document.getElementById('saveSuccessPopup');
+  if (!el) return;
+  const text = el.querySelector('.save-success-popup-text');
+  if (text) text.textContent = message || '✓ บันทึกแล้ว';
+  el.classList.remove('hidden');
+  // Force reflow so the .show transition can re-trigger on rapid saves.
+  void el.offsetWidth;
+  el.classList.add('show');
+  if (_saveSuccessPopupTimer) clearTimeout(_saveSuccessPopupTimer);
+  _saveSuccessPopupTimer = setTimeout(() => {
+    el.classList.remove('show');
+    // Wait for the fade transition to finish before hiding fully.
+    setTimeout(() => { el.classList.add('hidden'); }, 250);
+  }, 1500);
 }
 // ============================================================================
 // SAVE-FAILURE RECOVERY BANNER — surfaced when Drive save has been failing
@@ -1723,14 +1686,10 @@ function onCampaignSignal(sig) {
   // Ignore our own echo (we wrote this just now).
   if (sig.modifiedBy && currentUserEmail && sig.modifiedBy === currentUserEmail) return;
   if (window.Control && window.Control.isOwnSignal(sig.id, sig.ts)) return;
-  // Per-campaign ack memory: if the user already dismissed/refreshed a banner
-  // for this campaign at or after this ts, don't pop it again. Delete signals
-  // bypass this — a deletion is a state change we must always reflect.
-  if (!sig.deleted && _ackedSignalTs[sig.id] && sig.ts && sig.ts <= _ackedSignalTs[sig.id]) return;
   const camp = campaigns.find(c => c.id === sig.id);
   // --- Delete signal ------------------------------------------------------
-  // Drive file is already trashed by the deleter; here we just reflect that
-  // in our local list so the campaign vanishes without a refresh.
+  // Drive file is already trashed by the deleter; reflect that locally so the
+  // campaign vanishes without a refresh. Always announce — it's a state change.
   if (sig.deleted) {
     if (!camp) return; // already not in our list
     const name = camp.campaign || camp.id;
@@ -1743,16 +1702,10 @@ function onCampaignSignal(sig) {
     showToast(`🗑️ ${sig.displayName || sig.modifiedBy || 'ทีม'} ลบ "${name}"`, 'warn');
     return;
   }
-  // --- Update signal ------------------------------------------------------
-  // Only surface if the user can actually see this campaign — no point
-  // notifying about something they have no access to.
-  if (!camp) return;
-  // Don't blast a banner if the signal is older than what we already have.
-  if (camp.driveDbModifiedTime) {
-    const local = new Date(camp.driveDbModifiedTime).getTime();
-    if (sig.ts && sig.ts <= local) return;
-  }
-  showUpdateBanner(sig);
+  // --- Update signal -------------------------------------------------------
+  // No banner anymore — the heartbeat alone is enough; pollRemoteChanges and
+  // user-driven refresh pick the new content up without a popup interrupting
+  // the writer mid-edit. Drive remains the source of truth either way.
 }
 
 // Default schema for a new campaign
@@ -3030,6 +2983,7 @@ async function saveToDrive() {
     cancelSaveRetry();
     dismissSaveFailureBanner();
     setSaveStatus('saved', 'Drive JSON saved');
+    showSaveSuccessPopup();
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     saveSession();
@@ -7591,39 +7545,32 @@ window.__runTests = async function() {
     window.Control._db = sv;
     ok(before === false && after === true);
   });
-  t('update banner DOM exists', () => ok(document.getElementById('updateBanner') && document.getElementById('updateBannerName')));
-  t('update banner helpers defined', () => ok(typeof showUpdateBanner === 'function' && typeof dismissUpdateBanner === 'function' && typeof acceptUpdateBanner === 'function' && typeof onCampaignSignal === 'function'));
-  t('onCampaignSignal suppresses banner after dismiss for same campaign (ack memory)', () => {
-    const svE = currentUserEmail; const svPending = _pendingUpdateSignal;
-    const svCamps = campaigns.slice(); const svAcked = _ackedSignalTs['ack-test'];
-    currentUserEmail = 'me@x.y';
-    campaigns = [{ id:'ack-test', campaign:'C', clientEmail:'c@x.y', assets:[], driveDbModifiedTime:'' }];
-    // First arrival: banner should show.
-    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 100 });
-    const shown1 = _pendingUpdateSignal && _pendingUpdateSignal.id === 'ack-test';
-    // User dismisses → ack ts=100.
-    dismissUpdateBanner();
-    // Same teammate fires a stale (ts<=100) signal → must be suppressed.
-    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 100 });
-    const suppressedSame = _pendingUpdateSignal === null;
-    // Older signal also suppressed.
-    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 50 });
-    const suppressedOlder = _pendingUpdateSignal === null;
-    // Genuinely newer signal → re-shows (legitimate new edit).
-    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 200 });
-    const reshownNewer = _pendingUpdateSignal && _pendingUpdateSignal.ts === 200;
-    // restore
-    if (svAcked === undefined) delete _ackedSignalTs['ack-test']; else _ackedSignalTs['ack-test'] = svAcked;
-    currentUserEmail = svE; campaigns = svCamps; _pendingUpdateSignal = svPending;
-    ok(shown1 && suppressedSame && suppressedOlder && reshownNewer);
+  t('save success popup DOM + helper exist', () => ok(document.getElementById('saveSuccessPopup') && typeof showSaveSuccessPopup === 'function'));
+  t('showSaveSuccessPopup toggles show class', () => {
+    const el = document.getElementById('saveSuccessPopup');
+    const wasHidden = el.classList.contains('hidden');
+    const wasShow = el.classList.contains('show');
+    showSaveSuccessPopup();
+    const shown = !el.classList.contains('hidden') && el.classList.contains('show');
+    // Cancel the auto-dismiss timer so we don't leak it into other tests.
+    if (_saveSuccessPopupTimer) { clearTimeout(_saveSuccessPopupTimer); _saveSuccessPopupTimer = null; }
+    // Restore prior state.
+    el.classList.toggle('hidden', wasHidden);
+    el.classList.toggle('show', wasShow);
+    ok(shown && typeof onCampaignSignal === 'function');
   });
-  t('onCampaignSignal ignores own echo', () => {
-    const svE = currentUserEmail; const svBanner = _pendingUpdateSignal;
-    currentUserEmail = 'me@x.y';
+  t('onCampaignSignal no longer shows an update banner (source guard)', () => {
+    const src = onCampaignSignal.toString();
+    ok(!/showUpdateBanner/.test(src) && /deleted/.test(src));
+  });
+  t('onCampaignSignal ignores own echo (no DOM side-effect)', () => {
+    const svE = currentUserEmail; currentUserEmail = 'me@x.y';
+    const popup = document.getElementById('saveSuccessPopup');
+    const wasShown = popup && popup.classList.contains('show');
     onCampaignSignal({ id: 'cam1', modifiedBy: 'me@x.y', ts: Date.now(), displayName: 'Me' });
-    const ignored = (_pendingUpdateSignal === null || _pendingUpdateSignal === svBanner);
-    currentUserEmail = svE; _pendingUpdateSignal = svBanner;
-    ok(ignored);
+    const stillSame = popup ? (popup.classList.contains('show') === wasShown) : true;
+    currentUserEmail = svE;
+    ok(stillSame);
   });
   t('save retry queue helpers defined', () => ok(typeof scheduleSaveRetry === 'function' && typeof cancelSaveRetry === 'function' && Array.isArray(SAVE_RETRY_DELAYS) && SAVE_RETRY_DELAYS.length >= 3));
   // Per-campaign dirty tracking (Fix A) — concurrent-edit safety.
