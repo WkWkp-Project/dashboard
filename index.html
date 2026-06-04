@@ -258,6 +258,18 @@
   .update-banner-btn { background: #4A7BD8; border: 1px solid #4A7BD8; color: white; padding: 6px 14px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .update-banner-btn:hover { background: #3B66BA; }
   .update-banner-x { background: transparent; border: none; color: #2F4F8A; font-size: 14px; cursor: pointer; padding: 4px 8px; }
+  /* Save-failure recovery banner — global, sits just under the sticky topbar. */
+  .save-failure-banner { position: sticky; top: 64px; z-index: 9; background: linear-gradient(135deg, #FFE8E8 0%, #FAD7D7 100%); border-bottom: 1px solid #D84A4A; padding: 10px 18px; display: flex; align-items: center; gap: 12px; }
+  .save-failure-banner.hidden { display: none; }
+  .save-failure-icon { font-size: 20px; flex-shrink: 0; }
+  .save-failure-info { flex: 1; min-width: 0; }
+  .save-failure-info strong { font-family: 'Fraunces', serif; font-size: 14px; color: #6E1F1F; display: block; }
+  .save-failure-info span { font-size: 11px; color: #8A2F2F; font-family: 'Geist Mono', monospace; }
+  .save-failure-info b { color: #2D7A3E; }
+  .save-failure-btn { background: white; border: 1px solid #D84A4A; color: #6E1F1F; padding: 6px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: 600; }
+  .save-failure-btn.primary { background: #D84A4A; color: white; }
+  .save-failure-btn:hover { filter: brightness(0.95); }
+  .save-failure-x { background: transparent; border: none; color: #8A2F2F; font-size: 14px; cursor: pointer; padding: 4px 8px; }
 
   .section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .section-num { font-family: 'Fraunces', serif; font-style: italic; font-size: 32px; font-weight: 300; color: var(--accent); line-height: 1; }
@@ -716,6 +728,21 @@
           <span id="tb-name">Wakuwaku</span>
         </div>
       </div>
+    </div>
+
+    <!-- Save-failure recovery banner — global, shown across all views when
+         Drive save has failed enough to warrant user attention. Three layered
+         recovery options match the three layers of the resilience strategy. -->
+    <div class="save-failure-banner hidden" id="saveFailureBanner">
+      <div class="save-failure-icon">⚠️</div>
+      <div class="save-failure-info">
+        <strong>บันทึก Drive ไม่สำเร็จ</strong>
+        <span>ข้อมูลของคุณ <b>ปลอดภัย</b> ในเครื่อง · เลือกวิธีกู้คืน:</span>
+      </div>
+      <button class="save-failure-btn primary" onclick="onRecoverFromLocal()" title="กู้ข้อมูลล่าสุดจาก browser ทันที (เร็วสุด)">↩ กู้คืนล่าสุด</button>
+      <button class="save-failure-btn" onclick="onRecoveryDownload()" title="ดาวน์โหลดไฟล์ backup เก็บไว้">🛟 Download</button>
+      <button class="save-failure-btn" onclick="onRecoveryRetry()" title="ลองเซฟ Drive อีกครั้ง">↻ ลองใหม่</button>
+      <button class="save-failure-x" onclick="dismissSaveFailureBanner()" title="ปิด">✕</button>
     </div>
 
     <!-- ============ OVERVIEW VIEW ============ -->
@@ -1584,7 +1611,15 @@ let _readyToSave = false;
 // only re-fetch when it actually changed.
 let remoteModifiedTime = null;
 let remotePollTimer = null;
-const REMOTE_POLL_MS = 45000;
+const REMOTE_POLL_MS = 30000;
+// Heartbeat from the Firestore signal channel (Phase 2). pollRemoteChanges
+// skips when this is fresh, so the Drive metadata HEAD is only spent when
+// the realtime channel is actually silent (Firestore outage, network blip).
+let _lastSignalRecvTs = 0;
+// Emergency backup latch — auto-download fires once per failed-save cycle
+// when the retry queue is exhausted; reset on next user edit or save success
+// so a freshly typed change can trigger a fresh emergency download if needed.
+let _emergencyBackupDone = false;
 // Presence: list of teammates currently active on the same shared DB. Each
 // entry is {key, name, role, avatar, loginAt, lastSeen, app}. Pruned past
 // PRESENCE_TIMEOUT_MS so closing the tab quietly drops you off the list.
@@ -1645,8 +1680,44 @@ async function acceptUpdateBanner() {
     await syncDatabaseFromDrive({ silent: false });
   } catch(e) { console.warn('refresh from update banner failed:', e); }
 }
+// ============================================================================
+// SAVE-FAILURE RECOVERY BANNER — surfaced when Drive save has been failing
+// long enough that the user needs visibility + an escape hatch. The three
+// buttons map to the three layers of the resilience strategy:
+//   1. ↩ กู้คืนล่าสุด  → restoreFromLocalBackup() (instant, in-browser)
+//   2. 🛟 Download    → downloadManualBackup() (file backup for cross-device)
+//   3. ↻ ลองใหม่      → cancel retry + saveToDrive() now
+// Drive is still the source of truth — none of these mutate Drive directly.
+// ============================================================================
+function showSaveFailureBanner() {
+  const b = document.getElementById('saveFailureBanner');
+  if (b) b.classList.remove('hidden');
+}
+function dismissSaveFailureBanner() {
+  const b = document.getElementById('saveFailureBanner');
+  if (b) b.classList.add('hidden');
+}
+function onRecoverFromLocal() {
+  dismissSaveFailureBanner();
+  if (typeof restoreFromLocalBackup === 'function') restoreFromLocalBackup();
+  else showToast('ฟังก์ชัน restore ไม่พร้อม', 'err');
+}
+function onRecoveryDownload() {
+  if (typeof downloadManualBackup === 'function') downloadManualBackup();
+}
+function onRecoveryRetry() {
+  dismissSaveFailureBanner();
+  if (typeof cancelSaveRetry === 'function') cancelSaveRetry();
+  setSaveStatus('saving', 'Retrying save...');
+  if (typeof saveToDrive === 'function') saveToDrive().catch(e => console.warn('manual retry failed:', e));
+}
+
 function onCampaignSignal(sig) {
   if (!sig || !sig.id) return;
+  // Heartbeat for the Smart-poll guard: any signal we receive means the
+  // Firestore channel is alive, so pollRemoteChanges can skip its Drive
+  // metadata round-trip while signals keep flowing.
+  _lastSignalRecvTs = Date.now();
   // Ignore our own echo (we wrote this just now).
   if (sig.modifiedBy && currentUserEmail && sig.modifiedBy === currentUserEmail) return;
   if (window.Control && window.Control.isOwnSignal(sig.id, sig.ts)) return;
@@ -2386,8 +2457,10 @@ function scheduleSave() {
   pendingChanges = true;
   try { persistLocalBackup(); } catch(e) {} // durable local copy on every change
   // Fresh user edit invalidates any in-flight retry plan — we'll restart from
-  // attempt 0 if this save also fails.
+  // attempt 0 if this save also fails. Also re-arm the emergency-backup latch
+  // so a NEW round of failures will trigger a new emergency download.
   cancelSaveRetry();
+  _emergencyBackupDone = false;
   if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return; }
   if (!accessToken) { setSaveStatus('offline', 'Drive token required'); return; }
   // Block uploads until the first sync finished. Without this, a logAction
@@ -2846,6 +2919,18 @@ function scheduleSaveRetry() {
   if (!pendingChanges || !isAdmin || isOfflineMode) return;
   if (_saveRetryAttempt >= SAVE_RETRY_DELAYS.length) {
     setSaveStatus('error', `Save failed ${_consecutiveSaveFailures}x · click to retry`);
+    // Last-resort safety net: auto-download a JSON snapshot to disk so the
+    // user has a tangible recovery file even if localStorage is cleared
+    // (incognito, different device, manual cache clear). One shot per cycle —
+    // re-armed by the next scheduleSave() or a successful save.
+    if (!_emergencyBackupDone) {
+      _emergencyBackupDone = true;
+      try {
+        downloadManualBackup();
+        showToast('🛟 ดาวน์โหลด backup ฉุกเฉินอัตโนมัติแล้ว · ข้อมูลปลอดภัย', 'warn');
+      } catch(e) { console.warn('emergency backup failed:', e); }
+    }
+    showSaveFailureBanner();
     return;
   }
   const delay = SAVE_RETRY_DELAYS[_saveRetryAttempt];
@@ -2907,7 +2992,9 @@ async function saveToDrive() {
     pendingChanges = false;
     _consecutiveSaveFailures = 0;
     _lastSaveError = null;
+    _emergencyBackupDone = false;
     cancelSaveRetry();
+    dismissSaveFailureBanner();
     setSaveStatus('saved', 'Drive JSON saved');
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -2924,7 +3011,7 @@ async function saveToDrive() {
       offerManualBackup(e); // dialog has the enable-API link
     } else {
       setSaveStatus('error', `Save failed (${_consecutiveSaveFailures}x) · click for backup`);
-      if (_consecutiveSaveFailures >= 2) offerManualBackup(e);
+      if (_consecutiveSaveFailures >= 2) { offerManualBackup(e); showSaveFailureBanner(); }
     }
     // Try again automatically with exponential backoff so a transient network
     // blip doesn't leave the user's edits dangling. localStorage backup above
@@ -3777,6 +3864,11 @@ async function connectToTeamDB() {
 async function pollRemoteChanges() {
   if (!accessToken || isOfflineMode || !databaseFileId) return;
   if (isSaving || saveTimer) return; // a local save is in flight / pending
+  // Smart-poll: if the Firestore signal channel produced a heartbeat within
+  // the last poll window, the realtime path is healthy and the Drive HEAD
+  // is redundant. Saves quota in the common (signal-up) case while keeping
+  // the 30s fallback alive whenever the channel goes silent.
+  if (_lastSignalRecvTs && Date.now() - _lastSignalRecvTs < REMOTE_POLL_MS) return;
   try {
     const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=modifiedTime`);
     if (!r.ok) return;
@@ -7478,6 +7570,42 @@ window.__runTests = async function() {
     ok(ignored);
   });
   t('save retry queue helpers defined', () => ok(typeof scheduleSaveRetry === 'function' && typeof cancelSaveRetry === 'function' && Array.isArray(SAVE_RETRY_DELAYS) && SAVE_RETRY_DELAYS.length >= 3));
+  t('REMOTE_POLL_MS is 30s', () => ok(REMOTE_POLL_MS === 30000));
+  t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
+    const src = pollRemoteChanges.toString();
+    ok(/_lastSignalRecvTs/.test(src) && /REMOTE_POLL_MS/.test(src));
+  });
+  t('onCampaignSignal stamps _lastSignalRecvTs before bailing out', () => {
+    const sv = _lastSignalRecvTs; _lastSignalRecvTs = 0;
+    const svE = currentUserEmail; currentUserEmail = 'me@x.y';
+    // Own-signal echo bails out, but the heartbeat stamp must happen first.
+    onCampaignSignal({ id: 'whatever', modifiedBy: 'me@x.y', ts: 1 });
+    const stamped = _lastSignalRecvTs > 0;
+    _lastSignalRecvTs = sv; currentUserEmail = svE;
+    ok(stamped);
+  });
+  t('emergency backup triggers on retry exhaustion (source guard)', () => {
+    const src = scheduleSaveRetry.toString();
+    ok(/_emergencyBackupDone/.test(src) && /downloadManualBackup/.test(src) && /showSaveFailureBanner/.test(src));
+  });
+  t('save-failure banner DOM + helpers exist', () => {
+    ok(document.getElementById('saveFailureBanner') &&
+       typeof showSaveFailureBanner === 'function' &&
+       typeof dismissSaveFailureBanner === 'function' &&
+       typeof onRecoverFromLocal === 'function' &&
+       typeof onRecoveryDownload === 'function' &&
+       typeof onRecoveryRetry === 'function');
+  });
+  t('showSaveFailureBanner flips hidden class', () => {
+    const b = document.getElementById('saveFailureBanner');
+    const wasHidden = b.classList.contains('hidden');
+    showSaveFailureBanner();
+    const shown = !b.classList.contains('hidden');
+    dismissSaveFailureBanner();
+    const reHidden = b.classList.contains('hidden');
+    if (!wasHidden) b.classList.remove('hidden'); // restore prior state
+    ok(shown && reHidden);
+  });
   t('members drawer DOM + helpers exist', () => ok(document.getElementById('members-drawer') && document.getElementById('members-drawer-label') && typeof toggleMembersDrawer === 'function' && typeof initMembersDrawer === 'function'));
   t('members drawer toggle flips collapsed class', () => {
     const label = document.getElementById('members-drawer-label');
