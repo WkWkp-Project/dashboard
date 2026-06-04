@@ -1601,7 +1601,7 @@ let _readyToSave = false;
 // only re-fetch when it actually changed.
 let remoteModifiedTime = null;
 let remotePollTimer = null;
-const REMOTE_POLL_MS = 30000;
+const REMOTE_POLL_MS = 180000;
 // Heartbeat from the Firestore signal channel (Phase 2). pollRemoteChanges
 // skips when this is fresh, so the Drive metadata HEAD is only spent when
 // the realtime channel is actually silent (Firestore outage, network blip).
@@ -7655,7 +7655,7 @@ window.__runTests = async function() {
     // The fallback chain: dirty.length ? dirty : targets — never under-saves.
     ok(/dirty\.length\s*\?\s*dirty\s*:\s*targets/.test(src));
   });
-  t('REMOTE_POLL_MS is 30s', () => ok(REMOTE_POLL_MS === 30000));
+  t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
     const src = pollRemoteChanges.toString();
     ok(/_lastSignalRecvTs/.test(src) && /REMOTE_POLL_MS/.test(src));
