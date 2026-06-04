@@ -2013,13 +2013,23 @@ async function loadCampaignsFromIndex(alreadyLoadedFileIds) {
     const fid = entry.driveDbFileId;
     if (!fid || alreadyLoadedFileIds.has(fid)) continue;
     try {
+      // Check metadata BEFORE fetching content. Drive's alt=media endpoint
+      // returns content for trashed files too — only the search API filters
+      // them out. Without this, a stale Firestore index entry can resurrect
+      // a campaign that another admin just deleted (file is trashed but
+      // still loadable by id until Drive purges it in 30 days).
+      const mr = await authFetch(`https://www.googleapis.com/drive/v3/files/${fid}?fields=id,trashed,modifiedTime`);
+      if (!mr.ok) continue; // no access → skip silently
+      const meta = await mr.json();
+      if (meta.trashed) continue; // deleted by someone else — don't resurrect
       const cr = await authFetch(`https://www.googleapis.com/drive/v3/files/${fid}?alt=media`);
-      if (!cr.ok) continue; // no access / trashed → skip silently
+      if (!cr.ok) continue;
       const data = await cr.json();
       const raw = data.campaign || (Array.isArray(data.campaigns) && data.campaigns[0]);
       if (!raw) continue;
       const camp = normalizeCampaign(raw);
       camp.driveDbFileId = fid;
+      if (meta.modifiedTime) camp.driveDbModifiedTime = meta.modifiedTime;
       if (!camp.driveFolderId && entry.driveFolderId) {
         camp.driveFolderId = entry.driveFolderId;
         camp.driveFolderUrl = entry.driveFolderUrl || `https://drive.google.com/drive/folders/${entry.driveFolderId}`;
@@ -5118,17 +5128,26 @@ function confirmDeleteCampaign() {
   const removedId = c.id;
   const removedCampSnap = c; // keep a reference for the async cleanup below
   showConfirm('Delete campaign?', `"${c.campaign}" และ ${c.assets.length} assets จะถูกย้ายลง Drive Trash (กู้คืนได้ภายใน 30 วัน)`, async () => {
-    // 1) Trash the campaign JSON in Drive FIRST. Without this the next sync
-    //    finds the file again and "undeletes" the campaign for everyone.
-    //    Media subfolders are intentionally left untouched — customer may
-    //    want to keep the rendered assets.
-    try {
-      if (removedCampSnap.driveDbFileId && accessToken) {
-        await trashCampaignJsonInDrive(removedCampSnap);
+    // 1) Trash the campaign JSON in Drive FIRST. Drive is the source of
+    //    truth — if we can't trash there, we MUST NOT clear local state or
+    //    broadcast a delete signal, otherwise other admins would briefly see
+    //    the campaign vanish only to zombie back on the next sync (since
+    //    Drive search would still find the un-trashed JSON). Abort cleanly
+    //    so the user can retry once the underlying problem is fixed.
+    //    Exception: a brand-new campaign that was never saved to Drive has
+    //    no driveDbFileId — there is no zombie risk, so just drop it locally.
+    if (removedCampSnap.driveDbFileId) {
+      if (!accessToken) {
+        showToast('❌ ลบไม่ได้: ต้อง login Google Drive ก่อน (Drive เป็น source of truth)', 'err');
+        return;
       }
-    } catch(e) {
-      console.warn('trash campaign JSON failed:', e);
-      showToast('⚠️ ลบไฟล์ใน Drive ไม่สำเร็จ — แคมเปญอาจกลับมาเมื่อ sync ครั้งหน้า', 'err');
+      try {
+        await trashCampaignJsonInDrive(removedCampSnap);
+      } catch(e) {
+        console.warn('trash campaign JSON failed:', e);
+        showToast(`❌ ลบไม่สำเร็จ: ${e.message || 'Drive error'} · ลองใหม่อีกครั้ง`, 'err');
+        return; // abort — keep everything intact so retry is clean
+      }
     }
     // 2) Update local state.
     campaigns = campaigns.filter(x => x.id !== removedId);
@@ -7402,6 +7421,23 @@ window.__runTests = async function() {
   });
   t('Control signal API present', () => ok(typeof window.Control.pingCampaignChanged === 'function' && typeof window.Control.subscribeSignals === 'function' && typeof window.Control.isOwnSignal === 'function' && typeof window.Control.pingCampaignDeleted === 'function'));
   t('trashCampaignJsonInDrive defined', () => ok(typeof trashCampaignJsonInDrive === 'function'));
+  t('confirmDeleteCampaign aborts when trash fails (source guard)', () => {
+    const src = confirmDeleteCampaign.toString();
+    // Must abort with a return inside the catch when driveDbFileId is set,
+    // not fall through to local/index/signal removal.
+    ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
+  });
+  t('loadCampaignsFromIndex checks trashed before content fetch (source guard)', () => {
+    const src = loadCampaignsFromIndex.toString();
+    // The metadata check must happen before the alt=media fetch and must
+    // skip when trashed is true. Without this a stale index entry can
+    // resurrect a deleted campaign.
+    ok(/fields=[^"`']*trashed/.test(src) && /meta\.trashed/.test(src));
+    // alt=media must come AFTER the trashed check.
+    const idxTrashed = src.indexOf('meta.trashed');
+    const idxMedia = src.indexOf('alt=media');
+    ok(idxTrashed > 0 && idxMedia > idxTrashed);
+  });
   t('onCampaignSignal removes campaign on deleted signal', () => {
     const svC = campaigns.slice(); const svId = currentCampaignId; const svE = currentUserEmail;
     currentUserEmail = 'me@x.y';
