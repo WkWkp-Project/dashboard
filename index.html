@@ -286,6 +286,12 @@
   .thumb-upload-btn { position: absolute; bottom: 6px; right: 6px; background: rgba(14,17,22,0.78); color: #fff; border: none; border-radius: 4px; font-size: 10px; padding: 4px 8px; cursor: pointer; font-family: 'Geist Mono', monospace; opacity: 0; transition: opacity .15s; }
   .input-card:hover .thumb-upload-btn { opacity: 1; }
   .thumb-upload-btn:hover { background: var(--ink); }
+  /* Delete-thumb button — symmetrical to upload button, sits on the other corner */
+  .thumb-delete-btn { position: absolute; bottom: 6px; left: 6px; background: rgba(180,40,40,0.85); color: #fff; border: none; border-radius: 4px; font-size: 12px; padding: 4px 8px; cursor: pointer; line-height: 1; opacity: 0; transition: opacity .15s; }
+  .input-card:hover .thumb-delete-btn { opacity: 1; }
+  .thumb-delete-btn:hover { background: #B42828; }
+  /* Size hint shown inside the empty placeholder (no thumb yet) */
+  .thumb-size-hint { font-size: 9px; color: var(--muted-2); font-family: 'Geist Mono', monospace; letter-spacing: 0.3px; }
   .input-card-actions { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
   .input-card-actions button { padding: 10px; border: none; background: var(--paper); font-family: 'Geist', sans-serif; font-size: 12px; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); transition: background 0.15s; }
   .input-card-actions button:last-child { border-right: none; }
@@ -6932,6 +6938,12 @@ function restoreLinkedDriveCards() {
 // Section A: render the thumbnail box for input card i. Thumbnails are stored
 // on Drive (driveLinks[i].thumbFileId) — NOT as base64 in the campaign JSON,
 // which would trip the embedded-media guard and block every save.
+const THUMB_RECOMMENDED_W = 1200;
+const THUMB_RECOMMENDED_H = 900;          // 4:3 ratio matches the .input-preview frame
+const THUMB_MAX_SIZE_BYTES = 5 * 1024 * 1024;  // 5MB cap — enough for high-res JPEG, blocks accidental RAW dumps
+function _thumbHintText() {
+  return `📐 ${THUMB_RECOMMENDED_W}×${THUMB_RECOMMENDED_H}px · 4:3 · ≤ ${(THUMB_MAX_SIZE_BYTES / 1024 / 1024)}MB`;
+}
 function renderInputPreview(i) {
   const camp = getCurrentCampaign();
   const card = document.getElementById(`input-card-${i}`);
@@ -6944,15 +6956,22 @@ function renderInputPreview(i) {
     ? `<button class="thumb-upload-btn" onclick="event.stopPropagation(); document.getElementById('thumbFile${i}').click()">${link.thumbFileId ? '🔄 เปลี่ยน' : '📷 อัปโหลดรูป'}</button>` +
       `<input type="file" id="thumbFile${i}" accept="image/*" style="display:none" onchange="uploadInputThumb(${i}, this)" />`
     : '';
+  // Delete-thumb button only appears when there IS a thumb to delete, and the
+  // user has edit rights. Drive file gets trashed (recoverable) — Section A
+  // never embeds base64, so removing from the JSON is the only must-do.
+  const deleteBtn = (canEdit && link.thumbFileId)
+    ? `<button class="thumb-delete-btn" onclick="event.stopPropagation(); removeInputThumb(${i})" title="ลบรูปนี้">🗑</button>`
+    : '';
+  const hint = `<div class="thumb-size-hint">${_thumbHintText()}</div>`;
   if (link.thumbFileId) {
     prev.style.cssText = 'aspect-ratio:4/3; position:relative; overflow:hidden; background:var(--paper-2);';
-    prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${uploadBtn}`;
+    prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${deleteBtn}${uploadBtn}`;
     getFileDataUrl({ driveFileId: link.thumbFileId }).then(url => {
       const img = prev.querySelector(`img[data-thumb="${i}"]`); if (img) img.src = url;
     }).catch(e => console.warn('thumb load failed', i, e));
   } else {
     prev.style.cssText = 'aspect-ratio:4/3; position:relative; display:grid; place-items:center; background:var(--paper-2);';
-    prev.innerHTML = `<div style="text-align:center; font-size:11px; color:var(--muted-2); padding:12px; font-family:'Fraunces',serif;">${escapeHtml(link.name || ('0'+(i+1)))}</div>${uploadBtn}`;
+    prev.innerHTML = `<div style="text-align:center; padding:12px;"><div style="font-size:11px; color:var(--muted-2); font-family:'Fraunces',serif; margin-bottom:6px;">${escapeHtml(link.name || ('0'+(i+1)))}</div><div style="font-size:9px; color:var(--muted-2); font-family:'Geist Mono',monospace; letter-spacing:0.3px;">${_thumbHintText()}</div></div>${uploadBtn}`;
   }
 }
 
@@ -6960,6 +6979,13 @@ async function uploadInputThumb(i, inputEl) {
   if (blockIfClient('อัปโหลดรูป Section A เฉพาะทีม')) { inputEl.value=''; return; }
   const file = inputEl.files && inputEl.files[0];
   if (!file) return;
+  // Enforce the constraint we advertise in the hint so users aren't surprised
+  // by a Drive-side rejection deep in the upload pipeline.
+  if (file.size > THUMB_MAX_SIZE_BYTES) {
+    showToast(`❌ ไฟล์ใหญ่เกิน ${(THUMB_MAX_SIZE_BYTES/1024/1024)}MB (${(file.size/1024/1024).toFixed(1)}MB) — ย่อก่อนอัป`, 'err');
+    inputEl.value = '';
+    return;
+  }
   if (!accessToken) { showToast('ต้อง login Google Drive ก่อน', 'err'); inputEl.value=''; return; }
   const camp = getCurrentCampaign();
   if (!camp || !camp.driveFolderId) { showToast('แคมเปญนี้ยังไม่มี Drive folder', 'err'); inputEl.value=''; return; }
@@ -6983,6 +7009,38 @@ async function uploadInputThumb(i, inputEl) {
     console.error('thumb upload failed:', e);
     showToast('❌ อัปโหลดไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
   } finally { inputEl.value = ''; }
+}
+
+// Remove a Section A thumbnail. The Drive file is trashed (recoverable in
+// Drive Trash for 30 days, same policy as campaign delete), and the JSON
+// loses the thumbFileId pointer so the empty placeholder + size hint
+// reappear immediately.
+function removeInputThumb(i) {
+  if (blockIfClient('ลบรูป Section A เฉพาะทีม')) return;
+  const camp = getCurrentCampaign();
+  if (!camp) return;
+  const link = camp.driveLinks && camp.driveLinks[i];
+  if (!link || !link.thumbFileId) return;
+  showConfirm('ลบรูปนี้?', 'ไฟล์จะถูกย้ายลง Drive Trash (กู้คืนได้ภายใน 30 วัน)', async () => {
+    const fileId = link.thumbFileId;
+    link.thumbFileId = null;
+    renderInputPreview(i);
+    // Trash the underlying Drive file — best effort, non-fatal if it fails.
+    // The campaign JSON pointer is already gone so the orphan in Drive is
+    // harmless even if this throws.
+    if (fileId && accessToken) {
+      try {
+        const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: true })
+        });
+        if (!r.ok) throw await driveError(r);
+      } catch(e) { console.warn('trash thumb failed (non-fatal):', e); }
+    }
+    try { await saveCampaignJsonToDrive(camp); showToast('✓ ลบรูปแล้ว', 'ok'); }
+    catch(saveErr) { console.warn('thumb-remove save failed, scheduling retry:', saveErr); pendingChanges = true; scheduleSave(); showToast('✓ ลบรูปแล้ว (กำลังเซฟ)', 'ok'); }
+  });
 }
 
 function openConnectModal() {
@@ -7686,6 +7744,17 @@ window.__runTests = async function() {
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
   t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
   t('Section A thumbnail helpers defined', () => ok(typeof renderInputPreview === 'function' && typeof uploadInputThumb === 'function'));
+  t('Section A removeInputThumb defined', () => ok(typeof removeInputThumb === 'function'));
+  t('Section A thumb size constants present + enforced', () => {
+    ok(THUMB_RECOMMENDED_W === 1200 && THUMB_RECOMMENDED_H === 900 && THUMB_MAX_SIZE_BYTES === 5*1024*1024);
+    const src = uploadInputThumb.toString();
+    ok(/THUMB_MAX_SIZE_BYTES/.test(src) && /file\.size\s*>/.test(src));
+  });
+  t('renderInputPreview shows size hint + delete button conditionally (source guard)', () => {
+    const src = renderInputPreview.toString();
+    // Hint must be in the empty-state branch; delete button only when link.thumbFileId is set.
+    ok(/_thumbHintText/.test(src) && /removeInputThumb/.test(src) && /link\.thumbFileId/.test(src));
+  });
   t('applyRoleRestrictions hides audit log for customer, shows for admin', () => {
     const svR = userRole, svC = userRoleControl;
     userRoleControl = 'customer'; userRole = 'operator'; applyRoleRestrictions();
