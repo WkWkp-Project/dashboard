@@ -181,6 +181,11 @@
   .main { overflow-x: hidden; }
   .topbar { height: 64px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 32px; gap: 24px; background: rgba(250,250,247,0.85); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  /* Data-source badge — shows whether the in-memory state came from Drive
+     (canonical) or from a localStorage restore that still needs to sync. */
+  .data-source-badge { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 12px; border: 1px solid transparent; cursor: default; }
+  .data-source-badge.drive { background: rgba(45, 122, 62, 0.10); color: #2D7A3E; border-color: rgba(45, 122, 62, 0.30); }
+  .data-source-badge.local { background: rgba(184, 110, 30, 0.12); color: #8A5212; border-color: rgba(184, 110, 30, 0.40); }
 
   .save-indicator { display: flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 14px; font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.5px; transition: all 0.3s; border: 1px solid transparent; cursor:pointer;}
   .save-indicator.idle { background: var(--paper-2); color: var(--muted); border-color: var(--line); }
@@ -712,6 +717,10 @@
   <main class="main">
     <div class="topbar">
       <div class="topbar-actions">
+        <!-- Data-source badge: tells the user whether the in-memory state
+             came from Drive (canonical) or from a localStorage restore
+             that hasn't been pushed back yet. -->
+        <div class="data-source-badge drive" id="dataSourceBadge" title="ข้อมูลปัจจุบันมาจาก Drive">📡 Drive</div>
         <div class="save-indicator idle" id="saveIndicator" onclick="handleSaveIndicatorClick()">
           <div class="save-dot"></div>
           <span id="saveStatusText">All changes saved</span>
@@ -2189,11 +2198,33 @@ let pendingForceSaveAfterLogin = false;
 
 // Durable local-disk backup of the database (so data isn't lost when Drive
 // is unavailable and the user logs out). Strips media if it doesn't fit.
+// Source badge — flips between "📡 Drive" and "📱 Local ยังไม่ sync" so the
+// user always knows whether what's on screen is the canonical Drive state or
+// a localStorage restore that still needs to be pushed back to Drive.
+let _dataSource = 'drive'; // 'drive' | 'local'
+function setDataSource(src) {
+  _dataSource = (src === 'local') ? 'local' : 'drive';
+  const el = document.getElementById('dataSourceBadge');
+  if (!el) return;
+  el.classList.remove('drive', 'local');
+  el.classList.add(_dataSource);
+  if (_dataSource === 'local') {
+    el.textContent = '📱 Local · ยังไม่ sync';
+    el.title = 'ใช้ข้อมูลจาก browser ของคุณเอง — Drive ยังไม่ได้รับ · กด save เพื่อ push กลับ';
+  } else {
+    el.textContent = '📡 Drive';
+    el.title = 'ข้อมูลปัจจุบันมาจาก Drive';
+  }
+}
+
 function persistLocalBackup() {
   try {
     if (userRole === 'client') return; // clients view a bundle; nothing to back up
     const payload = buildDatabasePayload();
-    const meta = { ts: Date.now(), by: currentUserName(), databaseFileId };
+    // email is the user-identity guard: maybeOfferLocalRestore refuses to
+    // offer backup A made to user B if they share a browser. Display name
+    // alone (by) is too fragile — two admins can have the same name.
+    const meta = { ts: Date.now(), by: currentUserName(), email: currentUserEmail || '', databaseFileId };
     try {
       localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({ ...meta, db: payload }));
     } catch(e) {
@@ -2216,6 +2247,13 @@ function maybeOfferLocalRestore() {
   if (userRole === 'client' || isOfflineMode) return;
   const bk = readLocalBackup();
   if (!bk || !bk.db || !Array.isArray(bk.db.campaigns)) return;
+  // Identity guard: localStorage is shared across browser sessions on the
+  // same machine. Refuse to offer user A's backup to user B logging in
+  // afterwards — that would clobber B's session with A's work.
+  // Backups written before this field existed have no `email` and are
+  // skipped conservatively (better to lose a stale backup than to silently
+  // hand someone else's data to the wrong account).
+  if (!bk.email || !currentUserEmail || bk.email !== currentUserEmail) return;
   // Two reasons to offer restore:
   //   1. Drive currently looks empty       → first-run / DB lost
   //   2. localStorage backup is NEWER than Drive's latest save → the user
@@ -2249,6 +2287,7 @@ function restoreFromLocalBackup() {
   if (db.hub) hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
   if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
   renderEverything();
+  setDataSource('local'); // flip the topbar badge so the user knows we're not on canonical Drive state
   logAction('RESTORE', `Restored from local backup (${new Date(bk.ts).toLocaleString()})`);
   showToast('✓ กู้คืนจาก backup ในเครื่องแล้ว · กด Backup to Cloud เพื่อ sync', 'ok');
   pendingChanges = true;
@@ -3010,6 +3049,7 @@ async function saveToDrive() {
     cancelSaveRetry();
     dismissSaveFailureBanner();
     setSaveStatus('saved', 'Drive JSON saved');
+    setDataSource('drive'); // a successful upload re-syncs us with the canonical Drive state
     showSaveSuccessPopup();
     const metaSaved = document.getElementById('meta-saved');
     if (metaSaved) metaSaved.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -3712,6 +3752,7 @@ async function syncDatabaseFromDrive(opts) {
       renderPresenceSidebar();
       updateDbIdFooter();
       setSaveStatus('saved', silent ? 'Synced from Drive' : 'Loaded campaign JSON from Drive');
+      setDataSource('drive'); // fresh from canonical Drive — undo any prior 'local' state
       if (lastSaveTime) { const m = document.getElementById('meta-saved'); if (m) m.textContent = lastSaveTime.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }); }
       if (!silent) showToast(`Loaded ${campaigns.length} campaign · ${members.length} member(s) from Drive`);
     } else if (!accessToken) {
@@ -7693,6 +7734,33 @@ window.__runTests = async function() {
     // localStorage-session-with-token fallback. Both used to silently skip it.
     const matches = src.match(/maybeOfferLocalRestore\(\)/g) || [];
     ok(matches.length >= 2);
+  });
+  // Identity guard: user A's localStorage backup must not be offered to user B.
+  t('persistLocalBackup writes email into the backup meta (source guard)', () => {
+    const src = persistLocalBackup.toString();
+    ok(/email:\s*currentUserEmail/.test(src));
+  });
+  t('maybeOfferLocalRestore skips when bk.email != currentUserEmail (source guard)', () => {
+    const src = maybeOfferLocalRestore.toString();
+    ok(/bk\.email/.test(src) && /currentUserEmail/.test(src));
+  });
+  // Source badge (📡 Drive / 📱 Local) — flips when state origin changes.
+  t('dataSourceBadge DOM + setDataSource helper exist', () => {
+    ok(document.getElementById('dataSourceBadge') && typeof setDataSource === 'function');
+  });
+  t('setDataSource toggles classes and label', () => {
+    const el = document.getElementById('dataSourceBadge');
+    const wasClass = el.className; const wasText = el.textContent;
+    setDataSource('local');
+    const local = el.classList.contains('local') && /Local/i.test(el.textContent);
+    setDataSource('drive');
+    const drive = el.classList.contains('drive') && /Drive/i.test(el.textContent);
+    el.className = wasClass; el.textContent = wasText;
+    ok(local && drive);
+  });
+  t('restoreFromLocalBackup flips badge to local (source guard)', () => {
+    const src = restoreFromLocalBackup.toString();
+    ok(/setDataSource\(['"]local['"]\)/.test(src));
   });
   t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
