@@ -2044,6 +2044,11 @@ function onControlMembersChanged(controlMembers) {
 // campaign). After initial load, re-sync silently to pull the new campaign(s).
 function onControlCampaignsChanged() {
   if (!_controlLiveRender || isSaving || isOfflineMode || !accessToken) return;
+  // Pending-edit safety is enforced inside syncDatabaseFromDrive (silent path):
+  // if _hasLocalEditInFlight() returns true, the sync becomes a no-op and the
+  // queued saveToDrive() does the reconciliation. Adding a new Firestore
+  // listener anywhere else in the codebase that triggers a silent sync
+  // automatically inherits this protection.
   syncDatabaseFromDrive({ silent: true }).catch(e => console.warn('campaign-index resync failed:', e));
 }
 
@@ -3707,8 +3712,28 @@ async function driveError(resp) {
 // Back-compat shim
 async function readDriveError(resp) { return (await driveError(resp)).message; }
 
+// Single source of truth for "the local user has unsaved work in flight" —
+// any silent sync path must check this before replacing campaigns[] so a
+// background event (Firestore listener, focus event, interval poll) can't
+// clobber what the user is typing or what's queued in the 2.5s debounce.
+// Adding new admins / new listeners in the future automatically inherits
+// the guard via syncDatabaseFromDrive's silent path.
+function _hasLocalEditInFlight() {
+  return !!(pendingChanges || saveTimer || isSaving);
+}
+
 async function syncDatabaseFromDrive(opts) {
   const silent = !!(opts && opts.silent);
+  // CRITICAL guard: silent syncs replace the in-memory campaigns array. If
+  // the local user has typed something we haven't uploaded yet, that replace
+  // wipes the edit — exactly the "อัปแล้วหาย" report. Loud (non-silent) calls
+  // are user-initiated (login, manual refresh) and explicitly accept that
+  // their action will load Drive over local state.
+  if (silent && _hasLocalEditInFlight()) {
+    // saveToDrive() flush is already scheduled — it will reconcile state
+    // against Drive shortly. No need to clobber-and-hope here.
+    return;
+  }
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
   if (!silent) setSaveStatus('saving', 'Loading Drive campaign JSON...');
   try {
@@ -7761,6 +7786,37 @@ window.__runTests = async function() {
   t('restoreFromLocalBackup flips badge to local (source guard)', () => {
     const src = restoreFromLocalBackup.toString();
     ok(/setDataSource\(['"]local['"]\)/.test(src));
+  });
+  // Silent-sync clobber guard — future-proofs any new Firestore listener that
+  // calls syncDatabaseFromDrive({silent:true}). Adding new admins or new
+  // listeners can't accidentally wipe a user's mid-edit campaigns array.
+  t('_hasLocalEditInFlight helper defined', () => ok(typeof _hasLocalEditInFlight === 'function'));
+  t('_hasLocalEditInFlight true when pendingChanges OR saveTimer OR isSaving', () => {
+    const svP = pendingChanges, svT = saveTimer, svS = isSaving;
+    pendingChanges = false; saveTimer = null; isSaving = false;
+    const idle = _hasLocalEditInFlight() === false;
+    pendingChanges = true;
+    const onPending = _hasLocalEditInFlight() === true;
+    pendingChanges = false; saveTimer = 123;
+    const onTimer = _hasLocalEditInFlight() === true;
+    saveTimer = null; isSaving = true;
+    const onSaving = _hasLocalEditInFlight() === true;
+    pendingChanges = svP; saveTimer = svT; isSaving = svS;
+    ok(idle && onPending && onTimer && onSaving);
+  });
+  t('syncDatabaseFromDrive silent path bails when local edit in flight (source guard)', () => {
+    const src = syncDatabaseFromDrive.toString();
+    ok(/silent\s*&&\s*_hasLocalEditInFlight\(\)/.test(src));
+  });
+  t('syncDatabaseFromDrive silent guard actually returns early — no clobber', async () => {
+    // Force the guard ON, capture the campaigns reference, run a silent sync,
+    // verify campaigns[] was NOT replaced.
+    const svP = pendingChanges; pendingChanges = true;
+    const ref = campaigns;
+    try { await syncDatabaseFromDrive({ silent: true }); } catch(e) {}
+    const unchanged = campaigns === ref;
+    pendingChanges = svP;
+    ok(unchanged);
   });
   t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
   t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
