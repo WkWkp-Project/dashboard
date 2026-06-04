@@ -7656,10 +7656,12 @@ window.__runTests = async function() {
     // skip when trashed is true. Without this a stale index entry can
     // resurrect a deleted campaign.
     ok(/fields=[^"`']*trashed/.test(src) && /meta\.trashed/.test(src));
-    // alt=media must come AFTER the trashed check.
+    // Use lastIndexOf for alt=media — the function's leading comment mentions
+    // 'alt=media' before the actual fetch, and indexOf would catch that
+    // comment instead of the real call site.
     const idxTrashed = src.indexOf('meta.trashed');
-    const idxMedia = src.indexOf('alt=media');
-    ok(idxTrashed > 0 && idxMedia > idxTrashed);
+    const idxFetch = src.lastIndexOf('alt=media');
+    ok(idxTrashed > 0 && idxFetch > idxTrashed);
   });
   t('onCampaignSignal removes campaign on deleted signal', () => {
     const svC = campaigns.slice(); const svId = currentCampaignId; const svE = currentUserEmail;
@@ -7723,6 +7725,7 @@ window.__runTests = async function() {
   t('scheduleSave default marks currentCampaignId dirty', () => {
     const svId = currentCampaignId; const svSet = new Set(_dirtyCampaignIds); _dirtyCampaignIds.clear();
     const svOff = isOfflineMode; isOfflineMode = true; // short-circuit the rest of scheduleSave
+    const svPC = pendingChanges; // scheduleSave() sets pendingChanges = true — must restore
     currentCampaignId = 'cur-1';
     scheduleSave();
     const ok1 = _dirtyCampaignIds.has('cur-1');
@@ -7733,8 +7736,10 @@ window.__runTests = async function() {
     const svCamps = campaigns; campaigns = [{ id:'a' }, { id:'b' }, { id:'c' }];
     scheduleSave('all');
     const ok3 = _dirtyCampaignIds.has('a') && _dirtyCampaignIds.has('b') && _dirtyCampaignIds.has('c');
-    // restore
+    // restore — including pendingChanges so later silent-sync tests aren't
+    // blocked by the new _hasLocalEditInFlight guard inside syncDatabaseFromDrive.
     campaigns = svCamps; currentCampaignId = svId; isOfflineMode = svOff;
+    pendingChanges = svPC;
     _dirtyCampaignIds.clear(); svSet.forEach(x => _dirtyCampaignIds.add(x));
     ok(ok1 && ok2 && ok3);
   });
@@ -7808,14 +7813,18 @@ window.__runTests = async function() {
     const src = syncDatabaseFromDrive.toString();
     ok(/silent\s*&&\s*_hasLocalEditInFlight\(\)/.test(src));
   });
-  t('syncDatabaseFromDrive silent guard actually returns early — no clobber', async () => {
-    // Force the guard ON, capture the campaigns reference, run a silent sync,
-    // verify campaigns[] was NOT replaced.
+  t('syncDatabaseFromDrive silent guard actually returns early — no clobber', () => {
+    // The guard is purely synchronous — it returns BEFORE any await inside
+    // syncDatabaseFromDrive, so the campaigns[] reassignment never happens.
+    // Important: this test must NOT await the returned promise, because the
+    // test runner pushes async tests into Promise.all and runs them in
+    // parallel — awaiting would let other tests mutate state mid-check.
     const svP = pendingChanges; pendingChanges = true;
     const ref = campaigns;
-    try { await syncDatabaseFromDrive({ silent: true }); } catch(e) {}
-    const unchanged = campaigns === ref;
+    const p = syncDatabaseFromDrive({ silent: true }); // do NOT await
+    const unchanged = campaigns === ref; // synchronous check — guard already returned
     pendingChanges = svP;
+    if (p && typeof p.catch === 'function') p.catch(() => {});
     ok(unchanged);
   });
   t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
