@@ -2342,11 +2342,25 @@ async function tryRestoreSession() {
   // we can render the app even without a Drive access_token; member views
   // don't need Drive, and admins will be re-prompted on the next asset upload.
   try {
+    // Wait up to 5s for Firebase to read its persisted user from IndexedDB.
+    // The old 1.5s ceiling was the cause of 'login ทุกครั้ง' for users on
+    // slow disks / cold starts / corporate networks: Firebase had a valid
+    // session but the timeout cut us off before the callback fired, so we
+    // fell through to the empty-session path and showed the login screen.
+    // 5s is well above the 99th-percentile init time and still snappy enough
+    // that genuinely broken sessions fail fast.
+    const FB_RESTORE_TIMEOUT_MS = 5000;
+    let timedOut = false;
     await new Promise(res => {
       if (!fbAuth) return res();
       const off = fbAuth.onAuthStateChanged(() => { off(); res(); });
-      setTimeout(res, 1500);
+      setTimeout(() => { timedOut = true; res(); }, FB_RESTORE_TIMEOUT_MS);
     });
+    if (timedOut && fbAuth && !fbAuth.currentUser) {
+      // Surfaced so we can diagnose if it ever recurs in the wild. The app
+      // still continues into the sessionStorage fallback below.
+      console.warn('[restore] Firebase auth-state did not settle within ' + FB_RESTORE_TIMEOUT_MS + 'ms — going to login screen');
+    }
     if (fbAuth && fbAuth.currentUser) {
       currentUserEmail = (fbAuth.currentUser.email || '').toLowerCase();
       await resolveUserRoleFromControl(currentUserEmail, fbAuth.currentUser.displayName);
@@ -7764,6 +7778,13 @@ window.__runTests = async function() {
     // localStorage-session-with-token fallback. Both used to silently skip it.
     const matches = src.match(/maybeOfferLocalRestore\(\)/g) || [];
     ok(matches.length >= 2);
+  });
+  t('tryRestoreSession waits ≥5s for Firebase auth-state to settle (source guard)', () => {
+    // The old 1.5s ceiling caused "login forced every visit" on slow disks
+    // / cold starts. Guard the higher ceiling so a future refactor can't
+    // accidentally regress it.
+    const src = tryRestoreSession.toString();
+    ok(/FB_RESTORE_TIMEOUT_MS\s*=\s*5000/.test(src) || /setTimeout\([^,]+,\s*5000\)/.test(src));
   });
   // Identity guard: user A's localStorage backup must not be offered to user B.
   t('persistLocalBackup writes email into the backup meta (source guard)', () => {
