@@ -7402,6 +7402,81 @@ window.onload = async () => {
 // ============================================================================
 // SELF-TEST SUITE — pure-logic assertions; run via ?test=1 or window.__runTests()
 // ============================================================================
+// ============================================================================
+// DIAGNOSTIC DUMP — call window.__diag() in DevTools console on an affected
+// admin's session. Returns a snapshot of every piece of state involved in
+// the save / sync / role pipeline so we can pinpoint why an "add more" might
+// silently drop. Side-effect-free.
+// ============================================================================
+window.__diag = function () {
+  const camp = (typeof getCurrentCampaign === 'function') ? getCurrentCampaign() : null;
+  const adminMembers = (window.Control && window.Control.cachedMembers)
+    ? window.Control.cachedMembers().filter(m => m.role === 'admin').map(m => ({ email: m.email, name: m.name, assigned: (m.campaignFolderIds || []).length }))
+    : 'control plane not ready';
+  const allMembers = (window.Control && window.Control.cachedMembers)
+    ? window.Control.cachedMembers().map(m => ({ email: m.email, role: m.role, assigned: (m.campaignFolderIds || []).length }))
+    : 'control plane not ready';
+  const out = {
+    you: {
+      email: currentUserEmail,
+      isAdmin,
+      userRole, userRoleControl,
+      assignedCampaignFolderIds,
+      hasAccessToken: !!accessToken,
+      isOfflineMode,
+      _readyToSave,
+      _controlLiveRender
+    },
+    currentCampaign: camp ? {
+      id: camp.id,
+      name: camp.campaign,
+      clientEmail: camp.clientEmail,
+      driveFolderId: camp.driveFolderId,
+      driveDbFileId: camp.driveDbFileId,
+      driveDbModifiedTime: camp.driveDbModifiedTime,
+      assetCount: (camp.assets || []).length,
+      isInDirtySet: _dirtyCampaignIds.has(camp.id)
+    } : null,
+    save: {
+      pendingChanges,
+      isSaving,
+      saveTimerActive: !!saveTimer,
+      _consecutiveSaveFailures,
+      lastSaveError: _lastSaveError ? (_lastSaveError.message || String(_lastSaveError)) : null,
+      lastSaveErrorCause: _lastSaveError ? _lastSaveError.driveCause : null,
+      dirtyIds: Array.from(_dirtyCampaignIds),
+      retryAttempt: _saveRetryAttempt,
+      lastSaveTime: lastSaveTime ? lastSaveTime.toISOString() : null,
+      dataSource: _dataSource
+    },
+    localBackup: (() => {
+      const bk = (typeof readLocalBackup === 'function') ? readLocalBackup() : null;
+      if (!bk) return null;
+      return {
+        ts: new Date(bk.ts).toISOString(),
+        by: bk.by,
+        email: bk.email || '(missing — pre-identity-guard backup, will be skipped by restore dialog)',
+        emailMatchesYou: bk.email === currentUserEmail,
+        campaignCount: bk.db && bk.db.campaigns ? bk.db.campaigns.length : 0,
+        stripped: !!bk.stripped
+      };
+    })(),
+    campaignsLoaded: campaigns.map(c => ({
+      id: c.id, name: c.campaign, client: c.client,
+      hasDriveFolder: !!c.driveFolderId,
+      hasDriveDbFile: !!c.driveDbFileId,
+      assets: (c.assets || []).length,
+      lastModified: c.driveDbModifiedTime
+    })),
+    adminMembers,
+    allMembers
+  };
+  console.log('%c=== WAKUWAKU DIAGNOSTIC ===', 'font-weight:bold;color:#4A7BD8');
+  console.log(out);
+  console.log('%cCopy the object above and send to the admin running the investigation.', 'color:#888');
+  return out;
+};
+
 window.__runTests = async function() {
   const results = [];
   const pending = [];
@@ -7785,6 +7860,13 @@ window.__runTests = async function() {
     // accidentally regress it.
     const src = tryRestoreSession.toString();
     ok(/FB_RESTORE_TIMEOUT_MS\s*=\s*5000/.test(src) || /setTimeout\([^,]+,\s*5000\)/.test(src));
+  });
+  t('__diag dump returns the role + save snapshot used for incident triage', () => {
+    const d = window.__diag();
+    ok(d && d.you && d.save && d.localBackup !== undefined && Array.isArray(d.campaignsLoaded));
+    // Spot-check that the fields needed for triage are present (presence —
+    // values can be null in tests, that's fine).
+    ok('isAdmin' in d.you && 'pendingChanges' in d.save && 'dirtyIds' in d.save);
   });
   // Identity guard: user A's localStorage backup must not be offered to user B.
   t('persistLocalBackup writes email into the backup meta (source guard)', () => {
