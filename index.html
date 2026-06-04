@@ -1634,6 +1634,17 @@ let calendarDate = new Date();
 // local edits.
 // ============================================================================
 let _pendingUpdateSignal = null; // { id, displayName }
+// id → last ts the user explicitly ack'd (dismissed or refreshed). Future
+// signals for the same campaign with ts <= acked are suppressed, so a chatty
+// teammate hitting save every 2.5s doesn't re-pop a banner that was just
+// closed. Cleared on page refresh — that's acceptable; refresh = fresh state.
+const _ackedSignalTs = {};
+function _ackCurrentBannerSignal() {
+  if (_pendingUpdateSignal && _pendingUpdateSignal.id && _pendingUpdateSignal.ts) {
+    const prev = _ackedSignalTs[_pendingUpdateSignal.id] || 0;
+    if (_pendingUpdateSignal.ts > prev) _ackedSignalTs[_pendingUpdateSignal.id] = _pendingUpdateSignal.ts;
+  }
+}
 function showUpdateBanner(sig) {
   if (!sig) return;
   _pendingUpdateSignal = sig;
@@ -1652,6 +1663,7 @@ function showUpdateBanner(sig) {
   b.classList.remove('hidden');
 }
 function dismissUpdateBanner() {
+  _ackCurrentBannerSignal();
   _pendingUpdateSignal = null;
   const b = document.getElementById('updateBanner');
   if (b) b.classList.add('hidden');
@@ -1711,6 +1723,10 @@ function onCampaignSignal(sig) {
   // Ignore our own echo (we wrote this just now).
   if (sig.modifiedBy && currentUserEmail && sig.modifiedBy === currentUserEmail) return;
   if (window.Control && window.Control.isOwnSignal(sig.id, sig.ts)) return;
+  // Per-campaign ack memory: if the user already dismissed/refreshed a banner
+  // for this campaign at or after this ts, don't pop it again. Delete signals
+  // bypass this — a deletion is a state change we must always reflect.
+  if (!sig.deleted && _ackedSignalTs[sig.id] && sig.ts && sig.ts <= _ackedSignalTs[sig.id]) return;
   const camp = campaigns.find(c => c.id === sig.id);
   // --- Delete signal ------------------------------------------------------
   // Drive file is already trashed by the deleter; here we just reflect that
@@ -7549,6 +7565,30 @@ window.__runTests = async function() {
   });
   t('update banner DOM exists', () => ok(document.getElementById('updateBanner') && document.getElementById('updateBannerName')));
   t('update banner helpers defined', () => ok(typeof showUpdateBanner === 'function' && typeof dismissUpdateBanner === 'function' && typeof acceptUpdateBanner === 'function' && typeof onCampaignSignal === 'function'));
+  t('onCampaignSignal suppresses banner after dismiss for same campaign (ack memory)', () => {
+    const svE = currentUserEmail; const svPending = _pendingUpdateSignal;
+    const svCamps = campaigns.slice(); const svAcked = _ackedSignalTs['ack-test'];
+    currentUserEmail = 'me@x.y';
+    campaigns = [{ id:'ack-test', campaign:'C', clientEmail:'c@x.y', assets:[], driveDbModifiedTime:'' }];
+    // First arrival: banner should show.
+    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 100 });
+    const shown1 = _pendingUpdateSignal && _pendingUpdateSignal.id === 'ack-test';
+    // User dismisses → ack ts=100.
+    dismissUpdateBanner();
+    // Same teammate fires a stale (ts<=100) signal → must be suppressed.
+    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 100 });
+    const suppressedSame = _pendingUpdateSignal === null;
+    // Older signal also suppressed.
+    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 50 });
+    const suppressedOlder = _pendingUpdateSignal === null;
+    // Genuinely newer signal → re-shows (legitimate new edit).
+    onCampaignSignal({ id:'ack-test', modifiedBy:'them@x.y', displayName:'Them', ts: 200 });
+    const reshownNewer = _pendingUpdateSignal && _pendingUpdateSignal.ts === 200;
+    // restore
+    if (svAcked === undefined) delete _ackedSignalTs['ack-test']; else _ackedSignalTs['ack-test'] = svAcked;
+    currentUserEmail = svE; campaigns = svCamps; _pendingUpdateSignal = svPending;
+    ok(shown1 && suppressedSame && suppressedOlder && reshownNewer);
+  });
   t('onCampaignSignal ignores own echo', () => {
     const svE = currentUserEmail; const svBanner = _pendingUpdateSignal;
     currentUserEmail = 'me@x.y';
