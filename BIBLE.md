@@ -329,16 +329,27 @@ should be visible.
 
 ---
 
-### 5.2 Schema version field
+### 5.2 Schema version field ✅ DONE
 
-**Why this matters**
+**Status:** Landed. `SCHEMA_VERSION = 4` (was already present) is now paired
+with a real migration pipeline:
 
-Today every campaign JSON written to Drive contains whatever fields the current code happens to write. `normalizeCampaign` does best-effort defaults on read. Adding a new required field tomorrow means:
-- newly written campaigns have it
-- old campaigns from last month don't
-- UI code that assumes the field is present will crash or behave weirdly
+  * `migrateCampaignSchema(raw)` lives just below `SCHEMA_VERSION` and
+    dispatches version-by-version. Today the body is empty (the data is at
+    v4 and there's nothing older that we need an explicit migrator for —
+    `normalizeCampaign`'s implicit defaults already cover ancient shapes).
+    The scaffold + the comment make it obvious where to append the next
+    migrator.
+  * `normalizeCampaign` calls `migrateCampaignSchema` first, so every
+    in-memory campaign carries the current `schemaVersion` regardless of
+    what was on Drive.
 
-A bulk migration ("read every campaign JSON, rewrite it") is slow, risky, and fights the per-customer Drive model — you can't touch customer A's files until they next save.
+**Convention going forward** (the actual policy this task locks in):
+
+1. Bump `SCHEMA_VERSION`.
+2. Write `migrateV{N}To{N+1}(c)` as a pure function (input → output, no I/O).
+3. Append `if (v < N+1) c = migrateV{N}To{N+1}(c)` to the dispatcher.
+4. NEVER delete an old migrator — customer Drives may still hold v(N-3) JSON.
 
 **Fix**
 

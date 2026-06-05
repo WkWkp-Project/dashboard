@@ -1550,7 +1550,50 @@ const SAVE_DEBOUNCE_MS = 2500;
 const DB_FILENAME = 'wakuwaku_database_v4.json';
 const CAMPAIGN_DB_FILENAME = 'wakuwaku_campaign.json';
 const MEMBER_MARKER_FILENAME = 'wakuwaku_member.json';
+// Bump this every time the campaign JSON shape changes (new required field,
+// renamed field, restructured nested object). Every bump MUST be paired with
+// a `migrateVNToVNplus1` function below. Migrators are append-only — never
+// delete an old migrator because the customer's Drive folder may still hold
+// a JSON written by an older build (we cannot bulk-rewrite customer Drives).
+// See BIBLE.md § 5.2 for the full policy.
 const SCHEMA_VERSION = 4;
+
+// ----------------------------------------------------------------------------
+// Campaign JSON schema migration pipeline.
+//
+// Convention:
+//   - Each migrator does the minimal shape change for ONE version step.
+//   - Migrators must be pure functions (input → output, no globals, no I/O).
+//   - Migrators always run in order on read — they never modify Drive in place.
+//   - To add a new field: bump SCHEMA_VERSION above, write a migrator that
+//     supplies the default for the new field, append it to the if-chain in
+//     migrateCampaignSchema. The bumped version stamp will land on Drive
+//     organically the next time that campaign is saved.
+//
+// Adding a v4→v5 example would look like:
+//
+//   function migrateV4ToV5(c) {
+//     c.newField = c.newField || 'sensible default';
+//     return c;
+//   }
+//
+// And the dispatcher would become:
+//
+//   if (v < 5) c = migrateV4ToV5(c);
+// ----------------------------------------------------------------------------
+function migrateCampaignSchema(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const v = (typeof raw.schemaVersion === 'number') ? raw.schemaVersion : 1;
+  let c = raw;
+  // Historical pre-version-stamp data: rely on the implicit defaults inside
+  // normalizeCampaign() (e.g. members[0] → clientEmail, missing snapshots[]
+  // → [], etc.). When the first explicit shape change lands, replace this
+  // comment block with the migrator chain.
+  // if (v < 5) c = migrateV4ToV5(c);
+  // if (v < 6) c = migrateV5ToV6(c);
+  c.schemaVersion = SCHEMA_VERSION;
+  return c;
+}
 
 // ============================================================================
 // FIREBASE
@@ -4161,8 +4204,14 @@ function updateDbIdFooter() {
 }
 
 function normalizeCampaign(c) {
+  // Run version-based migrators FIRST so we hand a current-shape object
+  // to the rest of normalization. Migrators always stamp schemaVersion to
+  // SCHEMA_VERSION on the way out, so once a campaign is read here it
+  // looks like a v(current) campaign even if Drive still holds the old shape.
+  c = migrateCampaignSchema(c || {});
   const assets = (Array.isArray(c.assets) ? c.assets : []).map(normalizeAsset);
   return {
+    schemaVersion: SCHEMA_VERSION,
     id: c.id || ('camp-' + Date.now() + Math.random().toString(36).slice(2,7)),
     client: c.client || '', campaign: c.campaign || '',
     startPeriod: c.startPeriod || '', endPeriod: c.endPeriod || '',
@@ -7719,6 +7768,34 @@ window.__runTests = async function() {
     // read-only mode by the loss of one account. See BIBLE § 5.1.
     ok(Array.isArray(SUPER_ADMINS) && SUPER_ADMINS.length >= 2,
        `SUPER_ADMINS has ${SUPER_ADMINS.length} entry(ies) — at least 2 required`);
+  });
+  // Schema migration pipeline guard — BIBLE § 5.2 policy is "bump SCHEMA_VERSION
+  // and append a migrator". These tests confirm the wiring stays in place so a
+  // future field addition doesn't accidentally land without a migrator.
+  t('migrateCampaignSchema defined and stamps current SCHEMA_VERSION', () => {
+    ok(typeof migrateCampaignSchema === 'function' && typeof SCHEMA_VERSION === 'number');
+    const out = migrateCampaignSchema({ id: 'x', schemaVersion: 1 });
+    ok(out.schemaVersion === SCHEMA_VERSION, `expected ${SCHEMA_VERSION}, got ${out.schemaVersion}`);
+  });
+  t('migrateCampaignSchema is safe on missing input', () => {
+    ok(migrateCampaignSchema(null) === null);
+    ok(migrateCampaignSchema(undefined) === undefined);
+    const empty = migrateCampaignSchema({});
+    ok(empty.schemaVersion === SCHEMA_VERSION);
+  });
+  t('normalizeCampaign runs migrator first (source guard)', () => {
+    // Without this ordering, a future migrator that depends on a field shape
+    // could see the post-normalization version instead of the raw one.
+    const src = normalizeCampaign.toString();
+    ok(/migrateCampaignSchema/.test(src) && src.indexOf('migrateCampaignSchema') < src.indexOf('assets'));
+  });
+  t('normalizeCampaign output always carries schemaVersion', () => {
+    // Round-trip: a v1 raw → normalized → must stamp SCHEMA_VERSION.
+    const out = normalizeCampaign({ id: 'rt', schemaVersion: 1 });
+    ok(out.schemaVersion === SCHEMA_VERSION);
+    // A campaign with NO version stamp at all (very old data) is treated as v1.
+    const out2 = normalizeCampaign({ id: 'rt2' });
+    ok(out2.schemaVersion === SCHEMA_VERSION);
   });
   t('Control.canSeeCampaign: admin sees all', () => ok(window.Control.canSeeCampaign('admin', [], { driveFolderId: 'x' })));
   t('Control.canSeeCampaign: viewer sees only assigned folder', () => {

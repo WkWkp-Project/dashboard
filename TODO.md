@@ -19,16 +19,20 @@ just labels.
 
 ---
 
-### 2. Schema version field on campaign JSON
-**Risk if skipped:** Adding a new field to the campaign schema breaks old Drive copies on read. `normalizeCampaign` covers most cases but isn't bulletproof.
+### ✅ 2. Schema version field — DONE
+`SCHEMA_VERSION = 4` already existed and was already being written to the
+Drive payload. What this task added was the missing migration pipeline:
 
-**Action:**
-- Add `schemaVersion: 4` (current) to `campaignDriveJsonPayload`
-- `normalizeCampaign` reads version, runs migrators sequentially
-- Add `CURRENT_SCHEMA_VERSION` constant and bump on each schema change
-- Migrator functions stay in code permanently (never delete)
+  * `migrateCampaignSchema(raw)` — version-dispatched scaffold; today's
+    body has no migrators (data is at v4 and old reads still pass through
+    `normalizeCampaign`'s implicit defaults) but the convention + the
+    comment block guide the next contributor where to append.
+  * `normalizeCampaign` now calls `migrateCampaignSchema` first so every
+    in-memory campaign carries a current `schemaVersion`.
 
-**Effort:** 2 hr · **Severity:** ⭐⭐⭐⭐
+The convention for future schema changes is documented at the constant:
+bump `SCHEMA_VERSION`, write `migrateVNToVNplus1` as a pure function,
+append `if (v < N+1) c = migrateVNToVNplus1(c)` to the dispatcher.
 
 ---
 
