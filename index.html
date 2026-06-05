@@ -1709,6 +1709,11 @@ function onCampaignSignal(sig) {
     if (!camp) return; // already not in our list
     const name = camp.campaign || camp.id;
     campaigns = campaigns.filter(c => c.id !== sig.id);
+    // Drop the dirty mark for the deleted campaign too. Without this, a queued
+    // saveToDrive would filter targets down to "deleted id only", get an empty
+    // set, and fall back to its 'save all' path — re-uploading every campaign
+    // the user can see, which is both wasteful and risks pushing stale data.
+    _dirtyCampaignIds.delete(sig.id);
     if (currentCampaignId === sig.id) {
       const myCamps = currentMemberEmail ? campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail) : campaigns;
       currentCampaignId = myCamps[0] ? myCamps[0].id : null;
@@ -2293,6 +2298,11 @@ function restoreFromLocalBackup() {
   if (Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
   renderEverything();
   setDataSource('local'); // flip the topbar badge so the user knows we're not on canonical Drive state
+  // Mark EVERY restored campaign dirty, not just the currently open one. The
+  // upcoming saveToDrive would otherwise upload only the current campaign and
+  // leave the others to be silently overwritten by Drive's older copy on the
+  // next sync — exactly the failure mode QA flagged.
+  campaigns.forEach(c => { if (c && c.id) _dirtyCampaignIds.add(c.id); });
   logAction('RESTORE', `Restored from local backup (${new Date(bk.ts).toLocaleString()})`);
   showToast('✓ กู้คืนจาก backup ในเครื่องแล้ว · กด Backup to Cloud เพื่อ sync', 'ok');
   pendingChanges = true;
@@ -7894,6 +7904,18 @@ window.__runTests = async function() {
   t('restoreFromLocalBackup flips badge to local (source guard)', () => {
     const src = restoreFromLocalBackup.toString();
     ok(/setDataSource\(['"]local['"]\)/.test(src));
+  });
+  t('restoreFromLocalBackup marks ALL restored campaigns dirty (source guard)', () => {
+    // QA finding: without this, only currentCampaignId gets queued for upload
+    // and the others get overwritten by Drive's older state on the next sync.
+    const src = restoreFromLocalBackup.toString();
+    ok(/campaigns\.forEach\(c\s*=>\s*\{[^}]*_dirtyCampaignIds\.add\(c\.id\)/.test(src));
+  });
+  t('onCampaignSignal delete path cleans the dirty set (source guard)', () => {
+    // QA finding: a stale dirty id for a campaign that no longer exists made
+    // saveToDrive fall back to its 'save all' path on the next save cycle.
+    const src = onCampaignSignal.toString();
+    ok(/_dirtyCampaignIds\.delete\(sig\.id\)/.test(src));
   });
   // Silent-sync clobber guard — future-proofs any new Firestore listener that
   // calls syncDatabaseFromDrive({silent:true}). Adding new admins or new
