@@ -211,12 +211,23 @@ Source of truth: `js/control.js` PERMISSIONS object.
 | createCampaign | ✅ | ❌ | ❌ | ❌ | ❌ |
 | deleteCampaign | ✅ | ❌ | ❌ | ❌ | ❌ |
 | editSectionA | ✅ | ✅ | ❌ | ❌ | ❌ |
-| editSectionB | ✅ | ✅ | ✅ | ❌ | ✅ |
+| editSectionB | ✅ | ✅ | ✅ | ❌ | ❌ |
+
+**Customer is intentionally pure read-only.** The earlier "customer edits
+Section B" design was confusing: the role granted some buttons that looked
+clickable but silently failed because the underlying Drive permission was
+read-only. We aligned the model so customers explicitly see-and-expand
+only; to grant editing power an admin promotes them to `operation`.
 
 Legacy UI gates (translation layer in `applyControlRole`):
 - `admin`, `editor` → `userRole='internal'` (`isAdmin` is true only for `admin`)
-- `operation`, `customer` → `userRole='operator'`
-- `viewer` or null → `userRole='client'`
+- `operation` → `userRole='operator'`
+- `customer`, `viewer`, null → `userRole='client'`
+
+Drive folder permission auto-share follows the same line:
+- `editor`, `operation` → `writer` (can save campaign content)
+- `customer`, `viewer` → `reader` (read-only browse)
+- `admin` → covered by `shareCampaignFolderWithAdmins`
 
 Bootstrap rule: any email under `ADMIN_EMAIL_DOMAIN` ('team.wkwkp.com') or in `SUPER_ADMINS` can self-provision their own admin doc on first login. See § 5.1 for why super-admins must be more than one email.
 

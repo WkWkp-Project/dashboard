@@ -1987,9 +1987,19 @@ function applyControlRole(resolved) {
   const m = resolved && resolved.member;
   assignedCampaignFolderIds = (m && Array.isArray(m.campaignFolderIds)) ? m.campaignFolderIds.slice() : [];
   isAdmin = userRoleControl === 'admin';
+  // Map fine-grained Firestore role onto the legacy coarse userRole that
+  // the UI gates already understand.
+  //   admin, editor       → 'internal' (full edit / full Section A+B)
+  //   operation           → 'operator' (Section B only, otherwise restricted)
+  //   customer, viewer    → 'client'   (read-only — see expand, but every
+  //                                     mutation button is hidden/disabled
+  //                                     via .client-mode CSS; promote to
+  //                                     operation to enable editing)
+  //   anything else / null → 'client'  (safe default — no accidental edit
+  //                                     rights for an unknown role)
   if (userRoleControl === 'admin' || userRoleControl === 'editor') userRole = 'internal';
-  else if (userRoleControl === 'operation' || userRoleControl === 'customer') userRole = 'operator';
-  else userRole = 'client'; // viewer, or null (no access)
+  else if (userRoleControl === 'operation') userRole = 'operator';
+  else userRole = 'client';
 }
 
 // Fine-grained capability check. Falls back to isAdmin if control plane is off.
@@ -3662,9 +3672,11 @@ async function shareCampaignFolderWithAdmins(folderId) {
 // path — admin creates a campaign for an already-existing customer.
 //
 // Permission given matches the role:
-//   customer / editor / operation → 'writer' (they can edit content)
-//   viewer                        → 'reader' (read-only by design)
-//   anyone else / unknown         → skip (no automatic share)
+//   editor / operation → 'writer' (must be able to edit content)
+//   customer / viewer  → 'reader' (read-only by design; promote to operation
+//                                  to grant edit power)
+//   admin              → skip (covered by shareCampaignFolderWithAdmins)
+//   unknown / not in roster → skip (no automatic share)
 async function shareCampaignFolderWithClient(camp) {
   if (!camp || !camp.driveFolderId || !accessToken || !window.Control) return;
   const email = (camp.clientEmail || '').toLowerCase().trim();
@@ -3674,10 +3686,10 @@ async function shareCampaignFolderWithClient(camp) {
   if (!member) return; // not in roster yet — saveMemberFromModal will handle on add
   let drivePerm;
   switch (member.role) {
-    case 'customer':
     case 'editor':
     case 'operation':
       drivePerm = 'writer'; break;
+    case 'customer':
     case 'viewer':
       drivePerm = 'reader'; break;
     default:
@@ -5012,12 +5024,13 @@ async function saveNewMember() {
     showToast('✓ Saved member: ' + emailRaw + ' · ' + role, 'ok');
 
     // Share each assigned campaign folder with this member so they can
-    // actually read it on Drive. Best-effort, non-fatal.
-    //   customer / editor / operation → 'writer' (must be able to edit content)
-    //   viewer                        → 'reader' (read-only by design)
-    //   admin                         → covered separately by shareCampaignFolderWithAdmins
-    const drivePerm = (role === 'viewer') ? 'reader'
-                     : (role === 'customer' || role === 'editor' || role === 'operation') ? 'writer'
+    // actually see it on Drive. Best-effort, non-fatal.
+    //   editor / operation → 'writer' (must be able to edit content)
+    //   customer / viewer  → 'reader' (read-only by design; promote to
+    //                                  operation to grant edit power)
+    //   admin              → covered separately by shareCampaignFolderWithAdmins
+    const drivePerm = (role === 'customer' || role === 'viewer') ? 'reader'
+                     : (role === 'editor' || role === 'operation') ? 'writer'
                      : null;
     if (accessToken && drivePerm && campaignFolderIds.length) {
       let shareFail = 0;
@@ -7799,7 +7812,7 @@ window.__runTests = async function() {
   t('Control permission matrix: editor can edit Section A+B', () => ok(window.Control.can('editor', 'editSectionA') && window.Control.can('editor', 'editSectionB')));
   t('Control permission matrix: operation only Section B', () => ok(!window.Control.can('operation', 'editSectionA') && window.Control.can('operation', 'editSectionB')));
   t('Control permission matrix: viewer read-only', () => ok(!window.Control.can('viewer', 'editSectionB') && !window.Control.can('viewer', 'manageMembers')));
-  t('Control permission matrix: customer edits Section B only', () => ok(window.Control.can('customer', 'editSectionB') && !window.Control.can('customer', 'editSectionA')));
+  t('Control permission matrix: customer is read-only (no Section A or B)', () => ok(!window.Control.can('customer', 'editSectionA') && !window.Control.can('customer', 'editSectionB')));
   t('Control: admin/editor cannot/can create campaign', () => ok(window.Control.can('admin', 'createCampaign') && !window.Control.can('editor', 'createCampaign')));
   t('Control: unknown role falls back to viewer perms', () => ok(!window.Control.can('bogus', 'editSectionB')));
   t('Control.isBootstrapAdmin matches domain', () => {
@@ -7824,12 +7837,26 @@ window.__runTests = async function() {
     const src = saveCampaignJsonToDrive.toString();
     ok(/shareCampaignFolderWithClient/.test(src));
   });
-  t('saveMemberFromModal shares with editor/operation too, not just customer/viewer', () => {
-    // Without this, an editor assigned to a campaign saw an empty list because
-    // they had no Drive permission. customer/editor/operation get 'writer',
-    // viewer gets 'reader'.
+  t('saveMemberFromModal share permission map (editor/operation → writer, customer/viewer → reader)', () => {
+    // Customer is read-only by policy now — gets reader permission to match.
+    // Promoting them to operation re-shares with writer on the next save.
     const src = saveMemberFromModal.toString();
-    ok(/role === 'editor'/.test(src) && /role === 'operation'/.test(src) && /'writer'/.test(src) && /'reader'/.test(src));
+    ok(/role === 'editor'/.test(src) && /role === 'operation'/.test(src) &&
+       /role === 'customer'/.test(src) && /role === 'viewer'/.test(src) &&
+       /'writer'/.test(src) && /'reader'/.test(src));
+  });
+  t('shareCampaignFolderWithClient gives customer reader, not writer (source guard)', () => {
+    const src = shareCampaignFolderWithClient.toString();
+    // Sanity: customer must appear in the reader branch, not the writer one.
+    // Use indexOf so we're checking the order of the case labels matches the
+    // intended branch — customer should be grouped with viewer, not editor.
+    const customerIdx = src.indexOf("case 'customer'");
+    const viewerIdx = src.indexOf("case 'viewer'");
+    const editorIdx = src.indexOf("case 'editor'");
+    const readerIdx = src.indexOf("'reader'");
+    // customer is grouped right before viewer, both fall through to reader.
+    ok(customerIdx > 0 && viewerIdx > customerIdx && viewerIdx < readerIdx);
+    ok(editorIdx >= 0 && editorIdx < customerIdx);
   });
   // Schema migration pipeline guard — BIBLE § 5.2 policy is "bump SCHEMA_VERSION
   // and append a migrator". These tests confirm the wiring stays in place so a
@@ -7869,7 +7896,8 @@ window.__runTests = async function() {
     applyControlRole({ role: 'admin', member: { campaignFolderIds: [] } }); ok(isAdmin === true && userRole === 'internal');
     applyControlRole({ role: 'editor', member: { campaignFolderIds: ['a'] } }); ok(isAdmin === false && userRole === 'internal' && assignedCampaignFolderIds[0] === 'a');
     applyControlRole({ role: 'operation', member: { campaignFolderIds: [] } }); ok(userRole === 'operator');
-    applyControlRole({ role: 'customer', member: { campaignFolderIds: [] } }); ok(userRole === 'operator');
+    // customer is now pure read-only — maps to client mode, same as viewer.
+    applyControlRole({ role: 'customer', member: { campaignFolderIds: [] } }); ok(userRole === 'client');
     applyControlRole({ role: 'viewer', member: { campaignFolderIds: [] } }); ok(userRole === 'client');
     applyControlRole({ role: null, member: null }); ok(userRole === 'client' && userRoleControl === null);
     userRole = svR; isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF;
