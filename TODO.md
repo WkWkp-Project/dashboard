@@ -45,6 +45,28 @@ of things to actively resist (cross-references BIBLE §11 anti-patterns).
 
 ---
 
+### ✅ Customer / editor / operation auto-share gap — DONE (urgent fix)
+Bug reported as "Customer ไม่เห็นแคมเปญ แม้ assign · ไม่เห็นแคม แม้แอดเข้ามาใหม่".
+Root cause: `saveCampaignJsonToDrive` only auto-shared the Drive folder with
+admins; the campaign's `clientEmail` and editor/operation members were
+never granted Drive permission, so their search returned an empty list
+even though Firestore correctly said they were assigned.
+
+Two fixes landed together:
+  * `shareCampaignFolderWithClient(camp)` — new helper called after every
+    successful Drive save. Looks up `camp.clientEmail` in the Firestore
+    roster, gives them Drive permission matching their role (customer/
+    editor/operation → writer, viewer → reader, admin → skip because
+    `shareCampaignFolderWithAdmins` covers them).
+  * `saveMemberFromModal` — was only sharing on customer/viewer roles;
+    now also shares with editor/operation. Same role→perm mapping.
+
+**Backfill for already-broken assignments:** open the Members modal for
+each affected member and click Save (no field changes needed) — that
+re-runs the share loop. Or have the admin open and save any change on
+the campaign itself; saveCampaignJsonToDrive will trigger the new
+auto-share path.
+
 ## 🟠 Diagnosis pending — waiting on user/external input
 
 ### 4. Pat — campaign "123" recovery confirmation

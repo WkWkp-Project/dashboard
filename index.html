@@ -3619,6 +3619,13 @@ async function saveCampaignJsonToDrive(camp) {
   // and register it in the shared Firestore index. Both best-effort/non-fatal
   // so a Firestore or permission hiccup never blocks the Drive save itself.
   try { await shareCampaignFolderWithAdmins(camp.driveFolderId); } catch(e) { console.warn('share campaign folder with admins failed:', e); }
+  // Also auto-share with the assigned clientEmail (customer/viewer) so they
+  // can actually see the campaign in their own Drive search. Without this
+  // step a freshly-created campaign for an existing customer shows up nowhere
+  // for that customer — Firestore tells them they're assigned but Drive
+  // refuses to return the file because they were never granted permission.
+  // Bug surfaced 'Customer ไม่เห็นแคมเปญ แม้ assign'.
+  try { await shareCampaignFolderWithClient(camp); } catch(e) { console.warn('share campaign folder with client failed:', e); }
   try { await registerCampaignInIndex(camp); } catch(e) { console.warn('campaign index upsert failed:', e); }
   // Fire the "campaign changed" signal AFTER Drive write succeeded — keeps
   // Drive + Firestore consistent (a signal never points to a write that
@@ -3645,6 +3652,39 @@ async function shareCampaignFolderWithAdmins(folderId) {
     try { await shareDriveFolderWithUser(folderId, email, 'writer'); }
     catch(e) { console.warn('share campaign folder to admin failed:', email, e); }
   }
+}
+
+// Mirror of the above for the campaign's clientEmail. Without this, a
+// customer whose Firestore role + assignment is correct still sees an
+// empty campaign list because their Google Drive search has no permission
+// on the campaign's folder. saveMemberFromModal already shares when a
+// member is added/edited via the Members modal; this covers the other
+// path — admin creates a campaign for an already-existing customer.
+//
+// Permission given matches the role:
+//   customer / editor / operation → 'writer' (they can edit content)
+//   viewer                        → 'reader' (read-only by design)
+//   anyone else / unknown         → skip (no automatic share)
+async function shareCampaignFolderWithClient(camp) {
+  if (!camp || !camp.driveFolderId || !accessToken || !window.Control) return;
+  const email = (camp.clientEmail || '').toLowerCase().trim();
+  if (!email) return;
+  if (email === currentUserEmail) return; // saver IS the client
+  const member = window.Control.cachedMember && window.Control.cachedMember(email);
+  if (!member) return; // not in roster yet — saveMemberFromModal will handle on add
+  let drivePerm;
+  switch (member.role) {
+    case 'customer':
+    case 'editor':
+    case 'operation':
+      drivePerm = 'writer'; break;
+    case 'viewer':
+      drivePerm = 'reader'; break;
+    default:
+      return; // admin already covered by shareCampaignFolderWithAdmins
+  }
+  try { await shareDriveFolderWithUser(camp.driveFolderId, email, drivePerm); }
+  catch(e) { console.warn('share campaign folder to client failed:', email, e); }
 }
 
 // Register / update a campaign in the shared Firestore index (discovery only —
@@ -4971,12 +5011,18 @@ async function saveNewMember() {
     setSaveStatus('saved', 'Member saved');
     showToast('✓ Saved member: ' + emailRaw + ' · ' + role, 'ok');
 
-    // Share each assigned campaign folder with this member so customers/viewers
-    // can actually read them on Drive. Best-effort, non-fatal.
-    if (accessToken && (role === 'customer' || role === 'viewer') && campaignFolderIds.length) {
+    // Share each assigned campaign folder with this member so they can
+    // actually read it on Drive. Best-effort, non-fatal.
+    //   customer / editor / operation → 'writer' (must be able to edit content)
+    //   viewer                        → 'reader' (read-only by design)
+    //   admin                         → covered separately by shareCampaignFolderWithAdmins
+    const drivePerm = (role === 'viewer') ? 'reader'
+                     : (role === 'customer' || role === 'editor' || role === 'operation') ? 'writer'
+                     : null;
+    if (accessToken && drivePerm && campaignFolderIds.length) {
       let shareFail = 0;
       for (const fid of campaignFolderIds) {
-        try { await shareDriveFolderWithUser(fid, emailRaw, 'reader'); }
+        try { await shareDriveFolderWithUser(fid, emailRaw, drivePerm); }
         catch(shareErr) { shareFail++; console.warn('share assigned folder failed:', fid, shareErr); }
       }
       if (shareFail) showToast(`⚠️ Saved แต่ share ${shareFail} folder ให้ ${emailRaw} ไม่สำเร็จ — share เองที่ Drive`, 'warn');
@@ -7768,6 +7814,22 @@ window.__runTests = async function() {
     // read-only mode by the loss of one account. See BIBLE § 5.1.
     ok(Array.isArray(SUPER_ADMINS) && SUPER_ADMINS.length >= 2,
        `SUPER_ADMINS has ${SUPER_ADMINS.length} entry(ies) — at least 2 required`);
+  });
+  // Bug: 'Customer ไม่เห็นแคมเปญ แม้ assign' — when admin saves a campaign
+  // that has clientEmail = an existing customer, we must auto-share the
+  // Drive folder with that customer or their Drive search returns nothing
+  // even though Firestore says they're assigned.
+  t('shareCampaignFolderWithClient defined', () => ok(typeof shareCampaignFolderWithClient === 'function'));
+  t('saveCampaignJsonToDrive calls shareCampaignFolderWithClient (source guard)', () => {
+    const src = saveCampaignJsonToDrive.toString();
+    ok(/shareCampaignFolderWithClient/.test(src));
+  });
+  t('saveMemberFromModal shares with editor/operation too, not just customer/viewer', () => {
+    // Without this, an editor assigned to a campaign saw an empty list because
+    // they had no Drive permission. customer/editor/operation get 'writer',
+    // viewer gets 'reader'.
+    const src = saveMemberFromModal.toString();
+    ok(/role === 'editor'/.test(src) && /role === 'operation'/.test(src) && /'writer'/.test(src) && /'reader'/.test(src));
   });
   // Schema migration pipeline guard — BIBLE § 5.2 policy is "bump SCHEMA_VERSION
   // and append a migrator". These tests confirm the wiring stays in place so a
