@@ -7,19 +7,15 @@ Updated as items land or get added.
 
 ## 🔴 Critical · Quick Wins (do this week)
 
-### 1. Backup super-admins — single-line failsafe
-**Risk if skipped:** If `jarupat@team.wkwkp.com` ever loses access, nobody can promote new admins. System becomes read-only forever.
+### ✅ 1. Backup super-admins — DONE
+Landed in commit after `7d7ba6a` — `SUPER_ADMINS` now contains
+`jarupat@team.wkwkp.com` + `watson@team.wkwkp.com`. Self-test guards
+the list against shrinking back to 1.
 
-**Action:**
-```javascript
-// index.html ~line 1570
-const SUPER_ADMINS = [
-  'jarupat@team.wkwkp.com',
-  '<co-founder>@team.wkwkp.com',     // pick one trusted backup
-  '<safe-locked-email>@team.wkwkp.com' // optional 3rd, store credentials in safe
-];
-```
-**Effort:** 5 min · **Severity:** ⭐⭐⭐⭐⭐
+To add more failsafes later, append to the `SUPER_ADMINS` array in
+`index.html` (around line 1573). Each new entry needs an actual
+account that can log in — these are real bootstrap-admin paths, not
+just labels.
 
 ---
 

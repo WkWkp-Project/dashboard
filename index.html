@@ -1566,8 +1566,14 @@ const firebaseConfig = {
 };
 const ADMIN_EMAIL_DOMAIN = 'team.wkwkp.com'; // อีเมล @team.wkwkp.com = admin (bootstrap)
 // Lockout-safe super admins: these emails are always treated as admin even if
-// the Firestore control collection is empty or unreachable. Keep at least one.
-const SUPER_ADMINS = ['jarupat@team.wkwkp.com'];
+// the Firestore control collection is empty or unreachable. Keep at least TWO
+// so the loss of any single account (lost password, locked out, employee
+// leaves) never strands the team in a read-only state — there has to be
+// someone who can still promote a new admin in /control_members.
+const SUPER_ADMINS = [
+  'jarupat@team.wkwkp.com',
+  'watson@team.wkwkp.com'
+];
 let fbApp = null, fbAuth = null, fbDb = null;
 try {
   fbApp = firebase.initializeApp(firebaseConfig);
@@ -7707,6 +7713,12 @@ window.__runTests = async function() {
     const b = window.Control.isBootstrapAdmin('client@gmail.com');
     window.Control.bootstrap.adminDomain = sv;
     ok(a === true && b === false);
+  });
+  t('SUPER_ADMINS has ≥ 2 entries (single point of failure guard)', () => {
+    // Keep at least two so the system can't be permanently locked into
+    // read-only mode by the loss of one account. See BIBLE § 5.1.
+    ok(Array.isArray(SUPER_ADMINS) && SUPER_ADMINS.length >= 2,
+       `SUPER_ADMINS has ${SUPER_ADMINS.length} entry(ies) — at least 2 required`);
   });
   t('Control.canSeeCampaign: admin sees all', () => ok(window.Control.canSeeCampaign('admin', [], { driveFolderId: 'x' })));
   t('Control.canSeeCampaign: viewer sees only assigned folder', () => {

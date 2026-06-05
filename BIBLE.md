@@ -300,37 +300,32 @@ Look at:
 
 The three highest-leverage changes. Together: ~½ day of work, locks in 5+ years of stability.
 
-### 5.1 Backup super-admins
+### 5.1 Backup super-admins ✅ DONE
 
-**Why this matters**
+**Status:** Landed. `SUPER_ADMINS` now contains two entries:
 
-`SUPER_ADMINS = ['jarupat@team.wkwkp.com']` is hardcoded in `index.html`. If that email loses access (account deletion by Google, password reset gone wrong, person leaves the company), nobody can:
-- promote a new admin (Firestore rules require either `isAdmin()` or `isBootstrapAdmin()` AND writing your own doc)
-- recover the existing admin doc (it'd require an admin to do the write)
-
-The system becomes read-only. The Drive data is still there, but nobody can change roster or fix bugs.
-
-**Fix**
-
-Edit `index.html` around line 1570:
 ```javascript
 const SUPER_ADMINS = [
   'jarupat@team.wkwkp.com',
-  // Add 1-2 more emails owned by people you trust as failsafes.
-  // Recommendation: one co-founder, one credentials-locked safe email.
-  '<co-founder>@team.wkwkp.com',
-  '<break-glass>@team.wkwkp.com'
+  'watson@team.wkwkp.com'
 ];
 ```
 
-**Test plan**
+A self-test (`SUPER_ADMINS has ≥ 2 entries (single point of failure guard)`)
+fails if a future refactor shrinks the list back to one entry.
 
-1. Add a fake test email to the list (e.g. `test-bootstrap@team.wkwkp.com`).
-2. Sign in with that account in an incognito window.
-3. Confirm the app loads as admin and the member list is visible.
-4. Remove the test entry, redeploy.
+**To extend later**
 
-**Effort:** 5 min · **Severity:** ⭐⭐⭐⭐⭐ · **Risk:** zero (additive)
+Append to the array in `index.html` (~line 1573). Each entry must be a real
+account that can log in — bootstrap-admin promotion happens on the first
+login of that account, so a label without a working sign-in won't help in a
+real incident.
+
+**Verify**
+
+After the next deploy, sign in with `watson@team.wkwkp.com` in an incognito
+window. The app should load with full admin capabilities and the member list
+should be visible.
 
 ---
 
