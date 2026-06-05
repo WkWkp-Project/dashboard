@@ -405,26 +405,25 @@ function migrateV3ToV4(c) {
 
 ---
 
-### 5.3 CLAUDE.md — code-level documentation
+### 5.3 CLAUDE.md ✅ DONE
 
-**Why this matters**
+**Status:** Landed in repo root.
 
-You're reading this Bible. It's narrative + decision-focused. But Claude (and future devs grepping the repo) benefit from a code-level "where things live" reference. The `/init` skill scans the codebase and produces one tailored to the project.
+Generated via the `/init` skill and hand-edited so it actually matches
+this codebase (Playwright path quirk, the no-package.json reality, where
+each subsystem lives by line range, the `__diag()` triage pattern,
+cross-references back to this Bible).
 
-**Fix**
+The split between the three docs is now:
 
-Run `/init` (Claude Code skill). Review the draft, edit anything that's wrong. Commit `CLAUDE.md` to the repo root.
+  * `CLAUDE.md` — day-to-day quick reference. Commands, invariants in
+    one sentence each, save flow as a diagram, line-range map.
+  * `BIBLE.md` (this file) — narrative depth. Every architectural
+    decision, every task tier, every runbook, anti-patterns, decision
+    trees, glossary.
+  * `TODO.md` — scannable checklist with completion marks.
 
-At minimum the file should mention:
-- Single-file `index.html` architecture, why it's chosen
-- The architecture invariants from § 1 of this Bible
-- The "Drive vs Firestore" split with examples
-- Save flow + retry strategy (cross-reference § 2 of this Bible)
-- How to run self-tests (`node test/run-tests.mjs`)
-- Deploy steps (cross-reference § 4.1)
-- Where each major subsystem lives in `index.html` (line ranges)
-
-**Effort:** 2 hr · **Severity:** ⭐⭐⭐⭐ · **Risk:** zero (additive doc)
+When updating one, check whether the others need a parallel touch.
 
 ---
 

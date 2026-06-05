@@ -36,19 +36,12 @@ append `if (v < N+1) c = migrateVNToVNplus1(c)` to the dispatcher.
 
 ---
 
-### 3. CLAUDE.md (architecture documentation)
-**Risk if skipped:** In 6-12 months, nobody (including current maintainers) will remember why decisions were made. Easy to break invariants like "Drive = source of truth".
-
-**Action:** Run the `/init` skill which scans the codebase + drafts CLAUDE.md.
-Cover at minimum:
-- Architecture (Drive vs Firestore split)
-- Critical invariants
-- Save / sync flow + retry strategy
-- Role matrix (admin/editor/operation/viewer/customer)
-- Deploy steps + rollback (incl. `firebase deploy --only firestore:rules`)
-- Self-test location + how to run
-
-**Effort:** 2 hr · **Severity:** ⭐⭐⭐⭐
+### ✅ 3. CLAUDE.md — DONE
+Generated via the `/init` skill, hand-edited to match this codebase.
+Covers commands, the six load-bearing architecture invariants, save
+flow, role matrix, where things live in `index.html` by line range,
+deploy/rollback, the `__diag()` investigation pattern, and the list
+of things to actively resist (cross-references BIBLE §11 anti-patterns).
 
 ---
 
