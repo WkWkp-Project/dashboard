@@ -1848,9 +1848,20 @@ function setSaveStatus(state, text) {
     }, 4000);
   }
 }
+let _lastIndicatorClickTs = 0;
+const INDICATOR_CLICK_COOLDOWN_MS = 4000;
 function handleSaveIndicatorClick() {
   const ind = document.getElementById('saveIndicator');
   if (!ind) return;
+  // Cooldown: a frustrated admin mashing the indicator while saves are
+  // failing should not queue 5 parallel forceSave() calls — that burns
+  // Drive API quota and confuses the retry queue.
+  const now = Date.now();
+  if (isSaving || (now - _lastIndicatorClickTs) < INDICATOR_CLICK_COOLDOWN_MS) {
+    showToast('กำลังประมวลผล · รอสักครู่', 'warn');
+    return;
+  }
+  _lastIndicatorClickTs = now;
   if (ind.classList.contains('error')) {
     // If we've failed repeatedly, jump straight to manual backup
     if (_consecutiveSaveFailures >= 2) {
@@ -1890,7 +1901,8 @@ function initGoogleAuth() {
           accessToken = resp.access_token;
           // Schedule the next silent refresh ~5 min before expiry
           if (refreshTimer) clearTimeout(refreshTimer);
-          refreshTimer = setTimeout(() => refreshToken(), 50 * 60 * 1000);
+          _lastTokenMintTs = Date.now();
+          refreshTimer = setTimeout(() => refreshToken(), TOKEN_REFRESH_AFTER_MS);
           // Drain any save() calls that were awaiting a fresh token
           if (_tokenRefreshInFlight) _drainTokenWaiters(resp.access_token);
           if (_isInitialLogin) { _isInitialLogin = false; onLoginSuccess(); }
@@ -1916,6 +1928,14 @@ function initGoogleAuth() {
   } catch (e) { console.error('Google Auth init failed:', e); }
 }
 let refreshTimer = null;
+// Wall-clock timestamp of the last token mint. setTimeout alone is unreliable
+// for the 50-min refresh because browsers throttle background tabs (Chrome
+// can stretch a 50-min timer to 60-90 min in an inactive tab). When the tab
+// comes back to the foreground we compare elapsed against this and force a
+// refresh if we drifted past expiry.
+let _lastTokenMintTs = 0;
+const TOKEN_REFRESH_AFTER_MS = 50 * 60 * 1000;        // proactive refresh point
+const TOKEN_VISIBILITY_REFRESH_AFTER_MS = 45 * 60 * 1000; // tighter ceiling on focus return
 let _isInitialLogin = false;
 let _silentRefreshInFlight = false;
 // Refresh the Drive access token. Tries GIS silent refresh first (no popup);
@@ -2263,6 +2283,7 @@ function applyTokenLogin(token) {
 const SESSION_KEY = 'wkw_session_v1';
 const SESSION_DATA_KEY = 'wkw_offline_data_v1';
 const LOCAL_BACKUP_KEY = 'wkw_local_backup_v1'; // durable: survives logout & browser close
+let _localBackupQuotaWarned = false; // one-shot toast per session, so we don't spam
 let pendingForceSaveAfterLogin = false;
 
 // Durable local-disk backup of the database (so data isn't lost when Drive
@@ -2301,7 +2322,16 @@ function persistLocalBackup() {
       const lite = JSON.parse(JSON.stringify(payload));
       (lite.campaigns || []).forEach(c => (c.assets || []).forEach(a => (a.files || []).forEach(f => { if (f.data) { f._wasEmbedded = true; delete f.data; } })));
       try { localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({ ...meta, stripped: true, db: lite })); }
-      catch(e2) { console.warn('local backup not stored (quota):', e2); }
+      catch(e2) {
+        // Both the full and the lite snapshot exceeded the browser's
+        // localStorage quota. Quietly skipping leaves the user one
+        // refresh away from data loss with zero warning — surface it.
+        console.warn('local backup not stored (quota):', e2);
+        if (typeof showToast === 'function' && !_localBackupQuotaWarned) {
+          _localBackupQuotaWarned = true;
+          showToast('⚠️ Browser storage เต็ม — backup ในเครื่องไม่ครบ · เซฟ Drive ก่อน refresh', 'err');
+        }
+      }
     }
   } catch(e) { console.warn('persistLocalBackup failed:', e); }
 }
@@ -4122,7 +4152,20 @@ function stopAutoResync() {
 }
 if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') maybeResync('visible');
+    if (document.visibilityState === 'visible') {
+      // Browsers throttle the 50-min setTimeout in background tabs — when
+      // the tab comes back, our scheduled refresh may already be late.
+      // Cross-check wall-clock time and force a refresh if we're past the
+      // tighter ceiling. Skip if we never minted a token yet (pre-login)
+      // or if a refresh is already in flight.
+      const elapsed = Date.now() - _lastTokenMintTs;
+      if (_lastTokenMintTs && elapsed > TOKEN_VISIBILITY_REFRESH_AFTER_MS &&
+          !_silentRefreshInFlight && !_tokenRefreshInFlight && accessToken) {
+        _silentRefreshInFlight = true;
+        try { refreshToken(); } catch(e) { _silentRefreshInFlight = false; console.warn('visibility token refresh failed:', e); }
+      }
+      maybeResync('visible');
+    }
   });
   window.addEventListener('focus', () => maybeResync('focus'));
 }
@@ -4330,7 +4373,19 @@ function revertToSnapshot(idx) {
   const camp = getCurrentCampaign();
   if (!camp || !camp.snapshots || !camp.snapshots[idx]) return;
   const snap = camp.snapshots[idx];
-  showConfirm('ย้อนกลับเวอร์ชัน?', `จะแทนที่ข้อมูลแคมเปญตอนนี้ด้วยเวอร์ชันเมื่อ ${new Date(snap.ts).toLocaleString()} (โดย ${snap.by})\n\nหมายเหตุ: ไฟล์สื่อที่ "ฝังใน JSON" ในเวอร์ชันนั้นจะไม่กลับมา (เฉพาะที่ offload ขึ้น Drive แล้วเท่านั้นที่ยังอยู่) · ระบบจะ snapshot สถานะปัจจุบันไว้ก่อน revert`, () => {
+  // Count files in the snapshot that were 'embedded only' (had base64 data
+  // that's been stripped, never made it to Drive). After revert these will
+  // appear as broken file entries because the data field is gone forever
+  // and there's no driveFileId to fall back to. Tell the user exactly how
+  // many will be lost so they can decide instead of getting a vague hint.
+  let lostFiles = 0;
+  ((snap.data && snap.data.assets) || []).forEach(a => (a.files || []).forEach(f => {
+    if (f && f._wasEmbedded && !f.driveFileId) lostFiles++;
+  }));
+  const lossLine = lostFiles > 0
+    ? `\n\n⚠️ ไฟล์สื่อ ${lostFiles} ไฟล์ในเวอร์ชันนั้น ยังไม่ได้ขึ้น Drive และจะหายไปหลัง revert`
+    : `\n\nไฟล์สื่อที่ offload ขึ้น Drive แล้ว ยังอยู่ครบ`;
+  showConfirm('ย้อนกลับเวอร์ชัน?', `จะแทนที่ข้อมูลแคมเปญตอนนี้ด้วยเวอร์ชันเมื่อ ${new Date(snap.ts).toLocaleString()} (โดย ${snap.by})${lossLine}\n\nระบบจะ snapshot สถานะปัจจุบันไว้ก่อน revert`, () => {
     const beforeSnaps = camp.snapshots.slice();
     takeSnapshot('Auto · before revert by ' + currentUserName());
     const restored = JSON.parse(JSON.stringify(snap.data));
