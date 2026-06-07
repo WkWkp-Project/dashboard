@@ -67,6 +67,43 @@ re-runs the share loop. Or have the admin open and save any change on
 the campaign itself; saveCampaignJsonToDrive will trigger the new
 auto-share path.
 
+### ✅ Audit-round-2 hardening — DONE (6 latent issues, 3 commits)
+Picked 6 of the 8 risks surfaced in the late audit. The remaining two
+(handoff bundle size limit, presence-throttle on idle) are still in
+"พิจารณา" status per the team's call.
+
+Commit `96c7a20` — UX safety (4 micro-fixes):
+  * Token refresh on visibility return — wall-clock check on
+    `visibilitychange` forces a refresh if the throttled setTimeout
+    drifted past expiry, ending the "open a tab for 90 minutes, come
+    back, watch the next save 401" pattern.
+  * Save indicator click cooldown (4s + isSaving guard) — stops
+    indicator-mashing during a failing save from queueing N parallel
+    forceSave() calls.
+  * localStorage quota toast — second-tier `localStorage.setItem` failure
+    now surfaces a one-shot user toast instead of silently dropping the
+    backup ("⚠️ Browser storage เต็ม — เซฟ Drive ก่อน refresh").
+  * Revert dialog counts files about to be lost — scans the chosen
+    snapshot for files with `_wasEmbedded=true && !driveFileId` and
+    reports the exact number, replacing the abstract "media won't come
+    back" warning. Zero-loss case swaps to a reassuring line.
+
+Commit `0df48c3` — Snapshot bloat mitigation:
+  * `stripMediaForSnapshot` now also trims log to `SNAPSHOT_LOG_LIMIT=100`
+    so the campaign-wide log doesn't get triple-stored inside snapshots.
+  * `__diag().campaignsLoaded` reports per-campaign `payloadKB`,
+    `snapshots` count, `logEntries` count — early-warning signal before
+    save throughput degrades.
+
+Commit `e33c0ab` — Parallel media offload:
+  * `offloadEmbeddedMediaBeforeCloudSave` batched at
+    `OFFLOAD_CONCURRENCY=3`. 10-file attach drops from ~20s to ~7s.
+  * Stop semantics + uploadStatus mutations preserved exactly.
+
+Still under "พิจารณา":
+  * #5 Handoff bundle size pre-check
+  * #7 Presence heartbeat under Page Visibility API
+
 ## 🟠 Diagnosis pending — waiting on user/external input
 
 ### 4. Pat — campaign "123" recovery confirmation
