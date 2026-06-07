@@ -3394,6 +3394,62 @@ async function resolveMediaUploadDestination(workItem) {
   return '';
 }
 
+// How many media uploads to run in parallel during a cloud save. Drive's
+// per-user quota is 1000 requests / 100s, well above this. 3 is a safe
+// compromise: noticeable speed-up over the old serial loop, no risk of
+// triggering quota errors even when the admin uploads a burst of files.
+const OFFLOAD_CONCURRENCY = 3;
+
+// Upload a single work item. Mutates work.file in place (uploadStatus,
+// driveFileId, etc.) so the caller's reference stays valid. Returns a
+// tag describing the outcome so the batch loop can tally totals.
+//   'done'     → uploaded, embedded data discarded
+//   'failed'   → upload threw / returned no id / bad data
+//   'skipped'  → missing destination folder etc.
+//   'stop'     → Drive API disabled and the caller asked to stop on it
+async function _offloadSingleEmbedded(w, stopOnApiDisabled) {
+  try {
+    const dest = await resolveMediaUploadDestination(w);
+    if (!dest) {
+      w.file.uploadStatus = 'pending';
+      w.file.localOnly = true;
+      w.file.uploadError = 'Missing Campaign Folder URL';
+      return 'skipped';
+    }
+    const blob = dataUrlToBlob(w.file.data);
+    if (!blob) {
+      w.file.uploadStatus = 'failed';
+      w.file.localOnly = true;
+      w.file.uploadError = 'Invalid embedded data URL';
+      return 'failed';
+    }
+    const safeName = `${w.camp.id}__${w.asset.id}__${w.idx+1}__${(w.file.name||'file').replace(/[^\w.\-]+/g,'_')}`;
+    const res = await uploadFileToDrive(safeName, blob, dest);
+    if (!res || typeof res.id !== 'string' || !res.id) {
+      w.file.uploadStatus = 'failed';
+      w.file.localOnly = true;
+      w.file.uploadError = 'Drive upload returned no file id';
+      console.warn('Upload returned no id; keeping embedded data for', w.file.name);
+      return 'failed';
+    }
+    w.file.driveFileId = res.id;
+    w.file.size = +res.size || blob.size;
+    w.file.webViewLink = res.webViewLink || '';
+    w.file.uploadStatus = 'uploaded';
+    delete w.file.localOnly;
+    delete w.file.uploadError;
+    delete w.file.data; // shrink local state and Cloud JSON
+    return 'done';
+  } catch(e) {
+    w.file.uploadStatus = 'failed';
+    w.file.localOnly = true;
+    w.file.uploadError = e.message || String(e);
+    console.warn('offload failed for', w.file.name, e);
+    if (stopOnApiDisabled && e.driveCause === 'api-disabled') return 'stop';
+    return 'failed';
+  }
+}
+
 async function offloadEmbeddedMediaBeforeCloudSave(options = {}) {
   const { notify = false, setOut = null, stopOnApiDisabled = false } = options;
   const out = typeof setOut === 'function' ? setOut : () => {};
@@ -3406,52 +3462,20 @@ async function offloadEmbeddedMediaBeforeCloudSave(options = {}) {
     return { total:work.length, done:0, failed:0, skipped:work.length, reason:'no-token' };
   }
 
-  let done = 0, failed = 0, skipped = 0;
-  for (const w of work) {
-    out(`⏳ อัปโหลด ${done + failed + skipped + 1}/${work.length} — ${w.file.name || 'file'}`);
-    try {
-      const dest = await resolveMediaUploadDestination(w);
-      if (!dest) {
-        skipped++;
-        w.file.uploadStatus = 'pending';
-        w.file.localOnly = true;
-        w.file.uploadError = 'Missing Campaign Folder URL';
-        continue;
-      }
-      const blob = dataUrlToBlob(w.file.data);
-      if (!blob) {
-        failed++;
-        w.file.uploadStatus = 'failed';
-        w.file.localOnly = true;
-        w.file.uploadError = 'Invalid embedded data URL';
-        continue;
-      }
-      const safeName = `${w.camp.id}__${w.asset.id}__${w.idx+1}__${(w.file.name||'file').replace(/[^\w.\-]+/g,'_')}`;
-      const res = await uploadFileToDrive(safeName, blob, dest);
-      // Safety: only discard embedded base64 once a real Drive pointer exists.
-      if (!res || typeof res.id !== 'string' || !res.id) {
-        failed++;
-        w.file.uploadStatus = 'failed';
-        w.file.localOnly = true;
-        w.file.uploadError = 'Drive upload returned no file id';
-        console.warn('Upload returned no id; keeping embedded data for', w.file.name);
-        continue;
-      }
-      w.file.driveFileId = res.id;
-      w.file.size = +res.size || blob.size;
-      w.file.webViewLink = res.webViewLink || '';
-      w.file.uploadStatus = 'uploaded';
-      delete w.file.localOnly;
-      delete w.file.uploadError;
-      delete w.file.data; // shrink local state and Cloud JSON
-      done++;
-    } catch(e) {
-      failed++;
-      w.file.uploadStatus = 'failed';
-      w.file.localOnly = true;
-      w.file.uploadError = e.message || String(e);
-      console.warn('offload failed for', w.file.name, e);
-      if (stopOnApiDisabled && e.driveCause === 'api-disabled') { out('❌ Drive API ปิดอยู่ — หยุด offload'); break; }
+  // Parallel offload in fixed-size batches. The previous serial loop made
+  // an admin with 10 files wait ~20s while the UI sat at 'Saving...' with
+  // no perceived progress; OFFLOAD_CONCURRENCY=3 cuts that to ~7s without
+  // saturating Drive's per-user quota.
+  let done = 0, failed = 0, skipped = 0, stopped = false;
+  for (let i = 0; i < work.length && !stopped; i += OFFLOAD_CONCURRENCY) {
+    const batch = work.slice(i, i + OFFLOAD_CONCURRENCY);
+    out(`⏳ อัปโหลด ${i + 1}-${i + batch.length}/${work.length}`);
+    const results = await Promise.all(batch.map(w => _offloadSingleEmbedded(w, stopOnApiDisabled)));
+    for (const r of results) {
+      if (r === 'done') done++;
+      else if (r === 'skipped') skipped++;
+      else if (r === 'stop') { failed++; stopped = true; out('❌ Drive API ปิดอยู่ — หยุด offload'); }
+      else failed++;
     }
   }
   if (done > 0) hub.updatedAt = new Date().toISOString();
