@@ -4347,10 +4347,22 @@ function normalizeCampaign(c) {
 // ============================================================================
 const MAX_SNAPSHOTS = 3;
 function currentUserName() { return (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Unknown'; }
+// Maximum log entries to keep INSIDE a snapshot. The campaign's live log
+// can grow unboundedly (every save/edit appends one entry); without this
+// cap, each snapshot drags a copy of the full history and three snapshots
+// could triple-store thousands of log lines inside the Drive JSON payload.
+// 100 covers a normal admin's last week of activity — older entries stay
+// in the LIVE camp.log, just not duplicated into every snapshot.
+const SNAPSHOT_LOG_LIMIT = 100;
 function stripMediaForSnapshot(camp) {
   // Deep clone without the heavy base64 blobs (keep driveFileId so offloaded media survives a revert)
   const clone = JSON.parse(JSON.stringify({ ...camp, snapshots: undefined }));
   (clone.assets || []).forEach(a => (a.files || []).forEach(f => { if (f.data) { f._wasEmbedded = true; delete f.data; } }));
+  // Trim historical log to bound payload growth. Snapshots are for content
+  // recovery, not full audit history — the live campaign.log keeps everything.
+  if (Array.isArray(clone.log) && clone.log.length > SNAPSHOT_LOG_LIMIT) {
+    clone.log = clone.log.slice(0, SNAPSHOT_LOG_LIMIT);
+  }
   return clone;
 }
 function takeSnapshot(label) {
@@ -7640,13 +7652,25 @@ window.__diag = function () {
         stripped: !!bk.stripped
       };
     })(),
-    campaignsLoaded: campaigns.map(c => ({
-      id: c.id, name: c.campaign, client: c.client,
-      hasDriveFolder: !!c.driveFolderId,
-      hasDriveDbFile: !!c.driveDbFileId,
-      assets: (c.assets || []).length,
-      lastModified: c.driveDbModifiedTime
-    })),
+    campaignsLoaded: campaigns.map(c => {
+      // Approximate Drive-payload size per campaign so we can spot bloat
+      // (snapshots, large log, etc.) before it causes save-slowness.
+      let payloadKB = 0;
+      try {
+        const safe = (typeof campaignDriveJsonPayload === 'function') ? campaignDriveJsonPayload(c) : { campaign: c };
+        payloadKB = Math.round(JSON.stringify(safe).length / 1024);
+      } catch(e) {}
+      return {
+        id: c.id, name: c.campaign, client: c.client,
+        hasDriveFolder: !!c.driveFolderId,
+        hasDriveDbFile: !!c.driveDbFileId,
+        assets: (c.assets || []).length,
+        snapshots: (c.snapshots || []).length,
+        logEntries: (c.log || []).length,
+        payloadKB, // >1000 KB starts to hurt save throughput
+        lastModified: c.driveDbModifiedTime
+      };
+    }),
     adminMembers,
     allMembers
   };
