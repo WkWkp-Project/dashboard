@@ -639,17 +639,29 @@
     </div>
 
     <div class="nav-section">
-      <div class="nav-label collapsible" id="members-drawer-label" onclick="toggleMembersDrawer(event)">
+      <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member (ครอบทุกกลุ่ม)..." oninput="onMemberSearch(this.value)" />
+
+      <div class="nav-label collapsible" id="team-drawer-label" onclick="toggleMembersDrawer(event, 'team')">
         <span class="nav-label-left">
           <span class="nav-chevron">▾</span>
-          <span>Members</span>
-          <span class="nav-count" id="members-count">0</span>
+          <span>🛠 Team</span>
+          <span class="nav-count" id="team-count">0</span>
         </span>
-        <button class="add-btn" onclick="event.stopPropagation(); openAddMemberModal()" title="เพิ่ม member (อีเมลลูกค้า)">+</button>
+        <button class="add-btn" onclick="event.stopPropagation(); openAddMemberModal()" title="เพิ่ม member (admin/editor/operation/customer)">+</button>
       </div>
-      <div class="nav-drawer" id="members-drawer">
-        <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member..." oninput="onMemberSearch(this.value)" />
-        <div id="member-list-nav"></div>
+      <div class="nav-drawer" id="team-drawer">
+        <div id="team-list-nav"></div>
+      </div>
+
+      <div class="nav-label collapsible collapsed" id="customer-drawer-label" onclick="toggleMembersDrawer(event, 'customer')" style="margin-top:8px;">
+        <span class="nav-label-left">
+          <span class="nav-chevron">▾</span>
+          <span>👁 Customers</span>
+          <span class="nav-count" id="customer-count">0</span>
+        </span>
+      </div>
+      <div class="nav-drawer collapsed" id="customer-drawer">
+        <div id="customer-list-nav"></div>
       </div>
     </div>
 
@@ -4868,45 +4880,99 @@ function toggleMemberCard(email) {
   }
 }
 
-const MEMBERS_DRAWER_KEY = 'wakuwaku_members_drawer_collapsed';
-function toggleMembersDrawer(ev) {
+// Members are split into two drawers so the sidebar reads cleanly:
+//   Team = admin / editor / operation (people who can edit the system)
+//   Customer = customer / viewer / orphan (people who only view their work)
+// Each drawer has its own collapsed state persisted in localStorage.
+// Defaults: Team open, Customer collapsed (admin's frequent path stays
+// 1-click; customers stay tucked away until needed).
+const TEAM_ROLES = new Set(['admin', 'editor', 'operation']);
+const DRAWER_KEYS = {
+  team:     { storage: 'wakuwaku_team_drawer_collapsed',     defaultCollapsed: false },
+  customer: { storage: 'wakuwaku_customer_drawer_collapsed', defaultCollapsed: true  }
+};
+function _drawerEls(kind) {
+  return {
+    label:  document.getElementById(kind + '-drawer-label'),
+    drawer: document.getElementById(kind + '-drawer'),
+    count:  document.getElementById(kind + '-count')
+  };
+}
+function toggleMembersDrawer(ev, kind) {
   if (ev) ev.stopPropagation();
-  const label = document.getElementById('members-drawer-label');
-  const drawer = document.getElementById('members-drawer');
+  const { label, drawer } = _drawerEls(kind);
   if (!label || !drawer) return;
   const collapsed = !label.classList.contains('collapsed');
   label.classList.toggle('collapsed', collapsed);
   drawer.classList.toggle('collapsed', collapsed);
-  try { localStorage.setItem(MEMBERS_DRAWER_KEY, collapsed ? '1' : '0'); } catch(e) {}
+  try { localStorage.setItem(DRAWER_KEYS[kind].storage, collapsed ? '1' : '0'); } catch(e) {}
 }
 function initMembersDrawer() {
-  const label = document.getElementById('members-drawer-label');
-  const drawer = document.getElementById('members-drawer');
-  if (!label || !drawer) return;
-  let collapsed = false;
-  try {
-    const saved = localStorage.getItem(MEMBERS_DRAWER_KEY);
-    if (saved === '1') collapsed = true;
-    else if (saved === null) {
-      // First-time default: collapsed when list is long enough to feel cluttered.
-      collapsed = (members || []).length >= 6;
-    }
-  } catch(e) {}
-  label.classList.toggle('collapsed', collapsed);
-  drawer.classList.toggle('collapsed', collapsed);
+  Object.keys(DRAWER_KEYS).forEach(kind => {
+    const { label, drawer } = _drawerEls(kind);
+    if (!label || !drawer) return;
+    let collapsed = DRAWER_KEYS[kind].defaultCollapsed;
+    try {
+      const saved = localStorage.getItem(DRAWER_KEYS[kind].storage);
+      if (saved === '1') collapsed = true;
+      else if (saved === '0') collapsed = false;
+      // null → keep the defaultCollapsed above
+    } catch(e) {}
+    label.classList.toggle('collapsed', collapsed);
+    drawer.classList.toggle('collapsed', collapsed);
+  });
 }
-function updateMembersCount(n) {
-  const el = document.getElementById('members-count');
-  if (el) el.textContent = String(n);
+function updateMembersCount(kind, n) {
+  const { count } = _drawerEls(kind);
+  if (count) count.textContent = String(n);
 }
 
-function renderMemberNav() {
-  const nav = document.getElementById('member-list-nav');
-  if (!nav) return;
-  nav.innerHTML = '';
-  // Build visible list: admin sees everyone; non-admin members only see self.
-  // Also auto-include any clientEmails that appear in campaigns but aren't in
-  // `members` yet (e.g. legacy migration) so admin can still navigate to them.
+// Build a single member card DOM node — same look in both drawers.
+function _renderMemberCard(m) {
+  const myCamps = isAdmin ? campaigns.filter(c => (c.clientEmail || '') === m.email) : campaigns.slice();
+  const expanded = m.email === currentMemberEmail;
+  const card = document.createElement('div');
+  card.className = 'member-card' + (expanded ? ' expanded' : '');
+
+  const head = document.createElement('div');
+  head.className = 'member-card-head';
+  head.onclick = (e) => { if (e.target.closest('.member-edit')) return; toggleMemberCard(m.email); };
+  const editBtn = isAdmin && !m._orphan ? `<button class="member-edit" title="Edit member" onclick="event.stopPropagation(); openEditMember('${escapeHtml(m.email)}')">✎</button>` : '';
+  const roleBadge = (isAdmin && m.role && !m._orphan) ? `<span class="member-role-badge">${escapeHtml(String(m.role).toUpperCase())}</span>` : '';
+  head.innerHTML =
+    `<span class="member-chevron">${expanded ? '▾' : '▸'}</span>` +
+    `<span class="member-card-info"><strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${myCamps.length} CAMP</small></span>` +
+    roleBadge + editBtn;
+  card.appendChild(head);
+
+  if (expanded) {
+    const body = document.createElement('div');
+    body.className = 'member-card-body';
+    if (myCamps.length) {
+      myCamps.forEach(c => {
+        const ci = document.createElement('div');
+        ci.className = 'camp-list-item' + (c.id === currentCampaignId ? ' active' : '');
+        ci.onclick = (e) => { e.stopPropagation(); currentCampaignId = c.id; renderEverything(); switchView('overview'); };
+        ci.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${escapeHtml(c.client || '—')} · ${c.assets.length} ASSETS</small>`;
+        body.appendChild(ci);
+      });
+    } else {
+      body.innerHTML = '<div class="member-empty">ยังไม่มีแคมเปญใต้ member นี้</div>';
+    }
+    if (controlCan('createCampaign')) {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'member-add-camp';
+      addBtn.textContent = '+ Add campaign';
+      addBtn.onclick = (e) => { e.stopPropagation(); openAddCampaignModal(); };
+      body.appendChild(addBtn);
+    }
+    card.appendChild(body);
+  }
+  return card;
+}
+
+// Build the full visible roster + orphan campaigns merged into one list.
+function _buildVisibleMemberList() {
   let list = isAdmin
     ? members.slice()
     : members.filter(m => m.email === currentUserEmail);
@@ -4924,59 +4990,35 @@ function renderMemberNav() {
     list = list.filter(m => (m.name || '').toLowerCase().includes(memberSearchQuery) || m.email.toLowerCase().includes(memberSearchQuery));
   }
   list.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
-  if (list.length === 0) {
-    nav.innerHTML = memberSearchQuery
-      ? '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ไม่พบ member ที่ค้นหา</div>'
-      : (isAdmin
-        ? '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ยังไม่มี member — กด + เพิ่ม</div>'
-        : '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">No campaigns assigned to you</div>');
-    return;
+  return list;
+}
+
+// Render the two drawers (team / customer) from the same source list.
+//   Team     = role admin / editor / operation
+//   Customer = role customer / viewer / orphan (no doc) / anything else
+function renderMemberNav() {
+  const teamNav = document.getElementById('team-list-nav');
+  const custNav = document.getElementById('customer-list-nav');
+  if (!teamNav || !custNav) return;
+  teamNav.innerHTML = '';
+  custNav.innerHTML = '';
+  const list = _buildVisibleMemberList();
+  const team = [], cust = [];
+  list.forEach(m => (m.role && TEAM_ROLES.has(m.role) ? team : cust).push(m));
+
+  const emptyMsg = (text) => `<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">${text}</div>`;
+  if (team.length === 0) {
+    teamNav.innerHTML = emptyMsg(memberSearchQuery ? 'ไม่พบในกลุ่ม Team' : (isAdmin ? 'ยังไม่มีสมาชิกทีม' : 'No team access'));
+  } else {
+    team.forEach(m => teamNav.appendChild(_renderMemberCard(m)));
   }
-  list.forEach(m => {
-    // Admin groups campaigns by the member's email; a non-admin sees their full
-    // visible set (own + assigned) under their single card.
-    const myCamps = isAdmin ? campaigns.filter(c => (c.clientEmail || '') === m.email) : campaigns.slice();
-    const expanded = m.email === currentMemberEmail;
-    const card = document.createElement('div');
-    card.className = 'member-card' + (expanded ? ' expanded' : '');
-
-    const head = document.createElement('div');
-    head.className = 'member-card-head';
-    head.onclick = (e) => { if (e.target.closest('.member-edit')) return; toggleMemberCard(m.email); };
-    const editBtn = isAdmin && !m._orphan ? `<button class="member-edit" title="Edit member" onclick="event.stopPropagation(); openEditMember('${escapeHtml(m.email)}')">✎</button>` : '';
-    const roleBadge = (isAdmin && m.role && !m._orphan) ? `<span class="member-role-badge">${escapeHtml(String(m.role).toUpperCase())}</span>` : '';
-    head.innerHTML =
-      `<span class="member-chevron">${expanded ? '▾' : '▸'}</span>` +
-      `<span class="member-card-info"><strong>${escapeHtml(m.name || m.email)}</strong><small>${escapeHtml(m.email)} · ${myCamps.length} CAMP</small></span>` +
-      roleBadge + editBtn;
-    card.appendChild(head);
-
-    if (expanded) {
-      const body = document.createElement('div');
-      body.className = 'member-card-body';
-      if (myCamps.length) {
-        myCamps.forEach(c => {
-          const ci = document.createElement('div');
-          ci.className = 'camp-list-item' + (c.id === currentCampaignId ? ' active' : '');
-          ci.onclick = (e) => { e.stopPropagation(); currentCampaignId = c.id; renderEverything(); switchView('overview'); };
-          ci.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${escapeHtml(c.client || '—')} · ${c.assets.length} ASSETS</small>`;
-          body.appendChild(ci);
-        });
-      } else {
-        body.innerHTML = '<div class="member-empty">ยังไม่มีแคมเปญใต้ member นี้</div>';
-      }
-      if (controlCan('createCampaign')) {
-        const addBtn = document.createElement('button');
-        addBtn.className = 'member-add-camp';
-        addBtn.textContent = '+ Add campaign';
-        addBtn.onclick = (e) => { e.stopPropagation(); openAddCampaignModal(); };
-        body.appendChild(addBtn);
-      }
-      card.appendChild(body);
-    }
-    nav.appendChild(card);
-  });
-  updateMembersCount(list.length);
+  if (cust.length === 0) {
+    custNav.innerHTML = emptyMsg(memberSearchQuery ? 'ไม่พบในกลุ่ม Customer' : (isAdmin ? 'ยังไม่มีลูกค้า — กด + เพิ่ม' : 'No assigned customers'));
+  } else {
+    cust.forEach(m => custNav.appendChild(_renderMemberCard(m)));
+  }
+  updateMembersCount('team', team.length);
+  updateMembersCount('customer', cust.length);
   if (!renderMemberNav._inited) { renderMemberNav._inited = true; initMembersDrawer(); }
 }
 
@@ -8398,15 +8440,47 @@ window.__runTests = async function() {
     if (!wasHidden) b.classList.remove('hidden'); // restore prior state
     ok(shown && reHidden);
   });
-  t('members drawer DOM + helpers exist', () => ok(document.getElementById('members-drawer') && document.getElementById('members-drawer-label') && typeof toggleMembersDrawer === 'function' && typeof initMembersDrawer === 'function'));
-  t('members drawer toggle flips collapsed class', () => {
-    const label = document.getElementById('members-drawer-label');
-    const drawer = document.getElementById('members-drawer');
-    const wasCollapsed = label.classList.contains('collapsed');
-    toggleMembersDrawer();
-    const flipped = label.classList.contains('collapsed') !== wasCollapsed && drawer.classList.contains('collapsed') === label.classList.contains('collapsed');
-    if (label.classList.contains('collapsed') !== wasCollapsed) toggleMembersDrawer(); // restore
-    ok(flipped);
+  t('split member drawers (team + customer) DOM + helpers exist', () => {
+    ok(document.getElementById('team-drawer') && document.getElementById('team-drawer-label')
+       && document.getElementById('customer-drawer') && document.getElementById('customer-drawer-label')
+       && document.getElementById('team-list-nav') && document.getElementById('customer-list-nav')
+       && document.getElementById('team-count') && document.getElementById('customer-count')
+       && typeof toggleMembersDrawer === 'function' && typeof initMembersDrawer === 'function'
+       && typeof TEAM_ROLES !== 'undefined' && TEAM_ROLES.has('admin'));
+  });
+  t('toggleMembersDrawer flips the requested kind only', () => {
+    const teamL = document.getElementById('team-drawer-label');
+    const teamD = document.getElementById('team-drawer');
+    const custL = document.getElementById('customer-drawer-label');
+    const custD = document.getElementById('customer-drawer');
+    const t0 = teamL.classList.contains('collapsed');
+    const c0 = custL.classList.contains('collapsed');
+    toggleMembersDrawer(null, 'team');
+    const teamFlipped = teamL.classList.contains('collapsed') !== t0 && teamD.classList.contains('collapsed') === teamL.classList.contains('collapsed');
+    const custUntouched = custL.classList.contains('collapsed') === c0 && custD.classList.contains('collapsed') === custL.classList.contains('collapsed') === c0 || true;
+    // restore team
+    if (teamL.classList.contains('collapsed') !== t0) toggleMembersDrawer(null, 'team');
+    ok(teamFlipped, 'team drawer should flip');
+    ok(custL.classList.contains('collapsed') === c0, 'customer drawer should NOT flip when toggling team');
+  });
+  t('renderMemberNav splits team vs customer correctly', () => {
+    const sv = { members: members.slice(), campaigns: campaigns.slice(), isAdmin };
+    isAdmin = true;
+    members = [
+      { email: 'admin1@x.y', role: 'admin', campaignFolderIds: [] },
+      { email: 'editor1@x.y', role: 'editor', campaignFolderIds: [] },
+      { email: 'op1@x.y', role: 'operation', campaignFolderIds: [] },
+      { email: 'cust1@x.y', role: 'customer', campaignFolderIds: [] },
+      { email: 'view1@x.y', role: 'viewer', campaignFolderIds: [] }
+    ];
+    campaigns = [];
+    renderMemberNav();
+    const teamCount = +document.getElementById('team-count').textContent;
+    const custCount = +document.getElementById('customer-count').textContent;
+    members = sv.members; campaigns = sv.campaigns; isAdmin = sv.isAdmin;
+    renderMemberNav();
+    ok(teamCount === 3, `expected 3 team members (admin/editor/operation), got ${teamCount}`);
+    ok(custCount === 2, `expected 2 customers (customer/viewer), got ${custCount}`);
   });
   t('Add Campaign modal requires Drive URL field', () => ok(document.getElementById('newCampaignDriveUrl')));
   t('Add Member modal no longer has Drive URL field', () => ok(!document.getElementById('newMemberDriveUrl')));
