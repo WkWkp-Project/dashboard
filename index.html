@@ -357,6 +357,9 @@
   .cal-detail-prompt { font-style:italic; color:var(--muted); background:var(--paper-2); padding:8px 10px; border-radius:4px; border-left:2px solid var(--gold); }
   .modal-x { background:transparent; border:none; font-size:18px; color:var(--muted); cursor:pointer; padding:4px 8px; line-height:1; }
   .modal-x:hover { color:var(--ink); }
+  /* Stable reference-id pill on each asset row + modal title. */
+  .asset-ref-id { font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:0.5px; color:var(--ink); background:var(--paper-2); border:1px solid var(--line); padding:2px 6px; border-radius:3px; cursor:pointer; user-select:all; display:inline-block; }
+  .asset-ref-id:hover { background:var(--paper-3); border-color:var(--ink-3); }
 
   /* Access control */
   .access-table { width:100%; border-collapse:collapse; min-width: 0;}
@@ -872,6 +875,7 @@
         <table>
           <thead>
             <tr id="table-header-row">
+              <th style="width: 92px;">ID</th>
               <th style="width: 140px;">Category</th>
               <th style="min-width: 250px;">Topic &amp; Image Prompt</th>
               <th style="width: 100px;">Asset</th>
@@ -5325,10 +5329,16 @@ function renderAssets() {
   const tbody = document.getElementById('asset-tbody');
   tbody.innerHTML = '';
   if (!camp || camp.assets.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:32px; color:var(--muted); font-size:12px;">No assets yet · คลิก "Add New Asset" เพื่อเริ่ม</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--muted); font-size:12px;">No assets yet · คลิก "Add New Asset" เพื่อเริ่ม</td></tr>';
     return;
   }
   const isLocked = (camp.status === 'handed-off') || (userRole === 'client');
+  // Stamp each asset with a unique short reference id (e.g. #A-X9K3M).
+  // Derivation is deterministic from asset.id so the label never changes,
+  // even after siblings are deleted or reordered. Stored only on the
+  // in-memory copy via _displayId — never persisted to Drive.
+  uniqueShortIds(camp.assets, a => a.id, 'A');
+  const campLabel = shortId(camp.id, 'C');
   camp.assets.forEach(a => {
     const tr = document.createElement('tr');
     const d = new Date(a.createdAt || a.date);
@@ -5364,7 +5374,12 @@ function renderAssets() {
       else body = `<span class="prev-icon">📄</span>`;
       previewHTML = `<button class="creative-prev" onclick="openMediaViewer('${a.id}')" title="ดู/ขยาย creative ที่แนบไว้" data-asset="${a.id}" data-fileidx="${allFiles.indexOf(previewFile)}">${body}${more}</button>`;
     }
+    const fullRef = `${campLabel} / ${a._displayId}`;
     tr.innerHTML = `
+      <td>
+        <span class="asset-ref-id" title="Reference ID — stable + unique. Copy this for handoff / ticket / chat: ${escapeHtml(fullRef)}" onclick="copyAssetRefId(this, '${escapeHtml(fullRef)}')">${escapeHtml(a._displayId)}</span>
+        <small style="display:block; font-family:'Geist Mono',monospace; font-size:9px; color:var(--muted-2); margin-top:2px;">${escapeHtml(campLabel)}</small>
+      </td>
       <td><span class="cat-pill ${a.catClass}">${escapeHtml(a.catLabel || a.catClass.toUpperCase())}</span>${sched ? '<br>'+sched : ''}</td>
       <td class="topic-cell">
         <strong><span class="h-tag">H2</span>${escapeHtml(a.h2 || '—')}</strong>
@@ -5402,6 +5417,47 @@ function renderAssets() {
 }
 
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Human-friendly short reference ID derived from the internal record id.
+// Internal ids are 'asset-' / 'camp-' + Date.now() + 5 random chars, so the
+// last 5 chars are random — uppercased and prefixed they make a stable,
+// referenceable label like '#A-X9K3M'. Stability comes for free because
+// the internal id never changes after creation; uniqueness inherits from
+// the underlying Math.random + millisecond timestamp.
+function shortId(id, prefix) {
+  const tail = String(id || '').slice(-5).toUpperCase();
+  return tail ? (prefix + '-' + tail) : '';
+}
+// Render-time uniqueness check. If two records happen to collide on their
+// last-5 tail (probability ~0.000003% inside a typical campaign), extend
+// the colliding ones to 6 chars. Pure derivation, no state stored.
+// Click-to-copy the full reference id ('C-XXXX / A-YYYYY') to the clipboard
+// so a user can paste it into chat / ticket / email without retyping.
+// Falls back silently if clipboard API is unavailable (older browsers,
+// non-https origin) — the title attribute still shows the value.
+function copyAssetRefId(el, fullRef) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullRef);
+      if (typeof showToast === 'function') showToast('📋 คัดลอกแล้ว: ' + fullRef, 'ok');
+    }
+  } catch(e) { /* clipboard not available — title attr still shows the value */ }
+}
+function uniqueShortIds(items, getId, prefix) {
+  const seen = new Map();
+  items.forEach(it => {
+    const fullId = getId(it);
+    if (!fullId) { it._displayId = ''; return; }
+    let n = 5;
+    let short = prefix + '-' + fullId.slice(-n).toUpperCase();
+    while (seen.has(short) && seen.get(short) !== fullId && n < fullId.length) {
+      n++;
+      short = prefix + '-' + fullId.slice(-n).toUpperCase();
+    }
+    seen.set(short, fullId);
+    it._displayId = short;
+  });
+}
 function truncate(s, n) { s = String(s||''); return s.length > n ? s.slice(0,n)+'…' : s; }
 
 // ============================================================================
@@ -5710,7 +5766,9 @@ function editAsset(id) {
   editingAssetId = id;
   pendingFiles = (a.files || []).map(f => ({ ...f }));
   pendingLinks = (a.links && a.links.length) ? a.links.slice() : (a.link ? [a.link] : []);
-  document.getElementById('asset-modal-title').textContent = 'Edit Asset';
+  // Reference id in the modal title so the admin always knows which asset
+  // they're editing — handy for cross-window / handoff conversations.
+  document.getElementById('asset-modal-title').textContent = 'Edit Asset · ' + shortId(a.id, 'A');
   document.getElementById('asset-cat').value = a.catClass;
   document.getElementById('asset-type').value = a.assetType || 'image';
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
@@ -6272,7 +6330,10 @@ function openCalendarEventModal(campaignId, assetId) {
   }
   _calModalCtx = { campaignId, assetId };
   if (openBtn) openBtn.style.display = '';
-  title.textContent = camp.campaign || camp.id;
+  // Title shows campaign name + reference id; the id is selectable so the
+  // admin can copy it straight into chat/ticket/email for handoff.
+  const refLabel = `${shortId(camp.id, 'C')} / ${shortId(asset.id, 'A')}`;
+  title.innerHTML = `${escapeHtml(camp.campaign || camp.id)} <span class="asset-ref-id" style="margin-left:8px; font-size:11px; vertical-align:middle;" title="Reference ID — copy this for handoff: ${escapeHtml(refLabel)}" onclick="copyAssetRefId(this, '${escapeHtml(refLabel)}')">${escapeHtml(refLabel)}</span>`;
   const catLabel = (camp.schema && asset.catClass && camp.schema[asset.catClass] && camp.schema[asset.catClass].label) || asset.catLabel || asset.catClass || '';
   const sched = asset.scheduledDate ? new Date(asset.scheduledDate).toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' }) : '—';
   const row = (label, value) => value
@@ -7873,7 +7934,9 @@ window.__diag = function () {
         payloadKB = Math.round(JSON.stringify(safe).length / 1024);
       } catch(e) {}
       return {
-        id: c.id, name: c.campaign, client: c.client,
+        id: c.id,
+        ref: (typeof shortId === 'function') ? shortId(c.id, 'C') : '',
+        name: c.campaign, client: c.client,
         hasDriveFolder: !!c.driveFolderId,
         hasDriveDbFile: !!c.driveDbFileId,
         assets: (c.assets || []).length,
@@ -8574,6 +8637,37 @@ window.__runTests = async function() {
     ok(teamFlipped, 'team drawer should flip');
     ok(custL.classList.contains('collapsed') === c0, 'customer drawer should NOT flip when toggling team');
   });
+  // Reference-id system: stable, derive from auto-generated internal id,
+  // visible in asset table + modal + calendar for handoff communication.
+  t('shortId derives a stable label from internal id', () => {
+    ok(shortId('asset-1735632000456-XYZ9A', 'A') === 'A-XYZ9A', `got ${shortId('asset-1735632000456-XYZ9A','A')}`);
+    ok(shortId('camp-1735632000-abcde', 'C') === 'C-ABCDE');
+    ok(shortId('', 'A') === '');
+    ok(shortId(null, 'A') === '');
+  });
+  t('uniqueShortIds extends suffix on collision (rare but covered)', () => {
+    // Two ids whose last 5 chars are identical → must extend.
+    const items = [
+      { id: 'asset-1735632000456-XYZ9A' },
+      { id: 'asset-1735632000999-XYZ9A' }, // same trailing 5
+      { id: 'asset-1735632001111-ABCDE' }
+    ];
+    uniqueShortIds(items, x => x.id, 'A');
+    ok(items[0]._displayId !== items[1]._displayId, 'colliding ids must produce different display ids');
+    ok(items[2]._displayId === 'A-ABCDE');
+  });
+  t('uniqueShortIds is idempotent for the same id (no false collision)', () => {
+    const items = [{ id: 'asset-1-XYZ9A' }, { id: 'asset-1-XYZ9A' }];
+    uniqueShortIds(items, x => x.id, 'A');
+    // Same source id → same display id; the map sees it as the SAME entry.
+    ok(items[0]._displayId === items[1]._displayId);
+  });
+  t('asset table header now has 7 columns (ID added)', () => {
+    const ths = document.querySelectorAll('#table-header-row th');
+    ok(ths.length === 7, `expected 7 header cells, got ${ths.length}`);
+    ok(ths[0].textContent.trim() === 'ID');
+  });
+  t('copyAssetRefId defined', () => ok(typeof copyAssetRefId === 'function'));
   t('calendar event modal DOM + helpers exist', () => {
     ok(document.getElementById('calEventModal') &&
        document.getElementById('cal-modal-body') &&
