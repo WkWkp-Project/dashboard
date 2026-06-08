@@ -2414,11 +2414,24 @@ function maybeOfferLocalRestore() {
   if (!backupHasData) return;
   if (!driveEmpty && !localIsNewer) return;
   const when = new Date(bk.ts).toLocaleString();
-  const reason = driveEmpty
-    ? 'Drive ไม่มีข้อมูล'
-    : `งานในเครื่องใหม่กว่า Drive (Drive: ${lastSaveTime ? lastSaveTime.toLocaleString() : 'ไม่ทราบ'})`;
-  showConfirm('💾 พบ backup ในเครื่อง',
-    `${reason} · backup นี้บันทึก ${when} (โดย ${bk.by || '?'})${bk.stripped ? '\n\n⚠️ backup นี้ไม่มีไฟล์สื่อที่ฝัง (offloaded media ยังอยู่)' : ''}\n\nกู้คืนข้อมูลจาก backup นี้?`,
+  // Make the dialog body explicit about what happens on Confirm vs. on Cancel
+  // so the admin can decide consciously instead of dismissing reflexively.
+  // Multi-user test feedback: people were closing the dialog without realizing
+  // it was the only way to push their un-uploaded work to Drive.
+  const driveTimeLine = lastSaveTime
+    ? `\n   📂 Drive ล่าสุด: ${lastSaveTime.toLocaleString()}`
+    : '';
+  const stripNote = bk.stripped
+    ? '\n\nหมายเหตุ: ไฟล์สื่อที่ฝัง (base64) ไม่ได้ถูกเก็บใน backup นี้ — รูป/วิดีโอที่ offload ขึ้น Drive แล้วยังอยู่ปกติ'
+    : '';
+  showConfirm('💾 ยืนยันเพื่อกู้คืนงานในเครื่อง',
+`พบ backup ในเครื่องนี้ที่ยังไม่ได้ขึ้น Drive
+   🕒 เครื่อง: ${when}
+   👤 โดย: ${bk.by || '?'}${driveTimeLine}
+
+✅ กด "Confirm" = เอาข้อมูลในเครื่องใส่กลับเข้าระบบ + อัปขึ้น Drive ทันที (เพื่อนทีมจะเห็น)
+
+⚠️ กดปิด / ไม่ยืนยัน = ใช้ข้อมูลที่อยู่บน Drive (เก่ากว่า) · งานในเครื่องที่ค้างนี้จะถูกเขียนทับและหายไปถาวร เมื่อเริ่มแก้งานครั้งต่อไป${stripNote}`,
     () => { restoreFromLocalBackup(); });
 }
 function restoreFromLocalBackup() {
