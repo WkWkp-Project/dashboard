@@ -3350,8 +3350,24 @@ async function ensureMediaFolder() {
 // Drive once per session per campaign. Never deletes or moves anything —
 // switching Campaign Folder URL just invalidates the cache; old files keep
 // loading because asset.files[k].driveFileId is folder-agnostic.
+// Single-flight cache for in-progress ensure calls. Without this, the
+// parallel media offload (OFFLOAD_CONCURRENCY=3) can fire 3 simultaneous
+// ensureCampaignMediaFolder calls for the same campaign — each one sees
+// camp.mediaFolderId still empty, all three reach the CREATE branch, and
+// the customer's Drive ends up with 3 duplicate 'wakuwaku-media-{id}'
+// folders. Files still upload successfully (driveFileId works regardless
+// of parent folder) but the Drive view is messy. With the cache, the
+// later callers await the first one's promise and reuse its folder id.
+const _ensureFolderInFlight = new Map();
 async function ensureCampaignMediaFolder(camp) {
   if (!camp || !camp.driveFolderId) throw new Error('ต้องกรอก Client Drive Folder URL ของแคมเปญนี้ก่อน');
+  if (_ensureFolderInFlight.has(camp.id)) return _ensureFolderInFlight.get(camp.id);
+  const p = _doEnsureCampaignMediaFolder(camp);
+  _ensureFolderInFlight.set(camp.id, p);
+  try { return await p; }
+  finally { _ensureFolderInFlight.delete(camp.id); }
+}
+async function _doEnsureCampaignMediaFolder(camp) {
   // Per-campaign subfolder name so two campaigns sharing the same client
   // Drive folder don't collide in `media/`. Old campaigns without an id-suffix
   // folder keep working via their cached mediaFolderId.
@@ -8166,6 +8182,37 @@ window.__runTests = async function() {
   t('saveToDrive throws when any dirty campaign lacks driveFolderId (source guard)', () => {
     const src = saveToDrive.toString();
     ok(/dirtyMissingFolder/.test(src), 'missing dirtyMissingFolder check');
+  });
+  t('ensureCampaignMediaFolder is single-flight per campaign (no duplicate folder creates)', async () => {
+    // Reproduce the race: 3 parallel calls for the same campaign with no
+    // cached mediaFolderId. Without single-flight, all 3 reach CREATE.
+    const svFetch = window.authFetch;
+    let createPosts = 0;
+    let folderIdCounter = 0;
+    window.authFetch = async (url, opts) => {
+      if (url.endsWith('/files?fields=id') && opts?.method === 'POST') {
+        createPosts++;
+        // Simulate Drive latency so calls actually overlap
+        await new Promise(r => setTimeout(r, 20));
+        return new Response(JSON.stringify({ id: 'FOLDER-' + (++folderIdCounter) }));
+      }
+      if (/q=name/.test(url) || /q=.*folder/.test(url)) return new Response(JSON.stringify({ files: [] }));
+      return new Response(JSON.stringify({}));
+    };
+    const svToken = accessToken; accessToken = 'fake';
+    const fakeCamp = { id: 'race-test', driveFolderId: 'F-PARENT', mediaFolderId: '' };
+    let results;
+    try {
+      results = await Promise.all([
+        ensureCampaignMediaFolder(fakeCamp),
+        ensureCampaignMediaFolder(fakeCamp),
+        ensureCampaignMediaFolder(fakeCamp)
+      ]);
+    } finally {
+      window.authFetch = svFetch; accessToken = svToken;
+    }
+    ok(createPosts === 1, `expected 1 folder create, got ${createPosts}`);
+    ok(results[0] === results[1] && results[1] === results[2], 'all callers should resolve to the same folder id');
   });
   t('saveToDrive integration: dirty no-folder campaign throws, does NOT silently save siblings', async () => {
     // Full repro of the silent-data-loss bug. Setup an admin with two
