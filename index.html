@@ -343,10 +343,20 @@
   .cal-cell.today { background: #FFF8E8;}
   .cal-cell.today .cal-day-num { color: var(--accent); font-weight:700;}
   .cal-day-num { font-family:'Geist Mono',monospace; font-size:11px; color:var(--muted); margin-bottom:4px;}
-  .cal-event { font-size:10px; padding:2px 5px; border-radius:2px; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer;}
+  .cal-event { font-size:10px; padding:2px 5px; border-radius:2px; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; line-height:1.4;}
   .cal-event.catch { background:var(--catch-bg); color:var(--catch);}
   .cal-event.connect { background:var(--connect-bg); color:var(--connect);}
   .cal-event.convert { background:var(--convert-bg); color:var(--convert);}
+  .cal-event-camp { font-family:'Geist Mono',monospace; font-size:8px; letter-spacing:0.5px; opacity:0.7; text-transform:uppercase; }
+  .cal-event-media { font-size:9px; margin-left:3px; opacity:0.7; }
+  /* Calendar detail modal — pure presentational; never blocks interaction. */
+  .cal-detail-row { display:flex; gap:10px; font-size:12px; margin-bottom:8px; line-height:1.5; }
+  .cal-detail-label { font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); min-width:84px; flex-shrink:0; padding-top:2px; }
+  .cal-detail-value { color:var(--ink); flex:1; word-break:break-word; }
+  .cal-detail-thumb { width:100%; max-height:200px; object-fit:contain; border-radius:4px; background:var(--paper-2); margin-top:6px; }
+  .cal-detail-prompt { font-style:italic; color:var(--muted); background:var(--paper-2); padding:8px 10px; border-radius:4px; border-left:2px solid var(--gold); }
+  .modal-x { background:transparent; border:none; font-size:18px; color:var(--muted); cursor:pointer; padding:4px 8px; line-height:1; }
+  .modal-x:hover { color:var(--ink); }
 
   /* Access control */
   .access-table { width:100%; border-collapse:collapse; min-width: 0;}
@@ -1441,6 +1451,25 @@
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeConfirm()">Cancel</button>
       <button class="btn accent" id="confirm-action-btn" onclick="executeConfirm()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Calendar Event Detail Modal — opens when user clicks an event pill in
+     the calendar grid. Read-only preview + button to jump into the asset
+     in the overview view. No mutations, safe for client mode. -->
+<div class="simple-overlay" id="calEventModal">
+  <div class="simple-modal" style="max-width:520px;">
+    <div class="simple-modal-head">
+      <h3 id="cal-modal-title">Asset Details</h3>
+      <button class="modal-x" onclick="closeCalendarEventModal()" title="Close">✕</button>
+    </div>
+    <div class="simple-modal-body" id="cal-modal-body" style="padding:18px 24px;">
+      <!-- filled by openCalendarEventModal -->
+    </div>
+    <div class="simple-modal-foot" style="padding:12px 24px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:8px;">
+      <button class="btn" onclick="closeCalendarEventModal()">Close</button>
+      <button class="btn primary" id="cal-modal-open-btn" onclick="calendarModalGoToAsset()">Open Asset →</button>
     </div>
   </div>
 </div>
@@ -6188,7 +6217,14 @@ function renderCalendar() {
     const isToday = dateStr === todayStr;
     let cell = `<div class="cal-cell ${isToday?'today':''}"><div class="cal-day-num">${day}</div>`;
     evs.slice(0,4).forEach(ev => {
-      cell += `<div class="cal-event ${ev.catClass}" title="${escapeHtml(ev._campaignName)} · ${escapeHtml(ev.h2)}" onclick="goToCampaignAsset('${ev._campaignId}','${ev.id}')">${escapeHtml(ev.h2)}</div>`;
+      // Disambiguate repeated h2 values by prefixing the campaign name and
+      // suffixing a small media-count indicator. Click opens a read-only
+      // detail modal (Option E hybrid); the modal's primary button still
+      // routes to goToCampaignAsset for the user's old 'jump in' workflow.
+      const fileCount = (ev.files && ev.files.length) || (ev.fileData ? 1 : 0);
+      const mediaTag = fileCount > 0 ? `<span class="cal-event-media">📎${fileCount}</span>` : '';
+      const campTag = `<span class="cal-event-camp">${escapeHtml(ev._campaignName || '')}</span> `;
+      cell += `<div class="cal-event ${ev.catClass}" title="${escapeHtml(ev._campaignName)} · ${escapeHtml(ev.h2)}${ev.h3 ? ' · ' + escapeHtml(ev.h3) : ''}" onclick="openCalendarEventModal('${ev._campaignId}','${ev.id}')">${campTag}${escapeHtml(ev.h2)}${mediaTag}</div>`;
     });
     if (evs.length > 4) cell += `<div style="font-size:9px; color:var(--muted);">+${evs.length-4} more</div>`;
     cell += `</div>`;
@@ -6209,6 +6245,81 @@ function goToCampaignAsset(campaignId, assetId) {
     const tbody = document.getElementById('asset-tbody');
     if (tbody) tbody.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, 100);
+}
+
+// Calendar event detail modal — pure read-only preview triggered from the
+// calendar grid. Resolves the asset fresh on open so a silent sync that
+// removed it mid-session doesn't show stale data. The 'Open Asset →'
+// button routes to goToCampaignAsset for the existing 'jump in' workflow.
+let _calModalCtx = null; // { campaignId, assetId }
+function openCalendarEventModal(campaignId, assetId) {
+  const camp = campaigns.find(c => c.id === campaignId);
+  const asset = camp && (camp.assets || []).find(a => a.id === assetId);
+  const modal = document.getElementById('calEventModal');
+  const body = document.getElementById('cal-modal-body');
+  const title = document.getElementById('cal-modal-title');
+  const openBtn = document.getElementById('cal-modal-open-btn');
+  if (!modal || !body) return;
+  if (!asset || !camp) {
+    // Asset disappeared between calendar render and click — be honest
+    // instead of showing an empty card.
+    title.textContent = 'Asset not found';
+    body.innerHTML = `<p style="color:var(--muted); font-size:13px;">รายการนี้ถูกลบหรือย้ายไปแล้ว · refresh เพื่อโหลดปฏิทินใหม่</p>`;
+    if (openBtn) openBtn.style.display = 'none';
+    _calModalCtx = null;
+    modal.classList.add('show');
+    return;
+  }
+  _calModalCtx = { campaignId, assetId };
+  if (openBtn) openBtn.style.display = '';
+  title.textContent = camp.campaign || camp.id;
+  const catLabel = (camp.schema && asset.catClass && camp.schema[asset.catClass] && camp.schema[asset.catClass].label) || asset.catLabel || asset.catClass || '';
+  const sched = asset.scheduledDate ? new Date(asset.scheduledDate).toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' }) : '—';
+  const row = (label, value) => value
+    ? `<div class="cal-detail-row"><div class="cal-detail-label">${label}</div><div class="cal-detail-value">${value}</div></div>` : '';
+  // Pick a previewable file (image preferred, else first file).
+  const files = (asset.files && asset.files.length) ? asset.files : (asset.fileData ? [{ name: asset.fileName || 'file', type: guessMimeFromDataUrl(asset.fileData), data: asset.fileData }] : []);
+  const previewFile = files.find(f => isImageType(f.type)) || files[0] || null;
+  const fileCount = files.length;
+  let thumbHTML = '';
+  if (previewFile) {
+    if (isImageType(previewFile.type)) {
+      thumbHTML = `<img class="cal-detail-thumb" id="cal-modal-thumb" alt="${escapeHtml(previewFile.name||'')}" />`;
+    } else {
+      thumbHTML = `<div style="font-size:11px; color:var(--muted); margin-top:6px; padding:8px 10px; background:var(--paper-2); border-radius:4px;">📎 ${escapeHtml(previewFile.name||'file')} (${escapeHtml(previewFile.type||'')})</div>`;
+    }
+  }
+  const mediaCountLine = fileCount > 1 ? `<div style="font-size:10px; color:var(--muted); font-family:'Geist Mono',monospace; margin-top:4px;">${fileCount} files attached · open asset to view all</div>` : '';
+  body.innerHTML = [
+    row('Category', escapeHtml(catLabel)),
+    row('Type',     escapeHtml(asset.assetType || '')),
+    row('H2',       escapeHtml(asset.h2 || '')),
+    row('H3',       escapeHtml(asset.h3 || '')),
+    row('Scheduled', escapeHtml(sched)),
+    asset.imagePrompt ? row('Prompt', `<div class="cal-detail-prompt">${escapeHtml(asset.imagePrompt)}</div>`) : '',
+    asset.link ? row('Link', `<a href="${escapeHtml(asset.link)}" target="_blank" rel="noopener">${escapeHtml(asset.link)} ↗</a>`) : '',
+    thumbHTML ? `<div class="cal-detail-row"><div class="cal-detail-label">Preview</div><div class="cal-detail-value">${thumbHTML}${mediaCountLine}</div></div>` : ''
+  ].join('');
+  modal.classList.add('show');
+  // Lazy-load preview image after the modal is visible — large embedded
+  // base64 or Drive fetches don't block the modal opening.
+  if (previewFile && isImageType(previewFile.type)) {
+    getFileDataUrl(previewFile).then(url => {
+      const img = document.getElementById('cal-modal-thumb');
+      if (img && url) img.src = url;
+    }).catch(e => console.warn('cal modal thumb load failed:', e));
+  }
+}
+function closeCalendarEventModal() {
+  const modal = document.getElementById('calEventModal');
+  if (modal) modal.classList.remove('show');
+  _calModalCtx = null;
+}
+function calendarModalGoToAsset() {
+  if (!_calModalCtx) return;
+  const { campaignId, assetId } = _calModalCtx;
+  closeCalendarEventModal();
+  goToCampaignAsset(campaignId, assetId);
 }
 
 // ============================================================================
@@ -8462,6 +8573,45 @@ window.__runTests = async function() {
     if (teamL.classList.contains('collapsed') !== t0) toggleMembersDrawer(null, 'team');
     ok(teamFlipped, 'team drawer should flip');
     ok(custL.classList.contains('collapsed') === c0, 'customer drawer should NOT flip when toggling team');
+  });
+  t('calendar event modal DOM + helpers exist', () => {
+    ok(document.getElementById('calEventModal') &&
+       document.getElementById('cal-modal-body') &&
+       document.getElementById('cal-modal-title') &&
+       document.getElementById('cal-modal-open-btn') &&
+       typeof openCalendarEventModal === 'function' &&
+       typeof closeCalendarEventModal === 'function' &&
+       typeof calendarModalGoToAsset === 'function');
+  });
+  t('renderCalendar pill embeds campaign name + click opens modal (source guard)', () => {
+    const src = renderCalendar.toString();
+    ok(/cal-event-camp/.test(src), 'expected campaign-tag span in event pill');
+    ok(/openCalendarEventModal/.test(src), 'click handler must call openCalendarEventModal, not goToCampaignAsset directly');
+  });
+  t('openCalendarEventModal populates body + opens modal, closeCalendarEventModal closes it', () => {
+    const sv = { campaigns: campaigns.slice(), modalWas: document.getElementById('calEventModal').classList.contains('show') };
+    campaigns = [{ id:'cTEST', campaign:'TestCamp', client:'Client', clientEmail:'c@x.y', schema:{ catch:{label:'Catch'} }, assets:[{ id:'aTEST', catClass:'catch', h2:'H2-Value', h3:'H3-Value', imagePrompt:'P', scheduledDate:'2025-06-15', files:[] }], log:[], driveLinks:[], snapshots:[] }];
+    openCalendarEventModal('cTEST', 'aTEST');
+    const modal = document.getElementById('calEventModal');
+    const body = document.getElementById('cal-modal-body');
+    const shownOK = modal.classList.contains('show');
+    const bodyOK = body && /H2-Value/.test(body.innerHTML) && /H3-Value/.test(body.innerHTML);
+    closeCalendarEventModal();
+    const closedOK = !modal.classList.contains('show');
+    campaigns = sv.campaigns;
+    if (sv.modalWas) modal.classList.add('show');
+    ok(shownOK && bodyOK && closedOK, 'modal should show, contain h2/h3, then close');
+  });
+  t('openCalendarEventModal handles missing asset gracefully (no crash)', () => {
+    const sv = { campaigns: campaigns.slice() };
+    campaigns = [];
+    let threw = false;
+    try { openCalendarEventModal('gone', 'gone'); } catch(e) { threw = true; }
+    const body = document.getElementById('cal-modal-body');
+    const showsNotFound = body && /Asset not found|ถูกลบ/.test(body.innerHTML);
+    closeCalendarEventModal();
+    campaigns = sv.campaigns;
+    ok(!threw && showsNotFound, 'should show not-found message without throwing');
   });
   t('renderMemberNav splits team vs customer correctly', () => {
     const sv = { members: members.slice(), campaigns: campaigns.slice(), isAdmin };
