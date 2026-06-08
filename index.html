@@ -3140,8 +3140,27 @@ async function saveToDrive() {
       console.warn('Some media is not on Drive yet; saving Drive JSON metadata only:', mediaRes);
     }
     const targets = campaigns.filter(c => c && c.driveFolderId);
-    const current = getCurrentCampaign();
+    // CRITICAL: look up the current campaign directly by id, not via
+    // getCurrentCampaign() — that helper returns null when no member is
+    // selected in the sidebar, which would cause the no-folder guard
+    // below to silently skip. The dirty filter then falls back to
+    // 'save all targets', uploading other campaigns while the admin's
+    // actual edit is never persisted. Reproduced in admin simulation.
+    const current = currentCampaignId
+      ? campaigns.find(c => c.id === currentCampaignId)
+      : null;
     if (current && !current.driveFolderId) throw new Error('กรุณาตั้ง Client Drive Folder URL ของแคมเปญนี้ก่อนเซฟ JSON');
+    // Catch the broader case: any dirty campaign without a folder. Common
+    // when an admin edits multiple campaigns in a row and one of them was
+    // never given a Drive folder URL — silently dropping that edit while
+    // the others save is exactly the 'save แล้วข้อมูลหาย' report.
+    const dirtyMissingFolder = Array.from(_dirtyCampaignIds)
+      .map(id => campaigns.find(c => c.id === id))
+      .filter(c => c && !c.driveFolderId);
+    if (dirtyMissingFolder.length) {
+      const names = dirtyMissingFolder.map(c => c.campaign || c.id).join(', ');
+      throw new Error(`${dirtyMissingFolder.length} แคมเปญที่แก้ไขยังไม่มี Drive Folder URL: ${names}`);
+    }
     if (!targets.length) throw new Error('ยังไม่มีแคมเปญที่มี Client Drive Folder URL สำหรับเซฟ JSON');
     // Filter to only the campaigns the user actually changed. If the dirty
     // set is empty (e.g. forceSave / login flush / migration) we fall back
@@ -8132,6 +8151,68 @@ window.__runTests = async function() {
     const src = saveToDrive.toString();
     // The fallback chain: dirty.length ? dirty : targets — never under-saves.
     ok(/dirty\.length\s*\?\s*dirty\s*:\s*targets/.test(src));
+  });
+  // Bug surfaced by admin simulation: getCurrentCampaign() returns null when
+  // no member is selected → no-folder guard skipped → dirty filter falls
+  // through to 'save all' → user's edits on the no-folder campaign vanish.
+  t('saveToDrive uses direct currentCampaignId lookup, not getCurrentCampaign (source guard)', () => {
+    const src = saveToDrive.toString();
+    // The 'current' variable must come from a direct campaigns.find(...)
+    // by currentCampaignId, never from getCurrentCampaign() (which has
+    // the member-selection dependency).
+    const directLookup = /current\s*=\s*currentCampaignId\s*\?\s*campaigns\.find/;
+    ok(directLookup.test(src), 'expected direct campaigns.find lookup for current');
+  });
+  t('saveToDrive throws when any dirty campaign lacks driveFolderId (source guard)', () => {
+    const src = saveToDrive.toString();
+    ok(/dirtyMissingFolder/.test(src), 'missing dirtyMissingFolder check');
+  });
+  t('saveToDrive integration: dirty no-folder campaign throws, does NOT silently save siblings', async () => {
+    // Full repro of the silent-data-loss bug. Setup an admin with two
+    // campaigns where the one being edited has no driveFolderId.
+    const sv = {
+      isAdmin, userRoleControl, userRole, currentUserEmail, isOfflineMode,
+      accessToken, _readyToSave, _controlLiveRender, isSaving, pendingChanges,
+      campaigns: campaigns.slice(), currentCampaignId, currentMemberEmail,
+      dirty: new Set(_dirtyCampaignIds), authFetch: window.authFetch, Control: window.Control
+    };
+    isAdmin = true; userRoleControl = 'admin'; userRole = 'internal';
+    currentUserEmail = 'admin@test.com'; isOfflineMode = false;
+    accessToken = 'fake'; _readyToSave = true; _controlLiveRender = true;
+    isSaving = false; pendingChanges = false;
+    currentMemberEmail = ''; // ← critical: no member selected (the bug condition)
+    _dirtyCampaignIds.clear();
+    window.Control = {
+      available: () => true, cachedMembers: () => [], cachedMember: () => null,
+      cachedCampaignIndex: () => [], pingCampaignChanged: () => Promise.resolve(),
+      upsertCampaign: () => Promise.resolve(),
+    };
+    let uploads = 0;
+    window.authFetch = async (url) => {
+      if (/upload\/drive/.test(url)) { uploads++; return new Response(JSON.stringify({ id:'X', modifiedTime:'2025-01-01T00:00:00Z' })); }
+      return new Response(JSON.stringify({ files: [] }));
+    };
+    campaigns = [
+      { id:'good', driveFolderId:'F1', driveDbFileId:'fg', campaign:'Good', clientEmail:'a@x.com', assets:[], log:[], driveLinks:[], snapshots:[] },
+      { id:'bad',  driveFolderId:'',   driveDbFileId:'',   campaign:'Bad',  clientEmail:'b@x.com', assets:[], log:[], driveLinks:[], snapshots:[] }
+    ];
+    currentCampaignId = 'bad';
+    _dirtyCampaignIds.add('bad');
+    let threw = false;
+    try { await saveToDrive(); } catch(e) { threw = /Drive Folder URL/.test(e.message); }
+    const result = { threw, uploads };
+    // restore
+    isAdmin = sv.isAdmin; userRoleControl = sv.userRoleControl; userRole = sv.userRole;
+    currentUserEmail = sv.currentUserEmail; isOfflineMode = sv.isOfflineMode;
+    accessToken = sv.accessToken; _readyToSave = sv._readyToSave;
+    _controlLiveRender = sv._controlLiveRender; isSaving = sv.isSaving;
+    pendingChanges = sv.pendingChanges;
+    campaigns = sv.campaigns; currentCampaignId = sv.currentCampaignId;
+    currentMemberEmail = sv.currentMemberEmail;
+    _dirtyCampaignIds.clear(); sv.dirty.forEach(x => _dirtyCampaignIds.add(x));
+    window.authFetch = sv.authFetch; window.Control = sv.Control;
+    ok(result.threw, 'should throw clear error about missing Drive Folder URL');
+    ok(result.uploads === 0, `should not silently upload other campaigns; got ${result.uploads} uploads`);
   });
   // maybeOfferLocalRestore Fix D — offer when localStorage is newer than Drive,
   // not just when Drive is empty. Earlier behaviour silently stranded edits.
