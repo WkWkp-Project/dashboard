@@ -7957,16 +7957,25 @@ window.__diag = function () {
 
 window.__runTests = async function() {
   const results = [];
-  const pending = [];
+  // Serialize async tests by chaining them through a single promise. The
+  // older Promise.all-of-pending pattern let async tests run in parallel,
+  // which let one test's currentCampaignId / window.Control / accessToken
+  // mutations leak into the next test's assertion — the source of the
+  // 12 pre-existing 'flaky' failures (null campaign, 'Control.can is not
+  // a function', leftover state from later tests, etc.). With the chain,
+  // each async test fully resolves before the next one starts, and the
+  // call sites stay unchanged (no need to `await t(...)` everywhere).
+  let _chain = Promise.resolve();
   function t(name, fn) {
-    try {
-      const r = fn();
-      if (r && typeof r.then === 'function') {
-        pending.push(r.then(() => results.push({ name, ok: true })).catch(e => results.push({ name, ok: false, err: e.message || String(e) })));
-      } else {
+    _chain = _chain.then(async () => {
+      try {
+        const r = fn();
+        if (r && typeof r.then === 'function') await r;
         results.push({ name, ok: true });
+      } catch(e) {
+        results.push({ name, ok: false, err: e.message || String(e) });
       }
-    } catch(e) { results.push({ name, ok: false, err: e.message || String(e) }); }
+    });
   }
   function eq(a, b, msg) {
     if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || 'eq fail') + ` · expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`);
@@ -9185,7 +9194,7 @@ window.__runTests = async function() {
     databaseFileId = save; window.authFetch = origFetch;
   });
 
-  await Promise.all(pending);
+  await _chain;
   const pass = results.filter(r => r.ok).length;
   const fail = results.filter(r => !r.ok);
   console.group(`%c[Wakuwaku Self-Test] ${pass}/${results.length} passed`, `font-weight:bold;color:${fail.length?'#DD3A2C':'#2D7A3E'}`);
