@@ -6086,13 +6086,30 @@ function confirmDeleteCampaign() {
 // ============================================================================
 // ASSET MODAL
 // ============================================================================
+// Asset modal MUST lock to a specific campaign id at open time. Same root
+// cause as the Connect Drive bug: openAddAssetModal / editAsset and
+// saveAssetFromModal each call getCurrentCampaign() independently. A
+// signal-channel ping, focus event, sidebar click, or auto-resync can move
+// currentCampaignId between the two calls — and the new asset lands on the
+// WRONG campaign (admin reported uploading to jarupatman@gmail's campaign
+// and the asset vanishing because it actually landed elsewhere).
+let _assetModalCampaignId = null;
+function _lockAssetModal() {
+  const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return null; }
+  _assetModalCampaignId = camp.id;
+  _enterEditModal();
+  return camp;
+}
 function openAddAssetModal() {
   if (blockIfClient()) return;
-  if (getCurrentCampaign().status === 'handed-off') { showToast('Re-open campaign first', 'warn'); return; }
+  const camp = _lockAssetModal();
+  if (!camp) return;
+  if (camp.status === 'handed-off') { showToast('Re-open campaign first', 'warn'); _exitEditModal(); _assetModalCampaignId = null; return; }
   editingAssetId = null;
   pendingFiles = [];
   pendingLinks = [];
-  document.getElementById('asset-modal-title').textContent = 'Add New Asset';
+  document.getElementById('asset-modal-title').textContent = 'Add New Asset · ' + (camp.campaign || camp.id);
   ['asset-h2','asset-h3','asset-prompt','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('asset-link-input').value = '';
   syncDateTrigger('asset-date');
@@ -6107,15 +6124,16 @@ function openAddAssetModal() {
 }
 
 function editAsset(id) {
-  const camp = getCurrentCampaign();
+  const camp = _lockAssetModal();
+  if (!camp) return;
   const a = camp.assets.find(x => x.id === id);
-  if (!a) return;
+  if (!a) { _exitEditModal(); _assetModalCampaignId = null; return; }
   editingAssetId = id;
   pendingFiles = (a.files || []).map(f => ({ ...f }));
   pendingLinks = (a.links && a.links.length) ? a.links.slice() : (a.link ? [a.link] : []);
   // Reference id in the modal title so the admin always knows which asset
   // they're editing — handy for cross-window / handoff conversations.
-  document.getElementById('asset-modal-title').textContent = 'Edit Asset · ' + shortId(a.id, 'A');
+  document.getElementById('asset-modal-title').textContent = 'Edit Asset · ' + shortId(a.id, 'A') + ' · ' + (camp.campaign || camp.id);
   document.getElementById('asset-cat').value = a.catClass;
   document.getElementById('asset-type').value = a.assetType || 'image';
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
@@ -6135,7 +6153,13 @@ function editAsset(id) {
   document.getElementById('assetModal').classList.add('show');
 }
 
-function closeAssetModal() { document.getElementById('assetModal').classList.remove('show'); editingAssetId = null; pendingFiles = []; pendingLinks = []; }
+function closeAssetModal() {
+  document.getElementById('assetModal').classList.remove('show');
+  editingAssetId = null;
+  pendingFiles = [];
+  pendingLinks = [];
+  if (_assetModalCampaignId !== null) { _exitEditModal(); _assetModalCampaignId = null; }
+}
 
 function renderAssetLinksList() {
   const wrap = document.getElementById('asset-links-list');
@@ -6390,18 +6414,28 @@ document.addEventListener('change', e => {
 });
 
 function saveAssetFromModal() {
-  const camp = getCurrentCampaign();
-  if (!camp) { showToast('ไม่พบแคมเปญ — refresh แล้วลองอีกครั้ง', 'err'); return; }
+  // Look up by the locked campaign id, NOT getCurrentCampaign(). A signal
+  // ping / focus-driven resync / sidebar click between modal open and save
+  // can move currentCampaignId — without the lock the asset would land on
+  // the wrong campaign and "vanish" from the admin's view (it's there, but
+  // attached to a different row). Locked id is captured in _lockAssetModal.
+  const lockedId = _assetModalCampaignId;
+  const camp = lockedId ? campaigns.find(c => c.id === lockedId) : null;
+  if (!camp) {
+    showToast('แคมเปญที่กำลังเพิ่ม asset หายไป (อาจถูกลบ/รวม) — ปิดและลองใหม่', 'err');
+    closeAssetModal();
+    return;
+  }
   const cat = document.getElementById('asset-cat').value;
-  const sch = camp.schema[cat];
+  const sch = camp.schema && camp.schema[cat];
+  if (!sch) {
+    showToast('Schema ของแคมเปญนี้ไม่มี category ' + cat + ' — refresh แล้วลองใหม่', 'err');
+    return;
+  }
   const h2 = document.getElementById('asset-h2').value.trim();
   const h3 = document.getElementById('asset-h3').value.trim();
   if (!h2) { showToast('กรอก H2 อย่างน้อย', 'warn'); return; }
-  // Look the existing asset up ONCE up front. A silent poll-sync that ran
-  // while the modal was open can replace campaigns[], and with it the asset
-  // we were editing — `find` returns undefined and `.createdAt` would throw,
-  // crashing the save and leaving the user with a "stuck" modal.
-  const existing = editingAssetId ? camp.assets.find(x => x.id === editingAssetId) : null;
+  const existing = editingAssetId ? (camp.assets || []).find(x => x.id === editingAssetId) : null;
   const data = {
     id: editingAssetId || ('asset-' + Date.now() + Math.random().toString(36).slice(2,7)),
     catClass: cat,
@@ -6417,25 +6451,43 @@ function saveAssetFromModal() {
     fileData: '',
     createdAt: (existing && existing.createdAt) || new Date().toISOString()
   };
+  camp.assets = camp.assets || [];
+  let logType = 'CREATE', logDesc = '';
   if (editingAssetId) {
     const i = camp.assets.findIndex(x => x.id === editingAssetId);
     if (i >= 0) {
       camp.assets[i] = data;
-      logAction('UPDATE', `Edited asset: ${h2}`);
+      logType = 'UPDATE'; logDesc = `Edited asset: ${h2}`;
     } else {
       // Remote dropped this asset while we were editing — treat the edit as
       // a re-add so user input is never silently lost (camp.assets[-1] = ...
       // used to assign to property "-1" which isn't an array slot at all).
       camp.assets.unshift(data);
-      logAction('CREATE', `Re-added asset (remote had removed): ${h2}`);
+      logDesc = `Re-added asset (remote had removed): ${h2}`;
     }
   } else {
     camp.assets.unshift(data);
-    logAction('CREATE', `Added asset: ${h2}`);
+    logDesc = `Added asset: ${h2}`;
   }
+  // Write the log entry + dirty mark + schedule directly against the LOCKED
+  // campaign — bypass logAction() because logAction reads getCurrentCampaign()
+  // which can race with a mid-modal sync and land the entry on the wrong row.
+  camp.log = camp.log || [];
+  camp.log.unshift({
+    time: new Date().toISOString(),
+    type: logType,
+    desc: logDesc,
+    user: (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Guest'
+  });
+  if (typeof markCampaignDirty === 'function') markCampaignDirty(lockedId);
+  scheduleSave(lockedId);
   closeAssetModal();
-  renderAssets();
-  showToast('Asset saved');
+  // Only re-render the asset grid if the locked campaign is still the one
+  // displayed; otherwise the next render picks it up on view switch.
+  if (currentCampaignId === lockedId && typeof renderAssets === 'function') {
+    renderAssets();
+  }
+  showToast(`Asset saved → ${camp.campaign || lockedId}`);
 }
 
 // ============================================================================
@@ -7693,10 +7745,14 @@ function loadDataOffline(data, providedToken) {
 // ============================================================================
 // MODALS — Edit / Connect Drive
 // ============================================================================
+let _editInfoModalCampaignId = null;
 function openEditModal() {
   if (blockIfClient()) return;
   const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return; }
   if (camp.status === 'handed-off') { showToast('Re-open campaign first — Re-open ก่อนแก้ไข', 'warn'); return; }
+  _editInfoModalCampaignId = camp.id; // lock — see saveCampaignInfo
+  _enterEditModal();
   document.getElementById('editClient').value = camp.client || '';
   document.getElementById('editCampaign').value = camp.campaign || '';
   document.getElementById('editStart').value = camp.startPeriod || '';
@@ -7724,7 +7780,10 @@ function openEditDriveFolder() {
   if (url) window.open(url, '_blank');
   else showToast('ยังไม่ได้กรอก Campaign Folder URL', 'warn');
 }
-function closeEditModal() { document.getElementById('editInfoModal').classList.remove('show'); }
+function closeEditModal() {
+  document.getElementById('editInfoModal').classList.remove('show');
+  if (_editInfoModalCampaignId !== null) { _exitEditModal(); _editInfoModalCampaignId = null; }
+}
 
 // Kept for backwards-compat (event listener calls it); period now manual text
 function updateEditPeriodSummary() { /* no-op: period is manual text now */ }
@@ -7746,7 +7805,22 @@ document.addEventListener('input', e => {
 });
 
 function saveCampaignInfo() {
-  const camp = getCurrentCampaign();
+  // Lock to the modal-open campaign id — same reason as Connect Drive / asset
+  // modal. A mid-modal silent sync that moves currentCampaignId would
+  // otherwise redirect the field writes to a sibling campaign.
+  // Prefer the modal-open lock. Fall back to a direct currentCampaignId
+  // lookup (NOT getCurrentCampaign — that requires currentMemberEmail and
+  // returns null in scenarios where the admin opened Edit via a deep link
+  // or programmatic flow that didn't pin a member first).
+  const lockedId = _editInfoModalCampaignId;
+  const camp = lockedId
+    ? campaigns.find(c => c.id === lockedId)
+    : (currentCampaignId ? campaigns.find(c => c.id === currentCampaignId) : null);
+  if (!camp) {
+    showToast('แคมเปญที่กำลังแก้หายไป (อาจถูกลบ/รวม) — ปิดและลองใหม่', 'err');
+    closeEditModal();
+    return;
+  }
   const newClient = document.getElementById('editClient').value.trim();
   const newCampaign = document.getElementById('editCampaign').value.trim();
   if (!newClient || !newCampaign) { showToast('กรอก Client + Campaign name', 'warn'); return; }
@@ -7777,9 +7851,21 @@ function saveCampaignInfo() {
     }
     if (newDriveUrl && !fid) showToast('⚠ URL ไม่ใช่รูปแบบโฟลเดอร์ Drive ที่รู้จัก — ตรวจอีกครั้ง', 'warn');
   }
-  updateCampaignUI(); renderCampaignNav(); closeEditModal();
-  logAction('EDIT', `Updated info: ${newCampaign}`);
-  showToast('✓ Saved');
+  // Render only if the locked campaign is still the displayed one
+  if (currentCampaignId === (lockedId || camp.id)) { updateCampaignUI(); renderCampaignNav(); }
+  closeEditModal();
+  // Write the log entry directly against the locked campaign (logAction
+  // reads getCurrentCampaign — could race with a mid-modal sync).
+  camp.log = camp.log || [];
+  camp.log.unshift({
+    time: new Date().toISOString(),
+    type: 'EDIT',
+    desc: `Updated info: ${newCampaign}`,
+    user: (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Guest'
+  });
+  if (typeof markCampaignDirty === 'function') markCampaignDirty(camp.id);
+  scheduleSave(camp.id);
+  showToast(`✓ Saved → ${camp.campaign || camp.id}`);
 }
 
 function linkDriveFolder(i) {
@@ -9700,6 +9786,58 @@ window.__runTests = async function() {
     window.showToast = origToast;
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
     _connectModalCampaignId = save.locked;
+  });
+  t('saveAssetFromModal lands on the locked campaign even when currentCampaignId moves mid-modal', () => {
+    // Regression for "ลงงานใหม่ปรากฏงานหาย ลงใน customer jarupatman@gmail":
+    // a signal-channel ping / focus event / sidebar click between modal open
+    // and the user clicking Save can move currentCampaignId. Without the
+    // lock the new asset lands on a different campaign and "vanishes" from
+    // the admin's view.
+    const save = {
+      campaigns: campaigns.slice(),
+      currentCampaignId,
+      assetLock: _assetModalCampaignId,
+      editing: editingAssetId,
+      pf: pendingFiles, pl: pendingLinks
+    };
+    const a = normalizeCampaign({ id:'camp-locked', client:'jarupatman', campaign:'Customer A', clientEmail:'jarupatman@gmail.com' });
+    const b = normalizeCampaign({ id:'camp-other', client:'Other', campaign:'Other B', clientEmail:'other@x.com' });
+    campaigns = [a, b]; currentCampaignId = 'camp-locked';
+    currentMemberEmail = 'jarupatman@gmail.com';
+    pendingFiles = []; pendingLinks = [];
+    editingAssetId = null;
+    // Stub the input fields the save reads.
+    const setVal = (id, v) => {
+      let el = document.getElementById(id);
+      if (!el) { el = document.createElement('input'); el.id = id; document.body.appendChild(el); }
+      el.value = v;
+    };
+    setVal('asset-cat', 'catch');
+    setVal('asset-h2', 'NEW ASSET — must land on Customer A');
+    setVal('asset-h3', '');
+    setVal('asset-prompt', '');
+    setVal('asset-link', '');
+    setVal('asset-date', '');
+    setVal('asset-type', 'image');
+    // Simulate the modal-open lock pointing at A.
+    _assetModalCampaignId = 'camp-locked';
+    _enterEditModal();
+    // BEFORE save: silent sync moves currentCampaignId to B (the bug).
+    currentCampaignId = 'camp-other';
+    const origToast = window.showToast; window.showToast = () => {};
+    saveAssetFromModal();
+    window.showToast = origToast;
+    const lockedAssets = a.assets || [];
+    const otherAssets = b.assets || [];
+    ok(lockedAssets.some(x => x.h2 === 'NEW ASSET — must land on Customer A'),
+       'locked campaign A must receive the asset');
+    ok(!otherAssets.some(x => x.h2 === 'NEW ASSET — must land on Customer A'),
+       'unrelated campaign B must NOT receive the asset');
+    // Restore
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+    _assetModalCampaignId = save.assetLock;
+    editingAssetId = save.editing;
+    pendingFiles = save.pf; pendingLinks = save.pl;
   });
   t('_hasLocalEditInFlight true while an edit modal is open (silent-sync lock)', () => {
     const prev = _editModalOpenCount;
