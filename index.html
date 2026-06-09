@@ -1237,7 +1237,7 @@
         <div class="input-group"><label>End Period</label><input type="text" id="newEnd" placeholder="Aug 2026" /></div>
       </div>
     </div>
-    <div class="simple-modal-footer"><button class="btn" onclick="closeAddCampaignModal()">Cancel</button><button class="btn primary" onclick="saveNewCampaign()">Create Campaign</button></div>
+    <div class="simple-modal-footer"><button class="btn" onclick="closeAddCampaignModal()">Cancel</button><button class="btn primary" id="newCampaignSubmitBtn" onclick="saveNewCampaign()">Create Campaign</button></div>
   </div>
 </div>
 
@@ -2022,11 +2022,33 @@ function handleRealGoogleLogin() {
   _isInitialLogin = true;
   fbAuth.signInWithPopup(provider).then(result => {
     accessToken = (result.credential && result.credential.accessToken) || null;
-    if (!accessToken) { showToast('Login failed: no Drive token returned', 'err'); _isInitialLogin = false; return; }
+    if (!accessToken) {
+      // Firebase succeeded (we now have a Firebase user) but didn't return
+      // the Google Drive access token. Reproducible cases: re-auth in same
+      // tab, certain Workspace policies, Safari ITP blocking the credential.
+      // Fall back to GIS tokenClient — same OAuth consent, same scopes,
+      // but a fresh request that usually succeeds where Firebase's didn't.
+      // tokenClient.callback honours _isInitialLogin so onLoginSuccess
+      // continues from there automatically.
+      if (tokenClient) {
+        console.warn('Firebase signInWithPopup returned no Drive accessToken — falling back to GIS tokenClient');
+        setSaveStatus('saving', 'Requesting Drive access...');
+        try {
+          tokenClient.requestAccessToken({ prompt: 'consent' });
+          return; // success path resumes inside tokenClient.callback
+        } catch(e) {
+          console.error('GIS fallback request failed:', e);
+        }
+      }
+      showToast('Login failed: ไม่ได้รับ Drive access — logout แล้ว login ใหม่, หรือเช็ค Workspace admin', 'err');
+      _isInitialLogin = false;
+      return;
+    }
     // GIS silent refresh still works because Firebase Auth's Google provider
     // uses the same OAuth consent. Pre-warm tokenClient for later 401 refresh.
     if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => refreshToken(), 50 * 60 * 1000);
+    _lastTokenMintTs = Date.now();
+    refreshTimer = setTimeout(() => refreshToken(), TOKEN_REFRESH_AFTER_MS);
     if (_tokenRefreshInFlight) _drainTokenWaiters(accessToken);
     _isInitialLogin = false;
     onLoginSuccess();
@@ -5648,6 +5670,17 @@ function openAddCampaignModal() {
 function closeAddCampaignModal() { document.getElementById('addCampaignModal').classList.remove('show'); }
 async function saveNewCampaign() {
   if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
+  // Re-entrancy guard: prevents the same Create Campaign click from running
+  // twice when an impatient admin double-clicks before the async Drive
+  // upload finishes. Without this, a fast double-click pushed two entries
+  // into campaigns[] before the clash check could see the first.
+  const submitBtn = document.getElementById('newCampaignSubmitBtn');
+  if (submitBtn && submitBtn.disabled) return;
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.style.opacity = '0.6'; }
+  try { await _saveNewCampaignInner(); }
+  finally { if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = ''; } }
+}
+async function _saveNewCampaignInner() {
   if (!currentMemberEmail) { showToast('เลือก Member ก่อน', 'warn'); return; }
   const client = document.getElementById('newClient').value.trim();
   const campaign = document.getElementById('newCampaign').value.trim();
@@ -5685,6 +5718,14 @@ async function saveNewCampaign() {
     setSaveStatus('saving', 'Creating campaign JSON on Drive...');
     try {
       await saveCampaignJsonToDrive(c);   // writes JSON + shares folder + indexes
+      // The direct save above already covered this campaign — drop it from
+      // the dirty set + cancel the still-pending debounce timer that
+      // logAction()'s scheduleSave() set up earlier in this function.
+      // Without this, the timer fires 2.5s later and saveToDrive uploads
+      // the SAME campaign a second time, doubling Firestore writes,
+      // Drive API hits and signal-channel pings (visible as a 'duplicate
+      // create' flash on other admins' sidebars).
+      _afterDirectSaveCleanup(c.id);
       setSaveStatus('saved', 'Campaign created');
       showToast('✓ Campaign created + saved to Drive', 'ok');
     } catch(e) {
@@ -5694,6 +5735,20 @@ async function saveNewCampaign() {
     }
   } else {
     showToast('Campaign created (offline — ยังไม่เซฟ Drive)', 'warn');
+  }
+}
+
+// Shared cleanup for callers that just did a synchronous saveCampaignJsonToDrive
+// (saveNewCampaign, saveCurrentCampaignJsonToDrive, etc.). Drops the campaign
+// from the dirty set and cancels the redundant debounced save the
+// logAction()-driven scheduleSave queued earlier. If other campaigns are still
+// dirty we leave the timer alone — they still need to be uploaded.
+function _afterDirectSaveCleanup(campaignId) {
+  if (campaignId) _dirtyCampaignIds.delete(campaignId);
+  if (_dirtyCampaignIds.size === 0) {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    pendingChanges = false;
+    if (typeof cancelSaveRetry === 'function') cancelSaveRetry();
   }
 }
 function confirmDeleteCampaign() {
@@ -8753,6 +8808,42 @@ window.__runTests = async function() {
   t('assignment UI helpers defined', () => ok(typeof onAssignToggle === 'function' && typeof filterAssignList === 'function' && typeof updateAssignCount === 'function'));
   t('Section A thumbnail helpers defined', () => ok(typeof renderInputPreview === 'function' && typeof uploadInputThumb === 'function'));
   t('Section A removeInputThumb defined', () => ok(typeof removeInputThumb === 'function'));
+  // Anti-double-save: saveNewCampaign + saveCurrentCampaignJsonToDrive both
+  // schedule a debounced save via logAction() AND then run a synchronous
+  // saveCampaignJsonToDrive. The cleanup helper drops the dirty mark + cancels
+  // the redundant timer so the campaign isn't uploaded twice.
+  t('_afterDirectSaveCleanup defined and drops dirty + cancels timer', () => {
+    ok(typeof _afterDirectSaveCleanup === 'function');
+    const svDirty = new Set(_dirtyCampaignIds); const svPC = pendingChanges; const svTimer = saveTimer;
+    _dirtyCampaignIds.clear(); _dirtyCampaignIds.add('cleanup-test');
+    pendingChanges = true; saveTimer = setTimeout(() => {}, 9999);
+    _afterDirectSaveCleanup('cleanup-test');
+    const dropped = !_dirtyCampaignIds.has('cleanup-test') && !pendingChanges && !saveTimer;
+    if (svTimer) clearTimeout(svTimer);
+    _dirtyCampaignIds.clear(); svDirty.forEach(x => _dirtyCampaignIds.add(x));
+    pendingChanges = svPC; saveTimer = svTimer;
+    ok(dropped, 'should drop dirty id, pendingChanges and saveTimer');
+  });
+  t('_afterDirectSaveCleanup keeps timer when other campaigns still dirty', () => {
+    const svDirty = new Set(_dirtyCampaignIds); const svPC = pendingChanges; const svTimer = saveTimer;
+    _dirtyCampaignIds.clear(); _dirtyCampaignIds.add('a'); _dirtyCampaignIds.add('b');
+    pendingChanges = true; saveTimer = setTimeout(() => {}, 9999);
+    _afterDirectSaveCleanup('a');
+    const stillDirty = _dirtyCampaignIds.has('b') && pendingChanges && !!saveTimer;
+    if (saveTimer) clearTimeout(saveTimer);
+    _dirtyCampaignIds.clear(); svDirty.forEach(x => _dirtyCampaignIds.add(x));
+    pendingChanges = svPC; saveTimer = svTimer;
+    ok(stillDirty, "must not clear b's pending save when only a was directly saved");
+  });
+  t('saveNewCampaign wrapper has re-entrancy guard (source guard)', () => {
+    const src = saveNewCampaign.toString();
+    ok(/submitBtn\.disabled/.test(src) && /finally/.test(src), 'expected disable+finally pattern around _saveNewCampaignInner');
+  });
+  t('handleRealGoogleLogin falls back to GIS tokenClient when Firebase returns no Drive token (source guard)', () => {
+    const src = handleRealGoogleLogin.toString();
+    ok(/tokenClient\.requestAccessToken/.test(src) && /prompt:\s*['"]consent['"]/.test(src),
+       'expected GIS fallback path with prompt:consent for missing-token branch');
+  });
   t('Section A thumb size constants present + enforced', () => {
     ok(THUMB_RECOMMENDED_W === 1200 && THUMB_RECOMMENDED_H === 900 && THUMB_MAX_SIZE_BYTES === 5*1024*1024);
     const src = uploadInputThumb.toString();
