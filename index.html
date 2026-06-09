@@ -2151,6 +2151,53 @@ function filterVisibleCampaigns(all) {
   );
 }
 
+// Defense in depth against the "duplicate campaign" sidebar bug. Two paths
+// can land in campaigns[]: (a) Drive search returns 2 JSON files (a save
+// race created a second wakuwaku_campaign.json before the first one indexed),
+// (b) Firestore index has a ghost entry that re-augments the Drive list,
+// (c) the Drive list API rarely returns a file twice on retry. Dedup keys
+// in priority order: campaign.id (most reliable — generated at create time),
+// then (clientEmail, driveFolderId) (architecture invariant: one campaign
+// per folder per member). The newest copy by driveDbModifiedTime wins; the
+// loser is hidden from the UI but the Drive file is left untouched (it's
+// in the customer's Drive — their data, not ours to trash silently).
+function dedupCampaigns(list) {
+  if (!Array.isArray(list) || list.length < 2) return { kept: list || [], dropped: [] };
+  const ts = c => {
+    const t = c && c.driveDbModifiedTime ? Date.parse(c.driveDbModifiedTime) : 0;
+    return isNaN(t) ? 0 : t;
+  };
+  const dropped = [];
+  const byId = new Map();
+  list.forEach(c => {
+    if (!c) return;
+    const key = c.id || '';
+    if (!key) { byId.set(Symbol(), c); return; } // no id — never dedup
+    const prev = byId.get(key);
+    if (!prev) byId.set(key, c);
+    else if (ts(c) > ts(prev)) { dropped.push(prev); byId.set(key, c); }
+    else dropped.push(c);
+  });
+  const afterId = Array.from(byId.values());
+  const byFolder = new Map();
+  const finalKept = [];
+  afterId.forEach(c => {
+    const folderKey = (c.clientEmail || '').toLowerCase() + '' + (c.driveFolderId || '');
+    if (!c.driveFolderId) { finalKept.push(c); return; }
+    const prev = byFolder.get(folderKey);
+    if (!prev) { byFolder.set(folderKey, c); finalKept.push(c); return; }
+    if (ts(c) > ts(prev)) {
+      dropped.push(prev);
+      const idx = finalKept.indexOf(prev);
+      if (idx >= 0) finalKept[idx] = c;
+      byFolder.set(folderKey, c);
+    } else {
+      dropped.push(c);
+    }
+  });
+  return { kept: finalKept, dropped };
+}
+
 // Fires on every Firestore control update (real-time). Refreshes the in-memory
 // member roster + the current user's own assignment, then re-renders.
 function onControlMembersChanged(controlMembers) {
@@ -4056,7 +4103,21 @@ async function syncDatabaseFromDrive(opts) {
     // other admins, possibly in folders not surfaced by our own search).
     const loadedFileIds = new Set(searched.map(c => c.driveDbFileId).filter(Boolean));
     const fromIndex = await loadCampaignsFromIndex(loadedFileIds).catch(e => { console.warn('loadCampaignsFromIndex failed:', e); return []; });
-    const loaded = searched.concat(fromIndex);
+    const merged = searched.concat(fromIndex);
+    // Hide duplicates from the sidebar — see dedupCampaigns() above. Drive
+    // files for the dropped copies are NOT trashed (customer-owned data).
+    const { kept: loaded, dropped: dupDropped } = dedupCampaigns(merged);
+    if (dupDropped.length && isAdmin) {
+      try {
+        const names = dupDropped.map(d => d.campaign || d.client || d.id).slice(0, 3).join(', ');
+        const more = dupDropped.length > 3 ? ` (+${dupDropped.length - 3})` : '';
+        console.warn('[dedupCampaigns] hid duplicate(s):', dupDropped);
+        if (typeof showToast === 'function' && !window._dedupAnnounced) {
+          window._dedupAnnounced = true;
+          showToast(`⚠️ พบแคมเปญซ้ำ ${dupDropped.length} รายการ: ${names}${more} — ซ่อนตัวเก่าใน UI (ไฟล์ Drive ไม่ถูกแตะ)`, 'warn');
+        }
+      } catch(e) {}
+    }
     // Members come from the Firestore control plane when it's active; otherwise
     // fall back to deriving them from the campaigns + Drive marker files.
     const controlActive = !!(window.Control && window.Control.available() && window.Control.isReady());
@@ -5744,6 +5805,22 @@ async function _saveNewCampaignInner() {
   // each other's wakuwaku_campaign.json).
   const clash = campaigns.find(c => c.driveFolderId === folderId);
   if (clash) { showToast(`โฟลเดอร์นี้ถูกใช้โดยแคมเปญ "${clash.campaign || clash.id}" แล้ว — ใช้โฟลเดอร์อื่น`, 'err'); return; }
+  // Cross-admin clash: another admin may have just created a campaign in
+  // the same folder before our local Drive sync caught up. Firestore's
+  // control_campaigns index is updated in near-realtime by subscribeCampaigns,
+  // so checking the cached snapshot catches the race without an extra
+  // network roundtrip. (Skips silently if Control isn't available; the
+  // post-load dedup catches the rest.)
+  try {
+    if (window.Control && window.Control.available() && typeof window.Control.cachedCampaignIndex === 'function') {
+      const remoteList = window.Control.cachedCampaignIndex() || [];
+      const remoteClash = remoteList.find(r => r && r.driveFolderId === folderId);
+      if (remoteClash) {
+        showToast(`โฟลเดอร์นี้ถูกใช้โดยแคมเปญ "${remoteClash.name || remoteClash.id}" แล้ว (admin คนอื่นเพิ่งสร้าง) — รีเฟรชเพื่อดู`, 'err');
+        return;
+      }
+    }
+  } catch(e) { console.warn('remote clash check failed:', e); /* don't block create on lookup failure */ }
   const c = {
     id: 'camp-' + Date.now() + Math.random().toString(36).slice(2,7),
     clientEmail: currentMemberEmail,
@@ -8420,6 +8497,45 @@ window.__runTests = async function() {
   });
   t('Control signal API present', () => ok(typeof window.Control.pingCampaignChanged === 'function' && typeof window.Control.subscribeSignals === 'function' && typeof window.Control.isOwnSignal === 'function' && typeof window.Control.pingCampaignDeleted === 'function'));
   t('trashCampaignJsonInDrive defined', () => ok(typeof trashCampaignJsonInDrive === 'function'));
+  t('trashCampaignJsonInDrive tags 403 as NOT_OWNER (soft-delete path)', () => {
+    const src = trashCampaignJsonInDrive.toString();
+    ok(/NOT_OWNER/.test(src) && /supportsAllDrives=true/.test(src));
+  });
+  t('confirmDeleteCampaign soft-deletes on NOT_OWNER / NOT_FOUND (source guard)', () => {
+    const src = confirmDeleteCampaign.toString();
+    ok(/NOT_OWNER/.test(src) && /NOT_FOUND/.test(src) && /softDelete/.test(src));
+  });
+  t('dedupCampaigns dedups by campaign id, newest modifiedTime wins', () => {
+    const out = dedupCampaigns([
+      { id:'a', driveDbFileId:'f1', driveDbModifiedTime:'2024-01-01T00:00:00Z', campaign:'older' },
+      { id:'a', driveDbFileId:'f2', driveDbModifiedTime:'2024-06-01T00:00:00Z', campaign:'newer' },
+      { id:'b', driveDbFileId:'f3', driveDbModifiedTime:'2024-03-01T00:00:00Z', campaign:'solo' }
+    ]);
+    ok(out.kept.length === 2 && out.dropped.length === 1, `kept=${out.kept.length} dropped=${out.dropped.length}`);
+    const winner = out.kept.find(c => c.id === 'a');
+    ok(winner && winner.campaign === 'newer', 'newer modifiedTime should win');
+  });
+  t('dedupCampaigns dedups by (clientEmail, driveFolderId) when ids differ', () => {
+    const out = dedupCampaigns([
+      { id:'x1', clientEmail:'nut@team.wkwkp.com', driveFolderId:'F1', driveDbModifiedTime:'2024-01-01T00:00:00Z', campaign:'002 Test' },
+      { id:'x2', clientEmail:'nut@team.wkwkp.com', driveFolderId:'F1', driveDbModifiedTime:'2024-06-01T00:00:00Z', campaign:'002 Test' },
+      { id:'x3', clientEmail:'film@team.wkwkp.com', driveFolderId:'F2', driveDbModifiedTime:'2024-06-01T00:00:00Z', campaign:'004 Test' }
+    ]);
+    ok(out.kept.length === 2 && out.dropped.length === 1, `expected 2 kept 1 dropped, got ${out.kept.length}/${out.dropped.length}`);
+    ok(out.kept.find(c => c.id === 'x2'), 'should keep newer x2');
+  });
+  t('dedupCampaigns leaves single-entry lists untouched', () => {
+    const out = dedupCampaigns([{ id:'only', driveFolderId:'F', clientEmail:'a@b.c' }]);
+    ok(out.kept.length === 1 && out.dropped.length === 0);
+  });
+  t('saveNewCampaign uses Control cachedCampaignIndex for cross-admin clash (source guard)', () => {
+    const src = _saveNewCampaignInner.toString();
+    ok(/cachedCampaignIndex/.test(src) && /driveFolderId\s*===\s*folderId/.test(src));
+  });
+  t('syncDatabaseFromDrive calls dedupCampaigns on merge (source guard)', () => {
+    const src = syncDatabaseFromDrive.toString();
+    ok(/dedupCampaigns/.test(src) && /dupDropped/.test(src));
+  });
   t('confirmDeleteCampaign aborts when trash fails (source guard)', () => {
     const src = confirmDeleteCampaign.toString();
     // Must abort with a return inside the catch when driveDbFileId is set,
