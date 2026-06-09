@@ -3014,12 +3014,23 @@ async function saveMemberMarkerToDrive(member) {
 async function trashCampaignJsonInDrive(camp) {
   if (!camp || !camp.driveDbFileId) return false;
   if (!accessToken) return false;
-  const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.driveDbFileId}`, {
+  // supportsAllDrives covers files that live in a Shared Drive — without
+  // it, the call 404s on shared-drive items.
+  const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.driveDbFileId}?supportsAllDrives=true`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ trashed: true })
   });
-  if (!r.ok) throw await driveError(r);
+  if (!r.ok) {
+    const err = await driveError(r);
+    // Tag 403 / 404 so callers can soft-delete (file owned by customer in
+    // their My Drive — admins have Editor but not ownership, so Drive blocks
+    // trash. Drive ownership stays with the customer per architecture, so
+    // soft-removing from our index is the correct behavior.)
+    if (r.status === 403) err.code = 'NOT_OWNER';
+    else if (r.status === 404) err.code = 'NOT_FOUND';
+    throw err;
+  }
   return true;
 }
 
@@ -5807,6 +5818,7 @@ function confirmDeleteCampaign() {
     //    so the user can retry once the underlying problem is fixed.
     //    Exception: a brand-new campaign that was never saved to Drive has
     //    no driveDbFileId — there is no zombie risk, so just drop it locally.
+    let softDelete = false;
     if (removedCampSnap.driveDbFileId) {
       if (!accessToken) {
         showToast('❌ ลบไม่ได้: ต้อง login Google Drive ก่อน (Drive เป็น source of truth)', 'err');
@@ -5816,8 +5828,18 @@ function confirmDeleteCampaign() {
         await trashCampaignJsonInDrive(removedCampSnap);
       } catch(e) {
         console.warn('trash campaign JSON failed:', e);
-        showToast(`❌ ลบไม่สำเร็จ: ${e.message || 'Drive error'} · ลองใหม่อีกครั้ง`, 'err');
-        return; // abort — keep everything intact so retry is clean
+        // 403 NOT_OWNER → file is in the customer's My Drive and admins can't
+        // trash someone else's My Drive file. 404 NOT_FOUND → file already
+        // gone (manually deleted in Drive UI). Both are safe to soft-delete:
+        // remove from our index + broadcast so UI clears everywhere. The
+        // orphan file (if any) sits in the customer's Drive — their data,
+        // their cleanup.
+        if (e && (e.code === 'NOT_OWNER' || e.code === 'NOT_FOUND')) {
+          softDelete = true;
+        } else {
+          showToast(`❌ ลบไม่สำเร็จ: ${e.message || 'Drive error'} · ลองใหม่อีกครั้ง`, 'err');
+          return; // abort — keep everything intact so retry is clean
+        }
       }
     }
     // 2) Update local state.
@@ -5826,7 +5848,11 @@ function confirmDeleteCampaign() {
     currentCampaignId = myCamps[0] ? myCamps[0].id : null;
     closeEditModal();
     renderEverything();
-    showToast('Campaign moved to Drive trash');
+    if (softDelete) {
+      showToast('⚠️ ลบออกจากระบบแล้ว · ไฟล์ JSON อยู่ใน Drive ของลูกค้า (admin ไม่ใช่ owner) — ลูกค้าจัดการเอง', 'warn');
+    } else {
+      showToast('Campaign moved to Drive trash');
+    }
     // 3) Remove from the shared Firestore index so admins stop seeing it.
     if (window.Control && window.Control.available()) {
       window.Control.removeCampaign(removedId).catch(e => console.warn('index removeCampaign failed:', e));
