@@ -2421,7 +2421,41 @@ function setDataSource(src) {
   }
 }
 
+// Leading + trailing debounce (~500ms). Backup used to fire on every keystroke
+// — serializing the full database (all campaigns) and writing localStorage
+// for every character. With ~10 campaigns of ~100KB each that's a 1MB+
+// serialize + IO synchronous on the main thread per keystroke = visible typing
+// lag. Leading-edge keeps the very first call instant so a sudden refresh
+// still has a fresh snapshot; trailing-edge coalesces bursts; the
+// beforeunload + visibilitychange-hidden flushes below cover the
+// hard-close case (mobile force-kill, tab close mid-burst).
+let _backupNextAllowed = 0;
+let _backupTrailingTimer = null;
+const _BACKUP_DEBOUNCE_MS = 500;
 function persistLocalBackup() {
+  const now = Date.now();
+  if (now >= _backupNextAllowed) {
+    _persistLocalBackupNow();
+    _backupNextAllowed = now + _BACKUP_DEBOUNCE_MS;
+    return;
+  }
+  // Already scheduled — let the existing trailing fire pick up the latest state.
+  if (_backupTrailingTimer) return;
+  _backupTrailingTimer = setTimeout(() => {
+    _backupTrailingTimer = null;
+    _persistLocalBackupNow();
+    _backupNextAllowed = Date.now() + _BACKUP_DEBOUNCE_MS;
+  }, _backupNextAllowed - now);
+}
+// Synchronous flush — used by beforeunload / visibilitychange hidden so the
+// last keystroke in a burst can't be lost to the debounce window when the
+// user refreshes or closes the tab.
+function flushLocalBackupNow() {
+  if (_backupTrailingTimer) { clearTimeout(_backupTrailingTimer); _backupTrailingTimer = null; }
+  _persistLocalBackupNow();
+  _backupNextAllowed = Date.now() + _BACKUP_DEBOUNCE_MS;
+}
+function _persistLocalBackupNow() {
   try {
     if (userRole === 'client') return; // clients view a bundle; nothing to back up
     const payload = buildDatabasePayload();
@@ -2448,6 +2482,17 @@ function persistLocalBackup() {
       }
     }
   } catch(e) { console.warn('persistLocalBackup failed:', e); }
+}
+if (typeof window !== 'undefined' && window.addEventListener) {
+  // beforeunload covers refresh / tab close / nav-away on desktop.
+  window.addEventListener('beforeunload', () => { try { flushLocalBackupNow(); } catch(e) {} });
+  // visibilitychange→hidden covers mobile: iOS Safari + Android Chrome do NOT
+  // reliably fire beforeunload when the user swipes away or kills the app,
+  // but they DO fire visibilitychange. This is the recommended flush hook
+  // for mobile PWA-style sites.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { try { flushLocalBackupNow(); } catch(e) {} }
+  });
 }
 function readLocalBackup() {
   try { const raw = localStorage.getItem(LOCAL_BACKUP_KEY); return raw ? JSON.parse(raw) : null; }
@@ -8674,8 +8719,15 @@ window.__runTests = async function() {
   });
   // Identity guard: user A's localStorage backup must not be offered to user B.
   t('persistLocalBackup writes email into the backup meta (source guard)', () => {
-    const src = persistLocalBackup.toString();
+    // Identity guard lives in the inner _persistLocalBackupNow now that the
+    // outer is just a debouncer wrapper.
+    const src = _persistLocalBackupNow.toString();
     ok(/email:\s*currentUserEmail/.test(src));
+  });
+  t('persistLocalBackup is debounced + flushLocalBackupNow defined (perf guard)', () => {
+    ok(typeof flushLocalBackupNow === 'function' && typeof _persistLocalBackupNow === 'function');
+    const src = persistLocalBackup.toString();
+    ok(/_backupTrailingTimer|_backupNextAllowed/.test(src), 'outer must debounce');
   });
   t('maybeOfferLocalRestore skips when bk.email != currentUserEmail (source guard)', () => {
     const src = maybeOfferLocalRestore.toString();
@@ -9145,7 +9197,9 @@ window.__runTests = async function() {
   });
   t('LOCAL_BACKUP_KEY defined', () => ok(typeof LOCAL_BACKUP_KEY === 'string' && LOCAL_BACKUP_KEY.length));
   t('persistLocalBackup writes & readLocalBackup reads', () => {
-    persistLocalBackup();
+    // Use the synchronous flush API so the debounce window doesn't race the
+    // immediate read below.
+    flushLocalBackupNow();
     const bk = readLocalBackup();
     ok(bk && bk.db && Array.isArray(bk.db.campaigns), 'backup has db.campaigns');
     ok(typeof bk.ts === 'number');
