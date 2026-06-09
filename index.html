@@ -3400,6 +3400,23 @@ async function saveToDrive() {
       console.warn(`saveToDrive: ${failures.length}/${toSave.length} campaign(s) failed:`, failures);
       throw first.reason;
     }
+    // CRITICAL: if any campaign hit SAVE_CONFLICT, do NOT continue to the
+    // success path below. That path clears pendingChanges, disarms the
+    // silent-sync guard, and announces "Drive JSON saved" — none of which
+    // is true when conflicts remain. The next maybeResync would then
+    // replace the in-memory campaigns[] with Drive's older state and the
+    // admin's pending edit silently vanishes ("อัปปุ๊บ โหลดเสร็จ หายไปต่อหน้าต่อตา"
+    // bug). Keep the dirty edits in-memory + pendingChanges=true so the
+    // guard holds; the conflict modal is the user's resolution path.
+    if (conflicts.length) {
+      pendingChanges = true; // keep silent-sync guard active
+      const savedNote = savedCount > 0 ? `บันทึก ${savedCount} แคมเปญแล้ว · ` : '';
+      setSaveStatus('saving', `${savedNote}${conflicts.length} แคมเปญติด conflict · resolve ใน modal`);
+      // Don't call setDataSource('drive'), don't showSaveSuccessPopup,
+      // don't reset _consecutiveSaveFailures — we did NOT finish saving.
+      persistLocalBackup(); // durable copy of the unsaved edits
+      return; // exit before the "everything saved" success bookkeeping
+    }
     databaseFileId = (current && current.driveDbFileId) || (targets[0] && targets[0].driveDbFileId) || 'drive:campaign-json';
     lastSaveTime = new Date();
     pendingChanges = false;
@@ -8917,6 +8934,17 @@ window.__runTests = async function() {
     const src = saveToDrive.toString();
     ok(/SAVE_CONFLICT/.test(src) && /handleSaveConflicts/.test(src),
        'conflicts must go to the modal, not the auto-retry queue');
+  });
+  t('saveToDrive keeps pendingChanges=true on conflict (silent-sync guard must hold)', () => {
+    // Regression for "อัปปุ๊บ โหลดเสร็จ หายไปต่อหน้าต่อตา": if the conflict
+    // branch fell through to the success bookkeeping, pendingChanges would
+    // be cleared and the next maybeResync would replace campaigns[] with
+    // Drive's older state, silently wiping the admin's pending edit.
+    const src = saveToDrive.toString();
+    ok(/conflicts\.length\)\s*\{[\s\S]*?pendingChanges\s*=\s*true/.test(src),
+       'conflict branch must set pendingChanges=true to keep _hasLocalEditInFlight() true');
+    ok(/conflicts\.length\)\s*\{[\s\S]*?return;/.test(src),
+       'conflict branch must early-return before the success path clears state');
   });
   t('loadCampaignJsonFilesFromDrive uses parallel batches (perf guard)', () => {
     const src = loadCampaignJsonFilesFromDrive.toString();
