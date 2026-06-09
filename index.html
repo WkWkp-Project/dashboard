@@ -4287,8 +4287,18 @@ async function readDriveError(resp) { return (await driveError(resp)).message; }
 // clobber what the user is typing or what's queued in the 2.5s debounce.
 // Adding new admins / new listeners in the future automatically inherits
 // the guard via syncDatabaseFromDrive's silent path.
+// Modal-open lock: any per-campaign edit modal (Connect Drive, Edit Campaign,
+// Asset modal, etc.) bumps this. While > 0, silent syncs MUST NOT replace the
+// in-memory campaigns array — otherwise the modal's captured camp reference
+// goes stale and the admin's save lands on the wrong campaign (or a vanished
+// one). Modal helpers MUST pair openX/closeX so this stays balanced; a small
+// leak (close handler crashed) is safer than a tight check because it errs
+// on the side of "don't clobber".
+let _editModalOpenCount = 0;
+function _enterEditModal() { _editModalOpenCount++; }
+function _exitEditModal() { _editModalOpenCount = Math.max(0, _editModalOpenCount - 1); }
 function _hasLocalEditInFlight() {
-  return !!(pendingChanges || saveTimer || isSaving);
+  return !!(pendingChanges || saveTimer || isSaving || _editModalOpenCount > 0);
 }
 
 async function syncDatabaseFromDrive(opts) {
@@ -7924,16 +7934,41 @@ function removeInputThumb(i) {
   });
 }
 
+// Connect Drive modal MUST bind to a specific campaign id at open time. Without
+// this, a background sync (signal channel, focus event, auto-resync interval)
+// can move currentCampaignId between the modal open and the user clicking
+// Save — at which point saveDriveLinks's getCurrentCampaign() returns a
+// DIFFERENT campaign and the typed URLs land on the wrong row. The admin
+// reported this as "ใส่ลิงค์ใหม่ ไป re-call link มั่วๆ จากอีกแคมมาใส่".
+let _connectModalCampaignId = null;
 function openConnectModal() {
   if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return; }
+  _connectModalCampaignId = camp.id; // snapshot — saveDriveLinks must use this
   for (let i = 0; i < 4; i++) document.getElementById(`linkInput${i}`).value = camp.driveLinks[i]?.url || '';
   document.getElementById('connectModal').classList.add('show');
+  _enterEditModal(); // silent-sync lock so the campaign array can't be replaced under us
 }
-function closeConnectModal() { document.getElementById('connectModal').classList.remove('show'); }
+function closeConnectModal() {
+  document.getElementById('connectModal').classList.remove('show');
+  if (_connectModalCampaignId !== null) { _exitEditModal(); _connectModalCampaignId = null; }
+}
 function saveDriveLinks() {
   if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
-  const camp = getCurrentCampaign();
+  // Look up by the captured id — NOT getCurrentCampaign() — so a background
+  // sync that moved currentCampaignId between open and save can't redirect
+  // the write to a different campaign.
+  const lockedId = _connectModalCampaignId;
+  const camp = lockedId ? campaigns.find(c => c.id === lockedId) : null;
+  if (!camp) {
+    showToast('แคมเปญที่กำลังแก้ link หายไป (อาจถูกลบ/รวมระหว่างนี้) — ปิดและลองใหม่', 'err');
+    closeConnectModal();
+    return;
+  }
+  if (!Array.isArray(camp.driveLinks) || camp.driveLinks.length < 4) {
+    camp.driveLinks = [{name:'Product_Info',url:''},{name:'Content_Dir',url:''},{name:'CI_Design',url:''},{name:'Cat_Map',url:''}];
+  }
   const before = camp.driveLinks.map(d => (d && d.url) || '');
   const changed = [];
   for (let i = 0; i < 4; i++) {
@@ -7942,11 +7977,27 @@ function saveDriveLinks() {
     camp.driveLinks[i].url = newUrl;
   }
   camp.linkedFilesCount = camp.driveLinks.filter(d => d.url && d.url.trim()).length;
-  restoreLinkedDriveCards();
+  // Only re-render link cards if the modal's campaign is still the one
+  // currently displayed; otherwise renderEverything later will pick it up
+  // for whichever campaign the admin views next.
+  if (currentCampaignId === lockedId && typeof restoreLinkedDriveCards === 'function') {
+    restoreLinkedDriveCards();
+  }
   closeConnectModal();
   if (changed.length) {
-    logAction('UPDATE', `Drive links updated: ${changed.join(', ')}`);
-    showToast('✓ Drive links saved — syncing to Drive', 'ok');
+    // logAction writes to getCurrentCampaign() — that may not be the same as
+    // lockedId. Write directly to lockedId's log + mark it dirty so the
+    // save targets the right campaign.
+    camp.log = camp.log || [];
+    camp.log.unshift({
+      time: new Date().toISOString(),
+      type: 'UPDATE',
+      desc: `Drive links updated: ${changed.join(', ')}`,
+      user: document.getElementById('sb-name').textContent || 'Guest'
+    });
+    if (typeof markCampaignDirty === 'function') markCampaignDirty(lockedId);
+    scheduleSave(lockedId);
+    showToast(`✓ Drive links saved (${camp.campaign || lockedId})`, 'ok');
   }
 }
 function openDriveLink(index) {
@@ -9608,28 +9659,59 @@ window.__runTests = async function() {
     ok(Array.isArray(c.driveLinks) && c.driveLinks.length === 4);
     ok(c.driveLinks.every(d => d && d.name && d.url === ''), 'all url empty by default');
   });
-  t('saveDriveLinks writes only to current campaign, not siblings', () => {
-    const save = { campaigns: campaigns.slice(), currentCampaignId };
-    const a = normalizeCampaign({ id:'camp-a', client:'A', campaign:'A' });
-    const b = normalizeCampaign({ id:'camp-b', client:'B', campaign:'B' });
+  t('saveDriveLinks writes only to the locked campaign, not siblings', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, locked: _connectModalCampaignId };
+    const a = normalizeCampaign({ id:'camp-a', client:'A', campaign:'A', clientEmail:'a@b.c' });
+    const b = normalizeCampaign({ id:'camp-b', client:'B', campaign:'B', clientEmail:'a@b.c' });
     campaigns = [a, b]; currentCampaignId = 'camp-a';
-    // Render inputs needed by saveDriveLinks
+    currentMemberEmail = 'a@b.c'; // getCurrentCampaign requires this
     ['0','1','2','3'].forEach(i => {
       let el = document.getElementById('linkInput'+i);
       if (!el) { el = document.createElement('input'); el.id = 'linkInput'+i; document.body.appendChild(el); }
       el.value = i === '0' ? 'https://drive.google.com/A1' : '';
     });
-    // saveDriveLinks calls restoreLinkedDriveCards which needs cards; skip via stubs
+    // Simulate the open → save lifecycle. _connectModalCampaignId locks the
+    // target so a mid-modal currentCampaignId change can't redirect writes.
+    _connectModalCampaignId = 'camp-a';
+    _enterEditModal();
     const origRestore = window.restoreLinkedDriveCards;
     window.restoreLinkedDriveCards = () => {};
-    const origClose = window.closeConnectModal;
-    window.closeConnectModal = () => {};
+    // Mid-modal sleight: switch currentCampaignId to B BEFORE save. If the
+    // lock works, A still gets the link and B is untouched.
+    currentCampaignId = 'camp-b';
     saveDriveLinks();
-    eq(a.driveLinks[0].url, 'https://drive.google.com/A1', 'A got the new link');
-    eq(b.driveLinks[0].url, '', 'B was NOT touched');
+    eq(a.driveLinks[0].url, 'https://drive.google.com/A1', 'A got the new link (locked)');
+    eq(b.driveLinks[0].url, '', 'B was NOT touched even though currentCampaignId moved to B');
     window.restoreLinkedDriveCards = origRestore;
-    window.closeConnectModal = origClose;
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+    _connectModalCampaignId = save.locked;
+  });
+  t('saveDriveLinks aborts cleanly when the locked campaign disappeared', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, locked: _connectModalCampaignId };
+    campaigns = [normalizeCampaign({ id:'camp-keep', client:'K', campaign:'K', clientEmail:'a@b.c' })];
+    currentCampaignId = 'camp-keep';
+    _connectModalCampaignId = 'camp-gone'; // no such campaign
+    _enterEditModal();
+    let toasted = '';
+    const origToast = window.showToast;
+    window.showToast = (msg) => { toasted = msg; };
+    saveDriveLinks();
+    ok(/หายไป/.test(toasted), 'must surface the missing-campaign error, not write silently');
+    window.showToast = origToast;
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+    _connectModalCampaignId = save.locked;
+  });
+  t('_hasLocalEditInFlight true while an edit modal is open (silent-sync lock)', () => {
+    const prev = _editModalOpenCount;
+    _editModalOpenCount = 0;
+    const before = _hasLocalEditInFlight();
+    _enterEditModal();
+    const during = _hasLocalEditInFlight();
+    _exitEditModal();
+    const after = _hasLocalEditInFlight();
+    ok(during === true, 'must lock silent sync while a modal is open');
+    ok(after === before || after === false, 'must release after close');
+    _editModalOpenCount = prev;
   });
   t('switching current campaign points at that campaign\'s own links', () => {
     const save = { campaigns: campaigns.slice(), currentCampaignId };
