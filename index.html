@@ -3365,6 +3365,7 @@ async function saveToDrive() {
     const SAVE_CONCURRENCY = 3;
     let savedCount = 0;
     const failures = [];
+    const conflicts = [];
     for (let i = 0; i < toSave.length; i += SAVE_CONCURRENCY) {
       const batch = toSave.slice(i, i + SAVE_CONCURRENCY);
       setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}-${Math.min(savedCount + batch.length, toSave.length)}/${toSave.length})...`);
@@ -3374,10 +3375,22 @@ async function saveToDrive() {
         if (r.status === 'fulfilled') {
           _dirtyCampaignIds.delete(c.id);
           savedCount++;
+        } else if (r.reason && r.reason.code === 'SAVE_CONFLICT') {
+          // Surface conflicts separately — they're user-resolvable, not
+          // retry-able. Leave the campaign dirty so the user's choice
+          // (overwrite / reload) can either resave or discard the edit.
+          conflicts.push({ campaign: c, reason: r.reason });
         } else {
           failures.push({ campaign: c, reason: r.reason });
         }
       });
+    }
+    // Conflicts go to a dedicated UX path; they MUST NOT throw or land in
+    // the retry queue (auto-retry would just re-conflict in a loop).
+    if (conflicts.length) {
+      // Fire-and-forget: don't await; saveToDrive's success path should
+      // still complete for the non-conflicting campaigns we DID save.
+      try { handleSaveConflicts(conflicts); } catch(e) { console.warn('handleSaveConflicts failed:', e); }
     }
     if (failures.length) {
       // Re-throw the first failure so the existing error path (banner +
@@ -3426,6 +3439,94 @@ async function saveToDrive() {
   }
 }
 let _lastSaveError = null;
+
+// ---- Optimistic concurrency conflict resolution ----------------------------
+// When saveCampaignJsonToDrive detects that someone else wrote to the same
+// Drive JSON file after we loaded it, it throws CampaignSaveConflictError
+// instead of silently overwriting. We surface a 3-option modal so the admin
+// can decide whether to keep their edit, pull the remote version, or
+// download a local backup and decide later. Default focus is on the safest
+// option (Reload from Drive) so a panicky Enter-press doesn't clobber a
+// teammate's edit.
+let _saveConflictModalOpen = false;
+function handleSaveConflicts(conflicts) {
+  if (!conflicts || !conflicts.length) return;
+  if (_saveConflictModalOpen) {
+    // Already showing one — log the additional conflicts so they show up
+    // in __diag() and the user can address them after the first.
+    console.warn('handleSaveConflicts: additional conflicts queued (modal already open):', conflicts);
+    return;
+  }
+  _saveConflictModalOpen = true;
+  const names = conflicts.map(c => c.campaign.campaign || c.campaign.id).join(', ');
+  const remoteTimes = conflicts.map(c => c.reason.remoteModifiedTime).filter(Boolean);
+  const remoteWhen = remoteTimes[0] ? new Date(remoteTimes[0]).toLocaleString('th-TH', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit' }) : '';
+  // Build modal DOM on the fly — avoids adding yet another fixed modal
+  // element to index.html for a rare-path UX. Removed on close.
+  const overlay = document.createElement('div');
+  overlay.id = 'saveConflictModal';
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9000; display:flex; align-items:center; justify-content:center; padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:var(--paper); max-width:520px; width:100%; border-radius:12px; box-shadow:0 12px 48px rgba(0,0,0,0.3); padding:28px;">
+      <div style="font-family:'Fraunces',serif; font-size:22px; margin-bottom:10px;">⚠️ มีคน save ทีหลังคุณ</div>
+      <div style="color:var(--ink); font-size:13px; line-height:1.65; margin-bottom:18px;">
+        ${conflicts.length === 1 ? 'แคมเปญ' : `${conflicts.length} แคมเปญ`} <strong>${names}</strong>
+        ${remoteWhen ? `ถูกแก้ใน Drive ${remoteWhen}` : 'ถูกแก้ใน Drive หลังคุณโหลด'}
+        — ถ้าเซฟทับเลย edit ของคนอื่นจะหาย
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <button id="conflictReload" class="btn primary" style="text-align:left; padding:12px 14px;">
+          <strong>โหลดจาก Drive (แนะนำ)</strong><br>
+          <span style="font-size:11px; opacity:0.75;">ทิ้ง edit ของคุณ · ดูของคนอื่น · เริ่มแก้ใหม่</span>
+        </button>
+        <button id="conflictOverwrite" class="btn" style="text-align:left; padding:12px 14px; border-color:var(--err); color:var(--err);">
+          <strong>Save ทับ · ใช้ของฉัน</strong><br>
+          <span style="font-size:11px; opacity:0.75;">edit คนอื่นจะหายจาก Drive · ใช้เมื่อแน่ใจ</span>
+        </button>
+        <button id="conflictBackup" class="btn" style="text-align:left; padding:12px 14px;">
+          <strong>Download backup · ตัดสินใจทีหลัง</strong><br>
+          <span style="font-size:11px; opacity:0.75;">เซฟ local zip · ปิด modal · ไม่ทับ Drive</span>
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => { try { overlay.remove(); } catch(e) {} _saveConflictModalOpen = false; };
+  overlay.querySelector('#conflictReload').addEventListener('click', async () => {
+    close();
+    try {
+      // Drop the dirty edits and re-pull from Drive. The user accepted the
+      // tradeoff explicitly — no surprise data loss.
+      conflicts.forEach(c => _dirtyCampaignIds.delete(c.campaign.id));
+      logAction('SYSTEM', `Save conflict → reload from Drive: ${names}`);
+      await syncDatabaseFromDrive({ silent: false });
+    } catch(e) { console.warn('post-conflict resync failed:', e); }
+  });
+  overlay.querySelector('#conflictOverwrite').addEventListener('click', async () => {
+    close();
+    logAction('SYSTEM', `Save conflict → overwrite remote: ${names}`);
+    // Re-save with the bypass flag. Each campaign is independent — use
+    // the same parallel-batch shape as saveToDrive for consistency.
+    setSaveStatus('saving', 'Overwriting Drive...');
+    try {
+      const results = await Promise.allSettled(
+        conflicts.map(c => saveCampaignJsonToDrive(c.campaign, { allowOverwrite: true }))
+      );
+      results.forEach((r, idx) => {
+        if (r.status === 'fulfilled') _dirtyCampaignIds.delete(conflicts[idx].campaign.id);
+      });
+      setSaveStatus('saved', 'Overwrite complete');
+      showToast('✓ Saved ทับ Drive แล้ว', 'ok');
+    } catch(e) { showToast('Overwrite ล้มเหลว: ' + (e.message || 'unknown'), 'err'); }
+  });
+  overlay.querySelector('#conflictBackup').addEventListener('click', () => {
+    close();
+    logAction('SYSTEM', `Save conflict → manual backup chosen: ${names}`);
+    try { if (typeof downloadManualBackup === 'function') downloadManualBackup(); }
+    catch(e) { console.warn('manual backup from conflict modal failed:', e); }
+  });
+  // Default focus on the safe option so an accidental Enter doesn't overwrite.
+  setTimeout(() => { try { overlay.querySelector('#conflictReload').focus(); } catch(e) {} }, 50);
+}
 
 function offerManualBackup(reason) {
   const cause = reason && reason.driveCause;
@@ -3911,10 +4012,40 @@ async function findCampaignJsonFile(camp) {
   return (j.files && j.files[0]) || null;
 }
 
-async function saveCampaignJsonToDrive(camp) {
+// Threshold for optimistic concurrency check. A 1-second buffer absorbs minor
+// clock skew between the saver's machine and Drive's mtime stamp; any drift
+// beyond that almost certainly means another writer touched the file after
+// we loaded.
+const SAVE_CONFLICT_BUFFER_MS = 1000;
+class CampaignSaveConflictError extends Error {
+  constructor(camp, existing) {
+    super(`Drive file for "${camp.campaign || camp.id}" was modified after we loaded it`);
+    this.name = 'CampaignSaveConflictError';
+    this.code = 'SAVE_CONFLICT';
+    this.campaignId = camp.id;
+    this.campaignName = camp.campaign || camp.id;
+    this.localModifiedTime = camp.driveDbModifiedTime || '';
+    this.remoteModifiedTime = (existing && existing.modifiedTime) || '';
+  }
+}
+async function saveCampaignJsonToDrive(camp, opts) {
   if (!camp || !camp.id) throw new Error('ไม่พบ campaign ที่จะเซฟ');
   if (!camp.driveFolderId) throw new Error(`Campaign "${camp.campaign || camp.id}" ยังไม่มี Client Drive Folder URL`);
+  const allowOverwrite = !!(opts && opts.allowOverwrite);
   const existing = await findCampaignJsonFile(camp);
+  // Optimistic concurrency: if the Drive file has been updated by someone
+  // else after we loaded it, throw instead of blindly overwriting. The
+  // caller (saveToDrive) catches this and asks the user what to do.
+  // Skip the check when we have no local timestamp (brand-new campaign or
+  // first-ever save) — there's nothing to compare against and blocking
+  // here would be a false positive.
+  if (!allowOverwrite && existing && existing.modifiedTime && camp.driveDbModifiedTime) {
+    const remoteMs = Date.parse(existing.modifiedTime);
+    const localMs = Date.parse(camp.driveDbModifiedTime);
+    if (!isNaN(remoteMs) && !isNaN(localMs) && remoteMs > localMs + SAVE_CONFLICT_BUFFER_MS) {
+      throw new CampaignSaveConflictError(camp, existing);
+    }
+  }
   const payload = campaignDriveJsonPayload(camp);
   if (payloadContainsEmbeddedMedia(payload)) throw new Error(`Campaign ${camp.campaign || camp.id} JSON ยังมี base64 media ค้างอยู่`);
   const jsonBody = JSON.stringify(payload, null, 2);
@@ -8767,6 +8898,25 @@ window.__runTests = async function() {
     ok(typeof flushLocalBackupNow === 'function' && typeof _persistLocalBackupNow === 'function');
     const src = persistLocalBackup.toString();
     ok(/_backupTrailingTimer|_backupNextAllowed/.test(src), 'outer must debounce');
+  });
+  t('CampaignSaveConflictError + handleSaveConflicts defined', () => {
+    ok(typeof CampaignSaveConflictError === 'function' && typeof handleSaveConflicts === 'function');
+    const err = new CampaignSaveConflictError({ id:'c1', campaign:'X', driveDbModifiedTime:'2024-01-01T00:00:00Z' }, { modifiedTime:'2024-06-01T00:00:00Z' });
+    ok(err.code === 'SAVE_CONFLICT' && err.campaignId === 'c1');
+  });
+  t('saveCampaignJsonToDrive throws SAVE_CONFLICT when remote newer (source guard)', () => {
+    const src = saveCampaignJsonToDrive.toString();
+    ok(/CampaignSaveConflictError/.test(src) && /remoteMs\s*>\s*localMs/.test(src) && /allowOverwrite/.test(src));
+  });
+  t('saveCampaignJsonToDrive skips conflict check when local time missing (false-positive guard)', () => {
+    const src = saveCampaignJsonToDrive.toString();
+    ok(/camp\.driveDbModifiedTime/.test(src) && /existing\.modifiedTime/.test(src),
+       'must guard against missing timestamps');
+  });
+  t('saveToDrive routes SAVE_CONFLICT to handleSaveConflicts, not to retry (source guard)', () => {
+    const src = saveToDrive.toString();
+    ok(/SAVE_CONFLICT/.test(src) && /handleSaveConflicts/.test(src),
+       'conflicts must go to the modal, not the auto-retry queue');
   });
   t('loadCampaignJsonFilesFromDrive uses parallel batches (perf guard)', () => {
     const src = loadCampaignJsonFilesFromDrive.toString();
