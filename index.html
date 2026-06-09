@@ -4056,14 +4056,21 @@ async function loadCampaignJsonFilesFromDrive() {
   const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,parents,webViewLink)&orderBy=modifiedTime desc&pageSize=1000`);
   if (!r.ok) throw await driveError(r);
   const j = await r.json();
+  const files = j.files || [];
+  // Parallel content fetch with concurrency cap = 5. Each Drive GET is
+  // independent — order in `loaded[]` is not load-bearing because
+  // dedupCampaigns (in syncDatabaseFromDrive) re-sorts by
+  // driveDbModifiedTime. A single failure logs + skips, just like the
+  // serial loop.
+  const LOAD_CONCURRENCY = 5;
   const loaded = [];
-  for (const f of (j.files || [])) {
+  const fetchOne = async (f) => {
     try {
       const cr = await authFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
       if (!cr.ok) throw await driveError(cr);
       const data = await cr.json();
       const rawCampaign = data.campaign || (Array.isArray(data.campaigns) && data.campaigns[0]);
-      if (!rawCampaign) continue;
+      if (!rawCampaign) return null;
       const camp = normalizeCampaign(rawCampaign);
       camp.driveDbFileId = f.id;
       camp.driveDbModifiedTime = f.modifiedTime || data.savedAt || '';
@@ -4071,8 +4078,13 @@ async function loadCampaignJsonFilesFromDrive() {
         camp.driveFolderId = f.parents[0];
         camp.driveFolderUrl = `https://drive.google.com/drive/folders/${f.parents[0]}`;
       }
-      loaded.push(camp);
-    } catch(e) { console.warn('campaign JSON load failed:', f.id, e); }
+      return camp;
+    } catch(e) { console.warn('campaign JSON load failed:', f.id, e); return null; }
+  };
+  for (let i = 0; i < files.length; i += LOAD_CONCURRENCY) {
+    const batch = files.slice(i, i + LOAD_CONCURRENCY);
+    const results = await Promise.all(batch.map(fetchOne));
+    results.forEach(c => { if (c) loaded.push(c); });
   }
   return loaded;
 }
@@ -8755,6 +8767,11 @@ window.__runTests = async function() {
     ok(typeof flushLocalBackupNow === 'function' && typeof _persistLocalBackupNow === 'function');
     const src = persistLocalBackup.toString();
     ok(/_backupTrailingTimer|_backupNextAllowed/.test(src), 'outer must debounce');
+  });
+  t('loadCampaignJsonFilesFromDrive uses parallel batches (perf guard)', () => {
+    const src = loadCampaignJsonFilesFromDrive.toString();
+    ok(/LOAD_CONCURRENCY/.test(src) && /Promise\.all\b/.test(src),
+       'must batch in parallel chunks');
   });
   t('saveToDrive uses Promise.allSettled with concurrency cap (perf guard)', () => {
     const src = saveToDrive.toString();
