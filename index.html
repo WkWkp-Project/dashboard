@@ -3385,12 +3385,38 @@ async function saveToDrive() {
         }
       });
     }
-    // Conflicts go to a dedicated UX path; they MUST NOT throw or land in
-    // the retry queue (auto-retry would just re-conflict in a loop).
+    // Auto-merge any SAVE_CONFLICT campaigns instead of asking the admin —
+    // pulling the Drive copy and folding in remote-only additions before
+    // re-saving. Awaited so saveToDrive doesn't race the silent-sync guard:
+    // we must finish merging (and potentially marking dirty=true again) BEFORE
+    // pendingChanges gets cleared in the success path.
     if (conflicts.length) {
-      // Fire-and-forget: don't await; saveToDrive's success path should
-      // still complete for the non-conflicting campaigns we DID save.
-      try { handleSaveConflicts(conflicts); } catch(e) { console.warn('handleSaveConflicts failed:', e); }
+      setSaveStatus('saving', `รวม edit จากคนอื่น (${conflicts.length} แคมเปญ)...`);
+      const mergeResult = await autoMergeAndResaveConflicts(conflicts);
+      if (mergeResult.failed > 0) {
+        // Some campaigns couldn't be merged (Drive read error, etc.) —
+        // keep them dirty + pendingChanges true so the auto-retry loop
+        // tries again later. Don't fall through to success bookkeeping.
+        pendingChanges = true;
+        conflicts.forEach(c => {
+          // Re-add only the ones we couldn't merge — the merged ones were
+          // already cleared inside autoMergeAndResaveConflicts.
+          if (_dirtyCampaignIds.has(c.campaign.id) === false &&
+              !campaigns.find(x => x.id === c.campaign.id)) return;
+          if (!_dirtyCampaignIds.has(c.campaign.id)) {
+            // already merged, skip
+          }
+        });
+        setSaveStatus('saving', `รวมไม่สำเร็จ ${mergeResult.failed} แคมเปญ · จะลองใหม่`);
+        scheduleSaveRetry();
+        return;
+      }
+      // All merged. Show a single short toast so admins know it happened.
+      if (typeof showToast === 'function') {
+        showToast(`🔁 รวม edit จากคนอื่น ${mergeResult.merged} แคมเปญแล้ว`, 'ok');
+      }
+      // Fall through to the success bookkeeping below — merged campaigns
+      // were saved with allowOverwrite, so the on-Drive state is current.
     }
     if (failures.length) {
       // Re-throw the first failure so the existing error path (banner +
@@ -3399,23 +3425,6 @@ async function saveToDrive() {
       const first = failures[0];
       console.warn(`saveToDrive: ${failures.length}/${toSave.length} campaign(s) failed:`, failures);
       throw first.reason;
-    }
-    // CRITICAL: if any campaign hit SAVE_CONFLICT, do NOT continue to the
-    // success path below. That path clears pendingChanges, disarms the
-    // silent-sync guard, and announces "Drive JSON saved" — none of which
-    // is true when conflicts remain. The next maybeResync would then
-    // replace the in-memory campaigns[] with Drive's older state and the
-    // admin's pending edit silently vanishes ("อัปปุ๊บ โหลดเสร็จ หายไปต่อหน้าต่อตา"
-    // bug). Keep the dirty edits in-memory + pendingChanges=true so the
-    // guard holds; the conflict modal is the user's resolution path.
-    if (conflicts.length) {
-      pendingChanges = true; // keep silent-sync guard active
-      const savedNote = savedCount > 0 ? `บันทึก ${savedCount} แคมเปญแล้ว · ` : '';
-      setSaveStatus('saving', `${savedNote}${conflicts.length} แคมเปญติด conflict · resolve ใน modal`);
-      // Don't call setDataSource('drive'), don't showSaveSuccessPopup,
-      // don't reset _consecutiveSaveFailures — we did NOT finish saving.
-      persistLocalBackup(); // durable copy of the unsaved edits
-      return; // exit before the "everything saved" success bookkeeping
     }
     databaseFileId = (current && current.driveDbFileId) || (targets[0] && targets[0].driveDbFileId) || 'drive:campaign-json';
     lastSaveTime = new Date();
@@ -3458,91 +3467,67 @@ async function saveToDrive() {
 let _lastSaveError = null;
 
 // ---- Optimistic concurrency conflict resolution ----------------------------
-// When saveCampaignJsonToDrive detects that someone else wrote to the same
-// Drive JSON file after we loaded it, it throws CampaignSaveConflictError
-// instead of silently overwriting. We surface a 3-option modal so the admin
-// can decide whether to keep their edit, pull the remote version, or
-// download a local backup and decide later. Default focus is on the safest
-// option (Reload from Drive) so a panicky Enter-press doesn't clobber a
-// teammate's edit.
-let _saveConflictModalOpen = false;
-function handleSaveConflicts(conflicts) {
-  if (!conflicts || !conflicts.length) return;
-  if (_saveConflictModalOpen) {
-    // Already showing one — log the additional conflicts so they show up
-    // in __diag() and the user can address them after the first.
-    console.warn('handleSaveConflicts: additional conflicts queued (modal already open):', conflicts);
-    return;
+// When saveCampaignJsonToDrive detects that another writer touched the Drive
+// JSON file after we loaded it, we DON'T pop a modal asking the admin what
+// to do — that UX confuses people during normal multi-admin work. Instead:
+// auto-rebase. Pull the Drive copy, fold in the remote-only additions
+// (assets and log entries — both keyed by id/timestamp so union is safe),
+// keep local field edits (Section A/B, links, schema, etc.) which represent
+// the active admin's intent, then re-save with allowOverwrite so the merged
+// result lands without re-triggering the conflict check.
+//
+// What this protects:
+//   - other admin added an asset → kept in the merged save
+//   - other admin added log entries → kept in the merged save
+//   - local admin's text/field edits → preserved as-is (they win)
+//
+// What this can't protect (field-level concurrent edits to the same field):
+//   - both admins edit Section B "headline" at the same time → local wins.
+//     This is the same outcome as the no-check world AND is rare in practice;
+//     the audit log shows both attempts so it's recoverable.
+async function autoMergeAndResaveConflicts(conflicts) {
+  if (!conflicts || !conflicts.length) return { merged: 0, failed: 0 };
+  let merged = 0, failed = 0;
+  for (const { campaign: localCamp, reason } of conflicts) {
+    try {
+      // Re-fetch the Drive copy. findCampaignJsonFile gives us file id +
+      // modifiedTime; alt=media gives the JSON body the other admin saved.
+      const file = await findCampaignJsonFile(localCamp);
+      if (!file || !file.id) { failed++; continue; }
+      const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
+      if (!r.ok) { failed++; continue; }
+      const driveDoc = await r.json();
+      const remoteCamp = (driveDoc && (driveDoc.campaign || (Array.isArray(driveDoc.campaigns) && driveDoc.campaigns[0]))) || null;
+      if (!remoteCamp) { failed++; continue; }
+      // Union assets by id: remote-only assets get folded in. For assets
+      // present on both sides we keep the local copy (admin's latest intent).
+      const localAssetIds = new Set((localCamp.assets || []).map(a => a && a.id).filter(Boolean));
+      const remoteOnlyAssets = (remoteCamp.assets || []).filter(a => a && a.id && !localAssetIds.has(a.id));
+      if (remoteOnlyAssets.length) localCamp.assets = (localCamp.assets || []).concat(remoteOnlyAssets);
+      // Union log by (time + type + user) — log entries are append-only and
+      // the triple is effectively unique.
+      const seenLog = new Set((localCamp.log || []).map(e => `${e && e.time}|${e && e.type}|${e && e.user}`));
+      const remoteOnlyLog = (remoteCamp.log || []).filter(e => e && !seenLog.has(`${e.time}|${e.type}|${e.user}`));
+      if (remoteOnlyLog.length) {
+        localCamp.log = (localCamp.log || []).concat(remoteOnlyLog)
+          .sort((a, b) => (b && b.time || '').localeCompare(a && a.time || ''));
+      }
+      // Adopt the remote modifiedTime so the next save's conflict check
+      // passes — we've already incorporated their state.
+      localCamp.driveDbModifiedTime = file.modifiedTime || localCamp.driveDbModifiedTime;
+      localCamp.driveDbFileId = file.id;
+      // Re-save with allowOverwrite to bypass the check that just tripped.
+      await saveCampaignJsonToDrive(localCamp, { allowOverwrite: true });
+      _dirtyCampaignIds.delete(localCamp.id);
+      // Audit trail so admins can see merges in the log.
+      try { localCamp.log.unshift({ time: new Date().toISOString(), type: 'SYSTEM', desc: `Auto-merged remote edit (${remoteOnlyAssets.length} new asset, ${remoteOnlyLog.length} new log)`, user: (typeof currentUserName === 'function' ? currentUserName() : '') }); } catch(e) {}
+      merged++;
+    } catch(e) {
+      console.warn('autoMergeAndResaveConflicts failed for', localCamp && localCamp.id, e);
+      failed++;
+    }
   }
-  _saveConflictModalOpen = true;
-  const names = conflicts.map(c => c.campaign.campaign || c.campaign.id).join(', ');
-  const remoteTimes = conflicts.map(c => c.reason.remoteModifiedTime).filter(Boolean);
-  const remoteWhen = remoteTimes[0] ? new Date(remoteTimes[0]).toLocaleString('th-TH', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit' }) : '';
-  // Build modal DOM on the fly — avoids adding yet another fixed modal
-  // element to index.html for a rare-path UX. Removed on close.
-  const overlay = document.createElement('div');
-  overlay.id = 'saveConflictModal';
-  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9000; display:flex; align-items:center; justify-content:center; padding:20px;';
-  overlay.innerHTML = `
-    <div style="background:var(--paper); max-width:520px; width:100%; border-radius:12px; box-shadow:0 12px 48px rgba(0,0,0,0.3); padding:28px;">
-      <div style="font-family:'Fraunces',serif; font-size:22px; margin-bottom:10px;">⚠️ มีคน save ทีหลังคุณ</div>
-      <div style="color:var(--ink); font-size:13px; line-height:1.65; margin-bottom:18px;">
-        ${conflicts.length === 1 ? 'แคมเปญ' : `${conflicts.length} แคมเปญ`} <strong>${names}</strong>
-        ${remoteWhen ? `ถูกแก้ใน Drive ${remoteWhen}` : 'ถูกแก้ใน Drive หลังคุณโหลด'}
-        — ถ้าเซฟทับเลย edit ของคนอื่นจะหาย
-      </div>
-      <div style="display:flex; flex-direction:column; gap:10px;">
-        <button id="conflictReload" class="btn primary" style="text-align:left; padding:12px 14px;">
-          <strong>โหลดจาก Drive (แนะนำ)</strong><br>
-          <span style="font-size:11px; opacity:0.75;">ทิ้ง edit ของคุณ · ดูของคนอื่น · เริ่มแก้ใหม่</span>
-        </button>
-        <button id="conflictOverwrite" class="btn" style="text-align:left; padding:12px 14px; border-color:var(--err); color:var(--err);">
-          <strong>Save ทับ · ใช้ของฉัน</strong><br>
-          <span style="font-size:11px; opacity:0.75;">edit คนอื่นจะหายจาก Drive · ใช้เมื่อแน่ใจ</span>
-        </button>
-        <button id="conflictBackup" class="btn" style="text-align:left; padding:12px 14px;">
-          <strong>Download backup · ตัดสินใจทีหลัง</strong><br>
-          <span style="font-size:11px; opacity:0.75;">เซฟ local zip · ปิด modal · ไม่ทับ Drive</span>
-        </button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  const close = () => { try { overlay.remove(); } catch(e) {} _saveConflictModalOpen = false; };
-  overlay.querySelector('#conflictReload').addEventListener('click', async () => {
-    close();
-    try {
-      // Drop the dirty edits and re-pull from Drive. The user accepted the
-      // tradeoff explicitly — no surprise data loss.
-      conflicts.forEach(c => _dirtyCampaignIds.delete(c.campaign.id));
-      logAction('SYSTEM', `Save conflict → reload from Drive: ${names}`);
-      await syncDatabaseFromDrive({ silent: false });
-    } catch(e) { console.warn('post-conflict resync failed:', e); }
-  });
-  overlay.querySelector('#conflictOverwrite').addEventListener('click', async () => {
-    close();
-    logAction('SYSTEM', `Save conflict → overwrite remote: ${names}`);
-    // Re-save with the bypass flag. Each campaign is independent — use
-    // the same parallel-batch shape as saveToDrive for consistency.
-    setSaveStatus('saving', 'Overwriting Drive...');
-    try {
-      const results = await Promise.allSettled(
-        conflicts.map(c => saveCampaignJsonToDrive(c.campaign, { allowOverwrite: true }))
-      );
-      results.forEach((r, idx) => {
-        if (r.status === 'fulfilled') _dirtyCampaignIds.delete(conflicts[idx].campaign.id);
-      });
-      setSaveStatus('saved', 'Overwrite complete');
-      showToast('✓ Saved ทับ Drive แล้ว', 'ok');
-    } catch(e) { showToast('Overwrite ล้มเหลว: ' + (e.message || 'unknown'), 'err'); }
-  });
-  overlay.querySelector('#conflictBackup').addEventListener('click', () => {
-    close();
-    logAction('SYSTEM', `Save conflict → manual backup chosen: ${names}`);
-    try { if (typeof downloadManualBackup === 'function') downloadManualBackup(); }
-    catch(e) { console.warn('manual backup from conflict modal failed:', e); }
-  });
-  // Default focus on the safe option so an accidental Enter doesn't overwrite.
-  setTimeout(() => { try { overlay.querySelector('#conflictReload').focus(); } catch(e) {} }, 50);
+  return { merged, failed };
 }
 
 function offerManualBackup(reason) {
@@ -8916,8 +8901,8 @@ window.__runTests = async function() {
     const src = persistLocalBackup.toString();
     ok(/_backupTrailingTimer|_backupNextAllowed/.test(src), 'outer must debounce');
   });
-  t('CampaignSaveConflictError + handleSaveConflicts defined', () => {
-    ok(typeof CampaignSaveConflictError === 'function' && typeof handleSaveConflicts === 'function');
+  t('CampaignSaveConflictError + autoMergeAndResaveConflicts defined', () => {
+    ok(typeof CampaignSaveConflictError === 'function' && typeof autoMergeAndResaveConflicts === 'function');
     const err = new CampaignSaveConflictError({ id:'c1', campaign:'X', driveDbModifiedTime:'2024-01-01T00:00:00Z' }, { modifiedTime:'2024-06-01T00:00:00Z' });
     ok(err.code === 'SAVE_CONFLICT' && err.campaignId === 'c1');
   });
@@ -8930,21 +8915,29 @@ window.__runTests = async function() {
     ok(/camp\.driveDbModifiedTime/.test(src) && /existing\.modifiedTime/.test(src),
        'must guard against missing timestamps');
   });
-  t('saveToDrive routes SAVE_CONFLICT to handleSaveConflicts, not to retry (source guard)', () => {
+  t('saveToDrive auto-merges SAVE_CONFLICT (no modal) (source guard)', () => {
     const src = saveToDrive.toString();
-    ok(/SAVE_CONFLICT/.test(src) && /handleSaveConflicts/.test(src),
-       'conflicts must go to the modal, not the auto-retry queue');
+    ok(/autoMergeAndResaveConflicts/.test(src) && !/handleSaveConflicts/.test(src),
+       'conflicts must be auto-merged silently, no user-facing modal');
+    ok(/await\s+autoMergeAndResaveConflicts/.test(src),
+       'merge must be awaited before falling through to the success path');
   });
-  t('saveToDrive keeps pendingChanges=true on conflict (silent-sync guard must hold)', () => {
-    // Regression for "อัปปุ๊บ โหลดเสร็จ หายไปต่อหน้าต่อตา": if the conflict
-    // branch fell through to the success bookkeeping, pendingChanges would
-    // be cleared and the next maybeResync would replace campaigns[] with
-    // Drive's older state, silently wiping the admin's pending edit.
+  t('autoMergeAndResaveConflicts merges assets/log union, prefers local for fields', () => {
+    const src = autoMergeAndResaveConflicts.toString();
+    ok(/remoteOnlyAssets/.test(src) && /remoteOnlyLog/.test(src), 'must union assets + log');
+    ok(/allowOverwrite/.test(src), 'must re-save with allowOverwrite to bypass the same check');
+    ok(/driveDbModifiedTime\s*=\s*file\.modifiedTime/.test(src),
+       'must adopt remote modifiedTime so the next conflict check passes');
+  });
+  t('saveToDrive merge-failure path keeps pendingChanges=true + scheduleSaveRetry (data-loss guard)', () => {
+    // Regression for "อัปปุ๊บ โหลดเสร็จ หายไปต่อหน้าต่อตา" — if a merge can't
+    // complete (Drive read error etc.) we must NOT fall through to the
+    // success bookkeeping that clears pendingChanges, or the next silent
+    // sync will replace campaigns[] and wipe the admin's edit.
     const src = saveToDrive.toString();
-    ok(/conflicts\.length\)\s*\{[\s\S]*?pendingChanges\s*=\s*true/.test(src),
-       'conflict branch must set pendingChanges=true to keep _hasLocalEditInFlight() true');
-    ok(/conflicts\.length\)\s*\{[\s\S]*?return;/.test(src),
-       'conflict branch must early-return before the success path clears state');
+    ok(/mergeResult\.failed/.test(src) && /pendingChanges\s*=\s*true/.test(src) &&
+       /scheduleSaveRetry/.test(src),
+       'merge-failure branch must keep guard active + queue retry');
   });
   t('loadCampaignJsonFilesFromDrive uses parallel batches (perf guard)', () => {
     const src = loadCampaignJsonFilesFromDrive.toString();
