@@ -3353,12 +3353,39 @@ async function saveToDrive() {
       ? targets.filter(c => _dirtyCampaignIds.has(c.id))
       : targets;
     const toSave = dirty.length ? dirty : targets;
+    // Parallel save with concurrency cap = 3. Each saveCampaignJsonToDrive
+    // hits a different Drive folder + a different Firestore index doc + its
+    // own signal — no inter-campaign conflict to worry about. The cap keeps
+    // us well under the Drive per-user quota (1000 queries / 100s) and avoids
+    // a thundering-herd of N concurrent uploads on big dirty sets.
+    // Failed campaigns stay in _dirtyCampaignIds; only successes are cleared
+    // so the auto-retry loop (scheduleSaveRetry) re-attempts exactly what
+    // didn't land. If ANY campaign failed, we throw at the end so the outer
+    // catch fires its banner + retry — matches the old serial behaviour.
+    const SAVE_CONCURRENCY = 3;
     let savedCount = 0;
-    for (const c of toSave) {
-      setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}/${toSave.length})...`);
-      await saveCampaignJsonToDrive(c);
-      _dirtyCampaignIds.delete(c.id);
-      savedCount++;
+    const failures = [];
+    for (let i = 0; i < toSave.length; i += SAVE_CONCURRENCY) {
+      const batch = toSave.slice(i, i + SAVE_CONCURRENCY);
+      setSaveStatus('saving', `Saving JSON to Drive (${savedCount + 1}-${Math.min(savedCount + batch.length, toSave.length)}/${toSave.length})...`);
+      const results = await Promise.allSettled(batch.map(c => saveCampaignJsonToDrive(c)));
+      results.forEach((r, idx) => {
+        const c = batch[idx];
+        if (r.status === 'fulfilled') {
+          _dirtyCampaignIds.delete(c.id);
+          savedCount++;
+        } else {
+          failures.push({ campaign: c, reason: r.reason });
+        }
+      });
+    }
+    if (failures.length) {
+      // Re-throw the first failure so the existing error path (banner +
+      // retry + emergency backup) runs. Other failures stay dirty and the
+      // retry loop will pick them up.
+      const first = failures[0];
+      console.warn(`saveToDrive: ${failures.length}/${toSave.length} campaign(s) failed:`, failures);
+      throw first.reason;
     }
     databaseFileId = (current && current.driveDbFileId) || (targets[0] && targets[0].driveDbFileId) || 'drive:campaign-json';
     lastSaveTime = new Date();
@@ -8728,6 +8755,12 @@ window.__runTests = async function() {
     ok(typeof flushLocalBackupNow === 'function' && typeof _persistLocalBackupNow === 'function');
     const src = persistLocalBackup.toString();
     ok(/_backupTrailingTimer|_backupNextAllowed/.test(src), 'outer must debounce');
+  });
+  t('saveToDrive uses Promise.allSettled with concurrency cap (perf guard)', () => {
+    const src = saveToDrive.toString();
+    ok(/SAVE_CONCURRENCY/.test(src) && /allSettled/.test(src), 'must batch in chunks via allSettled');
+    ok(/failures\.push/.test(src) && /_dirtyCampaignIds\.delete/.test(src),
+       'only successes drop from dirty set; failures retain for retry');
   });
   t('maybeOfferLocalRestore skips when bk.email != currentUserEmail (source guard)', () => {
     const src = maybeOfferLocalRestore.toString();
