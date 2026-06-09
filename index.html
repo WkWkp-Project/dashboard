@@ -4634,6 +4634,28 @@ function isVideoType(t) { return /^video\//.test(t || ''); }
 // ============================================================================
 // LOG
 // ============================================================================
+// Audit-log retention: keep entries from the last LOG_RETENTION_DAYS days,
+// drop older ones on the next logAction call. The campaign's live log used
+// to grow unbounded — for an active campaign with thousands of edits this
+// made the Drive JSON payload explode (the (2/11) save indicator the user
+// reported). Trimming by time keeps recent debugging context and lets the
+// Drive payload steady-state instead of growing forever.
+//
+// Only the log array is trimmed — assets, media, snapshots, schema, Drive
+// folder/file references, and every piece of campaign CONTENT remain untouched.
+// See BIBLE § 6 'Audit log retention'.
+const LOG_RETENTION_DAYS = 60;
+function trimLogByRetention(log) {
+  if (!Array.isArray(log) || log.length === 0) return log;
+  const cutoff = Date.now() - LOG_RETENTION_DAYS * 86400000;
+  // Entries with missing / unparseable time are kept (safer than dropping
+  // legitimate entries because of a bad timestamp).
+  return log.filter(e => {
+    if (!e || !e.time) return true;
+    const t = Date.parse(e.time);
+    return isNaN(t) || t >= cutoff;
+  });
+}
 function logAction(type, desc) {
   const c = getCurrentCampaign();
   if (!c) return; // no campaign context yet — silently skip
@@ -4641,6 +4663,18 @@ function logAction(type, desc) {
     time: new Date().toISOString(), type, desc,
     user: document.getElementById('sb-name').textContent || 'Guest'
   });
+  // Apply retention every time so the cap is enforced lazily — no one-shot
+  // migration step needed. The first action on a campaign with months of
+  // stale history trims it on the spot.
+  const beforeLen = c.log.length;
+  c.log = trimLogByRetention(c.log);
+  const trimmed = beforeLen - c.log.length;
+  if (trimmed > 0 && !c._logTrimAnnounced) {
+    c._logTrimAnnounced = true; // one-shot per session to avoid spam
+    if (typeof showToast === 'function') {
+      showToast(`📝 ตัดประวัติเก่ากว่า ${LOG_RETENTION_DAYS} วัน (${trimmed} รายการ) — งาน/รูป/ข้อความไม่ถูกแตะ`, 'warn');
+    }
+  }
   renderHistory();
   scheduleSave();
 }
@@ -8838,6 +8872,38 @@ window.__runTests = async function() {
   t('saveNewCampaign wrapper has re-entrancy guard (source guard)', () => {
     const src = saveNewCampaign.toString();
     ok(/submitBtn\.disabled/.test(src) && /finally/.test(src), 'expected disable+finally pattern around _saveNewCampaignInner');
+  });
+  // Log retention: keep last LOG_RETENTION_DAYS days; drop older entries on
+  // next logAction. Only touches log[], leaves assets/media/schema alone.
+  t('LOG_RETENTION_DAYS is 60 (2 months) and trimLogByRetention defined', () => {
+    ok(LOG_RETENTION_DAYS === 60 && typeof trimLogByRetention === 'function');
+  });
+  t('trimLogByRetention drops entries older than the cutoff, keeps recent', () => {
+    const day = 86400000;
+    const now = Date.now();
+    const input = [
+      { time: new Date(now - 1 * day).toISOString(),  type: 'A', desc: 'recent' },
+      { time: new Date(now - 30 * day).toISOString(), type: 'B', desc: 'midmonth' },
+      { time: new Date(now - 59 * day).toISOString(), type: 'C', desc: 'within-window' },
+      { time: new Date(now - 61 * day).toISOString(), type: 'D', desc: 'just-past-window' },
+      { time: new Date(now - 365 * day).toISOString(), type: 'E', desc: 'ancient' }
+    ];
+    const out = trimLogByRetention(input);
+    ok(out.length === 3, `expected 3 kept, got ${out.length}`);
+    ok(out.map(e => e.type).join('') === 'ABC', 'should keep A,B,C in order');
+  });
+  t('trimLogByRetention keeps entries with missing/invalid time (defensive)', () => {
+    const out = trimLogByRetention([
+      { type: 'X', desc: 'no-time' },
+      { time: 'not-a-date', type: 'Y', desc: 'bad-time' },
+      { time: new Date(Date.now() - 1000 * 86400000).toISOString(), type: 'Z', desc: 'ancient-but-valid-time' }
+    ]);
+    ok(out.length === 2, 'no-time + bad-time kept, ancient-valid dropped');
+  });
+  t('logAction trims long history and announces once (source guard)', () => {
+    const src = logAction.toString();
+    ok(/trimLogByRetention/.test(src) && /_logTrimAnnounced/.test(src),
+       'logAction must apply trimLogByRetention + one-shot toast guard');
   });
   t('handleRealGoogleLogin falls back to GIS tokenClient when Firebase returns no Drive token (source guard)', () => {
     const src = handleRealGoogleLogin.toString();
