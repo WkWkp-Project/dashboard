@@ -4645,16 +4645,23 @@ function isVideoType(t) { return /^video\//.test(t || ''); }
 // folder/file references, and every piece of campaign CONTENT remain untouched.
 // See BIBLE § 6 'Audit log retention'.
 const LOG_RETENTION_DAYS = 60;
+const LOG_RETENTION_MAX_ENTRIES = 800;
 function trimLogByRetention(log) {
   if (!Array.isArray(log) || log.length === 0) return log;
   const cutoff = Date.now() - LOG_RETENTION_DAYS * 86400000;
   // Entries with missing / unparseable time are kept (safer than dropping
   // legitimate entries because of a bad timestamp).
-  return log.filter(e => {
+  const byTime = log.filter(e => {
     if (!e || !e.time) return true;
     const t = Date.parse(e.time);
     return isNaN(t) || t >= cutoff;
   });
+  // Hard cap on entry count — whichever limit hits first wins. log[] is
+  // unshift()-ed so newest is at index 0; slice keeps the most recent.
+  if (byTime.length > LOG_RETENTION_MAX_ENTRIES) {
+    return byTime.slice(0, LOG_RETENTION_MAX_ENTRIES);
+  }
+  return byTime;
 }
 function logAction(type, desc) {
   const c = getCurrentCampaign();
@@ -4672,7 +4679,7 @@ function logAction(type, desc) {
   if (trimmed > 0 && !c._logTrimAnnounced) {
     c._logTrimAnnounced = true; // one-shot per session to avoid spam
     if (typeof showToast === 'function') {
-      showToast(`📝 ตัดประวัติเก่ากว่า ${LOG_RETENTION_DAYS} วัน (${trimmed} รายการ) — งาน/รูป/ข้อความไม่ถูกแตะ`, 'warn');
+      showToast(`📝 ตัดประวัติเก่า (${trimmed} รายการ) — เก็บ ${LOG_RETENTION_DAYS} วัน / สูงสุด ${LOG_RETENTION_MAX_ENTRIES} แถว · งาน/รูป/ข้อความไม่ถูกแตะ`, 'warn');
     }
   }
   renderHistory();
@@ -8877,6 +8884,20 @@ window.__runTests = async function() {
   // next logAction. Only touches log[], leaves assets/media/schema alone.
   t('LOG_RETENTION_DAYS is 60 (2 months) and trimLogByRetention defined', () => {
     ok(LOG_RETENTION_DAYS === 60 && typeof trimLogByRetention === 'function');
+  });
+  t('LOG_RETENTION_MAX_ENTRIES is 800 (hard cap on entry count)', () => {
+    ok(LOG_RETENTION_MAX_ENTRIES === 800);
+  });
+  t('trimLogByRetention caps at LOG_RETENTION_MAX_ENTRIES, keeps newest', () => {
+    const now = Date.now();
+    const input = [];
+    for (let i = 0; i < 1000; i++) {
+      // all within window, newest at index 0 (matches unshift order)
+      input.push({ time: new Date(now - i * 60000).toISOString(), type: 'T', desc: 'e' + i });
+    }
+    const out = trimLogByRetention(input);
+    ok(out.length === 800, `expected 800 kept, got ${out.length}`);
+    ok(out[0].desc === 'e0' && out[799].desc === 'e799', 'should keep the newest 800');
   });
   t('trimLogByRetention drops entries older than the cutoff, keeps recent', () => {
     const day = 86400000;
