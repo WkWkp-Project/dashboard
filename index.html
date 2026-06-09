@@ -6097,8 +6097,12 @@ let _assetModalCampaignId = null;
 function _lockAssetModal() {
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return null; }
+  // Idempotent: if the modal was previously opened but never closed (e.g.
+  // an old ESC-handler bug), don't bump the counter a second time. We still
+  // overwrite the captured id so a re-open targets the current campaign.
+  const alreadyLocked = _assetModalCampaignId !== null;
   _assetModalCampaignId = camp.id;
-  _enterEditModal();
+  if (!alreadyLocked) _enterEditModal();
   return camp;
 }
 function openAddAssetModal() {
@@ -7751,8 +7755,10 @@ function openEditModal() {
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return; }
   if (camp.status === 'handed-off') { showToast('Re-open campaign first — Re-open ก่อนแก้ไข', 'warn'); return; }
-  _editInfoModalCampaignId = camp.id; // lock — see saveCampaignInfo
-  _enterEditModal();
+  // Idempotent lock — see _lockAssetModal.
+  const alreadyLocked = _editInfoModalCampaignId !== null;
+  _editInfoModalCampaignId = camp.id;
+  if (!alreadyLocked) _enterEditModal();
   document.getElementById('editClient').value = camp.client || '';
   document.getElementById('editCampaign').value = camp.campaign || '';
   document.getElementById('editStart').value = camp.startPeriod || '';
@@ -8031,10 +8037,12 @@ function openConnectModal() {
   if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือก campaign ก่อน', 'warn'); return; }
-  _connectModalCampaignId = camp.id; // snapshot — saveDriveLinks must use this
+  // Idempotent lock — see _lockAssetModal.
+  const alreadyLocked = _connectModalCampaignId !== null;
+  _connectModalCampaignId = camp.id;
   for (let i = 0; i < 4; i++) document.getElementById(`linkInput${i}`).value = camp.driveLinks[i]?.url || '';
   document.getElementById('connectModal').classList.add('show');
-  _enterEditModal(); // silent-sync lock so the campaign array can't be replaced under us
+  if (!alreadyLocked) _enterEditModal();
 }
 function closeConnectModal() {
   document.getElementById('connectModal').classList.remove('show');
@@ -8106,8 +8114,28 @@ function showToast(msg, type) {
 window.addEventListener('beforeunload', e => {
   if (pendingChanges && !isOfflineMode) { e.preventDefault(); e.returnValue = 'Unsaved changes — leave?'; }
 });
+// ESC must NOT just strip the .show class — modals that own state (campaign
+// id locks, _editModalOpenCount, pendingFiles/Links) need their close
+// functions to run, or those locks leak forever and the silent-sync guard
+// gets stuck. Real symptom: admin opens Add Asset, hits ESC to cancel, the
+// modal hides but _editModalOpenCount stays at 1, so EVERY subsequent
+// background sync is blocked. The campaign view shows stale data and
+// (worse) the next save can land on a stale snapshot of campaigns[].
+const _MODAL_CLOSE_FNS = {
+  assetModal: () => (typeof closeAssetModal === 'function' ? closeAssetModal() : null),
+  editInfoModal: () => (typeof closeEditModal === 'function' ? closeEditModal() : null),
+  connectModal: () => (typeof closeConnectModal === 'function' ? closeConnectModal() : null),
+  configModal: () => (typeof closeConfigModal === 'function' ? closeConfigModal() : null),
+  addCampaignModal: () => (typeof closeAddCampaignModal === 'function' ? closeAddCampaignModal() : null),
+  addMemberModal: () => (typeof closeAddMemberModal === 'function' ? closeAddMemberModal() : null)
+};
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') document.querySelectorAll('.simple-overlay.show').forEach(o => o.classList.remove('show'));
+  if (e.key !== 'Escape') return;
+  document.querySelectorAll('.simple-overlay.show').forEach(o => {
+    const fn = o.id && _MODAL_CLOSE_FNS[o.id];
+    if (fn) { try { fn(); } catch(err) { console.warn('ESC close failed for', o.id, err); o.classList.remove('show'); } }
+    else o.classList.remove('show');
+  });
 });
 
 // ============================================================================
@@ -9838,6 +9866,27 @@ window.__runTests = async function() {
     _assetModalCampaignId = save.assetLock;
     editingAssetId = save.editing;
     pendingFiles = save.pf; pendingLinks = save.pl;
+  });
+  t('ESC closes modals via their close functions (no leaked locks)', () => {
+    // Regression for "modal ESC bypass" — pre-fix, the global ESC handler
+    // just stripped .show from .simple-overlay. closeAssetModal /
+    // closeEditModal / closeConnectModal weren't invoked → _editModalOpenCount
+    // stayed at 1 forever → silent-sync lock got stuck → every background
+    // sync became a no-op. From the admin's POV, data went stale and saves
+    // appeared to lose work.
+    const prev = _editModalOpenCount;
+    _editModalOpenCount = 0;
+    // Simulate an open asset modal
+    _assetModalCampaignId = 'camp-x';
+    _enterEditModal();
+    const overlay = document.getElementById('assetModal');
+    overlay.classList.add('show');
+    // Fire ESC — should call closeAssetModal which calls _exitEditModal
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    ok(!overlay.classList.contains('show'), 'overlay hidden after ESC');
+    ok(_assetModalCampaignId === null, 'lock id cleared (closeAssetModal ran)');
+    ok(_editModalOpenCount === 0, `count released (got ${_editModalOpenCount})`);
+    _editModalOpenCount = prev;
   });
   t('_hasLocalEditInFlight true while an edit modal is open (silent-sync lock)', () => {
     const prev = _editModalOpenCount;
