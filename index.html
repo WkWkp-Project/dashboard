@@ -163,15 +163,6 @@
   .assign-tick { width:20px; height:20px; border-radius:50%; border:1.5px solid var(--line); color:transparent; display:grid; place-items:center; font-size:11px; flex-shrink:0; transition:all .12s; }
   .assign-row.on .assign-tick { background:var(--gold); border-color:var(--gold); color:#fff; }
 
-  /* Online presence (Wkwk team) */
-  .presence-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; font-size: 12px; color: rgba(250,250,247,0.85); margin-bottom: 1px; }
-  .presence-item:hover { background: var(--ink-2); }
-  .presence-avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--ink-3); display: grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--paper); flex-shrink: 0; position: relative; }
-  .presence-avatar.self { background: var(--gold); color: var(--ink); }
-  .presence-avatar::after { content: ''; position: absolute; bottom: -1px; right: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); border: 2px solid var(--ink); }
-  .presence-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .presence-name small { color: var(--gold); font-size: 10px; margin-left: 4px; }
-  .presence-role { font-family: 'Geist Mono', monospace; font-size: 8px; letter-spacing: 1px; color: var(--muted-2); padding: 1px 4px; border: 1px solid var(--ink-3); border-radius: 2px; }
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--ink-2); }
   .sidebar-footer a { color: var(--gold); text-decoration: none; font-family: 'Geist Mono', monospace; font-size: 10px; }
   .sidebar-footer a:hover { text-decoration: underline; }
@@ -720,10 +711,6 @@
       </div>
     </div>
 
-    <div class="nav-section" id="presence-section" style="display:none;">
-      <div class="nav-label"><span>Online · ทีม Wkwk</span><span id="presence-count" style="margin-left:6px; color:var(--gold);"></span></div>
-      <div id="presence-list"></div>
-    </div>
 
     <div class="nav-section" style="margin-top:auto;">
       <div class="nav-item" onclick="confirmLogout()">
@@ -1713,14 +1700,6 @@ let _lastSignalRecvTs = 0;
 // when the retry queue is exhausted; reset on next user edit or save success
 // so a freshly typed change can trigger a fresh emergency download if needed.
 let _emergencyBackupDone = false;
-// Presence: list of teammates currently active on the same shared DB. Each
-// entry is {key, name, role, avatar, loginAt, lastSeen, app}. Pruned past
-// PRESENCE_TIMEOUT_MS so closing the tab quietly drops you off the list.
-let presence = [];
-let presenceKey = null;
-let presenceHeartbeatTimer = null;
-const PRESENCE_TIMEOUT_MS = 5 * 60 * 1000;
-const PRESENCE_HEARTBEAT_MS = 90000;
 const APP_VERSION = 'v4.0';
 let confirmCallback = null;
 let editingAssetId = null;
@@ -2336,9 +2315,8 @@ async function onLoginSuccess() {
   catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
   _controlLiveRender = true; // initial load done → control real-time updates may re-render now
   startAutoResync(); // keep Drive data fresh while the tab is open
-  // 2b) Announce presence on the shared DB so other Wkwk teammates see us
-  // in their sidebar. Done after sync so the join log mentions the right
-  // databaseFileId.
+  // 2b) Write the LOGIN audit entry. (Presence feature was removed; this
+  // now just stamps the audit log + schedules a save.)
   if (isTeamRole()) joinSharedSession(userRole === 'operator' ? 'operator' : 'internal', userEmail || currentUserEmail);
   // 3) If Drive had no DB but a local backup exists, offer to restore it
   maybeOfferLocalRestore();
@@ -2386,8 +2364,8 @@ function applyTokenLogin(token) {
   logAction('SYSTEM', `Token login: ${match.name || 'token'} as ${userRole}`);
   showToast(`✓ เข้าระบบเป็น ${userRole === 'operator' ? 'Operator' : 'Client'}${match.name ? ' · ' + match.name : ''}`, 'ok');
   saveSession();
-  // Operators are Wkwk team — announce them on the shared presence list
-  // (clients are excluded by renderPresenceSidebar).
+  // Operators are Wkwk team — write the LOGIN audit entry. (Presence feature
+  // was removed; joinSharedSession is now just an audit-log wrapper.)
   if (userRole === 'operator') joinSharedSession('operator', token);
 }
 
@@ -2843,7 +2821,6 @@ async function forceSave() {
 }
 
 function buildDatabasePayload() {
-  prunePresence();
   return {
     schemaVersion: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
@@ -2852,8 +2829,7 @@ function buildDatabasePayload() {
     currentCampaignId: currentCampaignId,
     accessTokens: accessTokens,
     hub: hub,
-    manualBackupHistory: manualBackupHistory,
-    presence: presence
+    manualBackupHistory: manualBackupHistory
   };
 }
 
@@ -3237,7 +3213,7 @@ function applyCloudPayload(db, opts) {
   if (db && db.accessTokens) accessTokens = db.accessTokens;
   if (db && db.hub && typeof db.hub === 'object') hub = { folderUrl:'', driveFolderId:'', mediaFolderId:'', backupFolderUrl:'', notes:'', updatedAt:'', ...db.hub };
   if (db && Array.isArray(db.manualBackupHistory)) manualBackupHistory = db.manualBackupHistory;
-  if (db && Array.isArray(db.presence)) presence = db.presence;
+  // db.presence from older saves is ignored — the presence feature was removed.
   lastSaveTime = db && db.savedAt ? new Date(db.savedAt) : null;
 }
 
@@ -4367,7 +4343,6 @@ async function syncDatabaseFromDrive(opts) {
         return d && (!latest || d > latest) ? d : latest;
       }, null);
       renderEverything();
-      renderPresenceSidebar();
       updateDbIdFooter();
       setSaveStatus('saved', silent ? 'Synced from Drive' : 'Loaded campaign JSON from Drive');
       setDataSource('drive'); // fresh from canonical Drive — undo any prior 'local' state
@@ -4440,34 +4415,6 @@ async function connectToTeamDB() {
   }
 }
 
-// Lightweight check: has the DB file changed on Drive since our last sync?
-// If yes and we have no pending local edits, pull silently so all Wkwk
-// teammates converge on the same data.
-async function pollRemoteChanges() {
-  if (!accessToken || isOfflineMode || !databaseFileId) return;
-  if (isSaving || saveTimer) return; // a local save is in flight / pending
-  // Smart-poll: if the Firestore signal channel produced a heartbeat within
-  // the last poll window, the realtime path is healthy and the Drive HEAD
-  // is redundant. Saves quota in the common (signal-up) case while keeping
-  // the 30s fallback alive whenever the channel goes silent.
-  if (_lastSignalRecvTs && Date.now() - _lastSignalRecvTs < REMOTE_POLL_MS) return;
-  try {
-    const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${databaseFileId}?fields=modifiedTime`);
-    if (!r.ok) return;
-    const j = await r.json();
-    if (!j.modifiedTime || j.modifiedTime === remoteModifiedTime) return;
-    if (pendingChanges) return; // don't clobber local edits; saveToDrive will reconcile next
-    await syncDatabaseFromDrive({ silent: true });
-  } catch(e) { /* network blip — try again next tick */ }
-}
-
-function startRemotePolling() {
-  // Per-campaign Drive JSON does not poll one global DB file. No-op now.
-  return;
-}
-function stopRemotePolling() {
-  if (remotePollTimer) { clearInterval(remotePollTimer); remotePollTimer = null; }
-}
 
 // ---- Auto re-sync (keep data fresh after the tab sits idle) ----------------
 // The campaign content lives on Drive and isn't real-time, so without this a
@@ -4516,115 +4463,21 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   window.addEventListener('focus', () => maybeResync('focus'));
 }
 
-// ---- Presence (online Wkwk teammates) -------------------------------------
-function prunePresence() {
-  const cutoff = Date.now() - PRESENCE_TIMEOUT_MS;
-  presence = (presence || []).filter(p => {
-    if (!p || !p.lastSeen) return false;
-    const t = Date.parse(p.lastSeen);
-    return !isNaN(t) && t > cutoff;
-  });
-}
-
-// Only actual Wkwk team roles appear on the online sidebar (not customers).
-// When the control-plane role is known, trust it (customer maps to the legacy
+// Only actual Wkwk team roles get the team-side UI (not customers). When the
+// control-plane role is known, trust it (customer maps to the legacy
 // 'operator' bucket, so we must NOT fall through to userRole for them).
 function isTeamRole() {
   if (userRoleControl) return ['admin', 'editor', 'operation'].indexOf(userRoleControl) >= 0;
   return userRole === 'internal' || userRole === 'operator';
 }
 
-function upsertPresence() {
-  if (!presenceKey) return;
-  const name = currentUserName();
-  const avatar = (document.getElementById('sb-avatar')?.textContent || (name || '?')[0]).slice(0, 2);
-  const now = new Date().toISOString();
-  const existing = (presence || []).find(p => p.key === presenceKey);
-  if (existing) {
-    existing.lastSeen = now;
-    existing.name = name;
-    existing.role = userRole;
-    existing.avatar = avatar;
-    existing.app = APP_VERSION;
-  } else {
-    presence.push({ key: presenceKey, name, role: userRole, avatar, loginAt: now, lastSeen: now, app: APP_VERSION });
-  }
-  prunePresence();
-}
-
-// Real-time presence updates from the control plane → refresh the sidebar.
-function onControlPresenceChanged(list) {
-  presence = (list || []).slice();
-  prunePresence();
-  renderPresenceSidebar();
-}
-
-function renderPresenceSidebar() {
-  // Team online-presence feature removed. Keep the element hidden and bail.
-  const section = document.getElementById('presence-section');
-  if (section) section.style.display = 'none';
-  return;
-  // eslint-disable-next-line no-unreachable
-  const list = document.getElementById('presence-list');
-  const countEl = document.getElementById('presence-count');
-  if (!section || !list) return;
-  if (userRole === 'client' || isOfflineMode) { section.style.display = 'none'; return; }
-  prunePresence();
-  // Only show Wkwk team (internal + operator), not clients
-  const team = (presence || []).filter(p => p.role === 'internal' || p.role === 'operator');
-  if (team.length === 0) { section.style.display = 'none'; return; }
-  team.sort((a, b) => (a.loginAt || '').localeCompare(b.loginAt || ''));
-  section.style.display = '';
-  if (countEl) countEl.textContent = `${team.length}`;
-  list.innerHTML = team.map(p => {
-    const isSelf = p.key === presenceKey;
-    const av = escapeHtml((p.avatar || (p.name || '?')[0] || '?').slice(0, 2));
-    const tip = `${p.name} · login ${new Date(p.loginAt).toLocaleString()} · app ${p.app || '?'}`;
-    return `<div class="presence-item" title="${escapeHtml(tip)}">
-      <div class="presence-avatar${isSelf ? ' self' : ''}">${av}</div>
-      <div class="presence-name">${escapeHtml(p.name || '—')}${isSelf ? ' <small>(คุณ)</small>' : ''}</div>
-      <div class="presence-role">${p.role === 'internal' ? 'INT' : 'OP'}</div>
-    </div>`;
-  }).join('');
-}
-
-function startPresenceHeartbeat() {
-  if (presenceHeartbeatTimer) return;
-  if (userRole === 'client' || isOfflineMode || !accessToken) return;
-  presenceHeartbeatTimer = setInterval(async () => {
-    // Pull any remote teammate updates first so the heartbeat-driven save
-    // folds them in rather than clobbering them with our stale view. Poll
-    // skips itself when there's a save in flight or pending local edits,
-    // which is the only case we'd want to skip the pull anyway.
-    try { await pollRemoteChanges(); } catch(e) {}
-    upsertPresence();
-    renderPresenceSidebar();
-    scheduleSave();
-  }, PRESENCE_HEARTBEAT_MS);
-}
-
-function stopPresenceHeartbeat() {
-  if (presenceHeartbeatTimer) { clearInterval(presenceHeartbeatTimer); presenceHeartbeatTimer = null; }
-}
-
+// Write the LOGIN audit entry. Previously this was wrapped in
+// joinSharedSession which also bootstrapped a 90s presence heartbeat
+// (forced save + pollRemoteChanges + presence write into Drive JSON).
+// The presence feature was UI-only-hidden but the heartbeat was still
+// hammering Drive every 90s. Heartbeat + presence state are gone now;
+// the periodic Drive read fallback is covered by maybeResync at 2min.
 function joinSharedSession(role, identifier, label) {
-  // identifier: email for internal, token for operator. Used to build a stable
-  // key that survives reloads so the same human doesn't appear twice.
-  const id = identifier || ('anon-' + Math.random().toString(36).slice(2, 8));
-  const nextKey = (role === 'internal' ? 'g:' : 'op:') + id;
-  // If we previously joined under a different key in this session
-  // (e.g. internal user entered an operator token mid-session), drop the
-  // stale entry so teammates don't see us twice in their sidebar.
-  if (presenceKey && presenceKey !== nextKey) {
-    presence = (presence || []).filter(p => p.key !== presenceKey);
-  }
-  presenceKey = nextKey;
-  upsertPresence();
-  renderPresenceSidebar();
-  startPresenceHeartbeat();
-  // Log the join AFTER syncDatabaseFromDrive has set databaseFileId, so the
-  // log entry includes which shared DB file we're on — verifiable across
-  // teammates who can confirm they see the same id.
   const dbTag = databaseFileId ? ' · DB ' + databaseFileId.slice(0, 8) + '…' : '';
   logAction('SYSTEM', `LOGIN: ${currentUserName()} (${role})${dbTag} · ${APP_VERSION}`);
   scheduleSave();
@@ -5865,20 +5718,11 @@ function confirmLogout() {
 
 function performLogout() {
   try { persistLocalBackup(); } catch(e) {}
-  // Remove our presence entry and flush so teammates' sidebars update right
-  // away instead of waiting for the 5-min timeout. Fire-and-forget — we don't
-  // block logout on the network.
-  stopPresenceHeartbeat();
-  stopRemotePolling();
   stopAutoResync();
-  // Drop our shared presence entry so teammates' sidebars update immediately.
-  if (window.Control && window.Control.available() && presenceKey) {
-    try { window.Control.removePresence(presenceKey); } catch(e) {}
-  }
   if (fbDbUnsub) { try { fbDbUnsub(); } catch(e) {} fbDbUnsub = null; }
-  if (presenceKey && Array.isArray(presence)) {
-    presence = presence.filter(p => p.key !== presenceKey);
-    if (accessToken && isAdmin) { logAction('SYSTEM', `LOGOUT: ${currentUserName()}`); try { saveToDrive(); } catch(e) {} }
+  if (accessToken && isAdmin) {
+    logAction('SYSTEM', `LOGOUT: ${currentUserName()}`);
+    try { saveToDrive(); } catch(e) {}
   }
   try {
     if (accessToken && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
@@ -9184,11 +9028,7 @@ window.__runTests = async function() {
     if (p && typeof p.catch === 'function') p.catch(() => {});
     ok(unchanged);
   });
-  t('REMOTE_POLL_MS is 3 minutes (safety-net only — signal channel is primary)', () => ok(REMOTE_POLL_MS === 180000));
-  t('pollRemoteChanges skips while signal channel is fresh (source guard)', () => {
-    const src = pollRemoteChanges.toString();
-    ok(/_lastSignalRecvTs/.test(src) && /REMOTE_POLL_MS/.test(src));
-  });
+  t('REMOTE_POLL_MS is 3 minutes (still defined for signal-channel gating)', () => ok(REMOTE_POLL_MS === 180000));
   t('onCampaignSignal stamps _lastSignalRecvTs before bailing out', () => {
     const sv = _lastSignalRecvTs; _lastSignalRecvTs = 0;
     const svE = currentUserEmail; currentUserEmail = 'me@x.y';
@@ -9467,8 +9307,7 @@ window.__runTests = async function() {
   t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
   t('auto-resync API defined', () => ok(typeof maybeResync === 'function' && typeof startAutoResync === 'function' && typeof stopAutoResync === 'function'));
   t('silent token refresh path defined', () => ok(typeof refreshTokenViaPopup === 'function'));
-  t('Control presence API defined', () => ok(typeof window.Control.heartbeatPresence === 'function' && typeof window.Control.subscribePresence === 'function' && typeof window.Control.removePresence === 'function'));
-  t('isTeamRole + onControlPresenceChanged defined', () => ok(typeof isTeamRole === 'function' && typeof onControlPresenceChanged === 'function'));
+  t('isTeamRole defined (kept after presence removal)', () => ok(typeof isTeamRole === 'function'));
   t('isTeamRole: admin/editor/operation true, customer/viewer false', () => {
     const svC = userRoleControl, svR = userRole;
     userRoleControl='admin'; userRole='internal'; const a=isTeamRole();
@@ -9542,7 +9381,7 @@ window.__runTests = async function() {
    'clearCurrentCampaign','manualSnapshot','openSnapshotsModal','renderSnapshotsModal','showTypedConfirm','onConfirmTypedInput',
    'onTokenExpiresPresetChange','getTokenExpiryDays','stripMediaForSnapshot','currentUserName',
    'persistLocalBackup','readLocalBackup','clearLocalBackup','maybeOfferLocalRestore','restoreFromLocalBackup',
-   'prunePresence','upsertPresence','renderPresenceSidebar','startPresenceHeartbeat','stopPresenceHeartbeat','joinSharedSession','pollRemoteChanges','startRemotePolling','stopRemotePolling','updateDbIdFooter',
+   'joinSharedSession','updateDbIdFooter',
    'connectToTeamDB','readHubFolderHint','writeHubFolderHint','clearHubFolderHint',
    'ensureCampaignMediaFolder','openEditDriveFolder'
   ].forEach(fn => t(`fn ${fn} defined`, () => ok(typeof window[fn] === 'function', `${fn} is ${typeof window[fn]}`)));
@@ -9662,8 +9501,8 @@ window.__runTests = async function() {
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId; editingAssetId = save.editingAssetId;
   });
 
-  // ---- Poll resumes after each save (no stale saveTimer) ----
-  t('scheduleSave callback nulls saveTimer when it fires (pollRemoteChanges can run)', () => {
+  // ---- maybeResync can run after each save (no stale saveTimer) ----
+  t('scheduleSave callback nulls saveTimer when it fires (silent-sync guard releases)', () => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     const save = { _readyToSave, accessToken, isOfflineMode, isSaving, pendingChanges };
     isSaving = false; pendingChanges = false; _readyToSave = true; accessToken = 'fake'; isOfflineMode = false;
@@ -9914,69 +9753,21 @@ window.__runTests = async function() {
     campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
   });
 
-  // ---- Presence / shared-session ----
-  t('presence payload included in buildDatabasePayload', () => {
+  // ---- Removed-feature guard: presence + remote-polling are gone ----
+  t('presence + polling APIs removed (resource-leak fix)', () => {
+    ok(typeof prunePresence === 'undefined', 'prunePresence must not exist');
+    ok(typeof upsertPresence === 'undefined', 'upsertPresence must not exist');
+    ok(typeof renderPresenceSidebar === 'undefined', 'renderPresenceSidebar must not exist');
+    ok(typeof startPresenceHeartbeat === 'undefined', 'startPresenceHeartbeat must not exist');
+    ok(typeof pollRemoteChanges === 'undefined', 'pollRemoteChanges must not exist');
+    ok(typeof startRemotePolling === 'undefined', 'startRemotePolling must not exist');
     const p = buildDatabasePayload();
-    ok('presence' in p, 'payload exposes presence');
-    ok(Array.isArray(p.presence), 'presence is an array');
+    ok(!('presence' in p), 'buildDatabasePayload no longer ships a presence field');
   });
-  t('upsertPresence inserts then refreshes (no duplicate)', () => {
-    const save = { presence, presenceKey, userRole };
-    presence = []; presenceKey = 'g:test@wkwk.com'; userRole = 'internal';
-    upsertPresence(); upsertPresence();
-    eq(presence.length, 1, 'one entry for same key');
-    ok(presence[0].loginAt && presence[0].lastSeen, 'has timestamps');
-    presence = save.presence; presenceKey = save.presenceKey; userRole = save.userRole;
-  });
-  t('prunePresence drops entries past timeout', () => {
-    const save = presence;
-    const stale = new Date(Date.now() - (PRESENCE_TIMEOUT_MS + 10000)).toISOString();
-    const fresh = new Date().toISOString();
-    presence = [
-      { key: 'g:old@x', name: 'Old', role: 'internal', lastSeen: stale, loginAt: stale },
-      { key: 'g:new@x', name: 'New', role: 'internal', lastSeen: fresh, loginAt: fresh }
-    ];
-    prunePresence();
-    eq(presence.length, 1);
-    eq(presence[0].key, 'g:new@x');
-    presence = save;
-  });
-  t('joinSharedSession dedupes when role switches mid-session', () => {
-    const save = { presence, presenceKey, userRole };
-    presence = []; presenceKey = null;
-    userRole = 'internal'; joinSharedSession('internal', 'op@wkwk.com');
-    const firstKey = presenceKey;
-    userRole = 'operator'; joinSharedSession('operator', 'tok-xyz');
-    const internalEntries = presence.filter(p => p.key === firstKey);
-    eq(internalEntries.length, 0, 'old internal entry was dropped');
-    eq(presence.filter(p => p.key === presenceKey).length, 1, 'new operator entry exists');
-    presence = save.presence; presenceKey = save.presenceKey; userRole = save.userRole;
-  });
-  t('renderPresenceSidebar hides section for client / offline', () => {
-    const save = { userRole, isOfflineMode };
-    userRole = 'client'; renderPresenceSidebar();
-    eq(document.getElementById('presence-section').style.display, 'none');
-    userRole = save.userRole; isOfflineMode = save.isOfflineMode; renderPresenceSidebar();
-  });
-  t('renderPresenceSidebar excludes client entries from Wkwk team view', () => {
-    const save = { presence, userRole, isOfflineMode };
-    userRole = 'internal'; isOfflineMode = false;
-    presence = [
-      { key:'g:a@x', name:'A', role:'internal', avatar:'A', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() },
-      { key:'c:tok1', name:'ClientGuest', role:'client', avatar:'C', loginAt:new Date().toISOString(), lastSeen:new Date().toISOString() }
-    ];
-    renderPresenceSidebar();
-    const list = document.getElementById('presence-list').innerHTML;
-    ok(list.includes('A'), 'internal A shown');
-    ok(!list.includes('ClientGuest'), 'client hidden from Wkwk roster');
-    presence = save.presence; userRole = save.userRole; isOfflineMode = save.isOfflineMode; renderPresenceSidebar();
-  });
-  t('pollRemoteChanges skips when no DB file id', async () => {
-    const save = databaseFileId; databaseFileId = null;
-    let called = 0; const origFetch = window.authFetch; window.authFetch = () => { called++; return Promise.resolve(new Response('{}')); };
-    await pollRemoteChanges();
-    eq(called, 0, 'no network call');
-    databaseFileId = save; window.authFetch = origFetch;
+  t('joinSharedSession only writes the LOGIN audit + scheduleSave (no heartbeat)', () => {
+    const src = joinSharedSession.toString();
+    ok(/LOGIN:/.test(src) && /scheduleSave/.test(src), 'must still log + schedule');
+    ok(!/presence/i.test(src) && !/heartbeat/i.test(src), 'must not touch presence/heartbeat');
   });
 
   await _chain;
