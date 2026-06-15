@@ -4,18 +4,29 @@
 
 ---
 
-## ⚙️ ตัวแปรที่ต้องเติม (กรอกก่อนเริ่ม)
+## ⚙️ ตัวแปรของระบบนี้ (ค่าจริง — ใช้ตามนี้)
 
-```
-SUBDOMAIN          = dashboard.wkwkp.com           ← เปลี่ยนเป็น subdomain ของจริง
-OLD_DOMAIN         = wkwkp-project.github.io       ← เปลี่ยนเป็น domain เดิม
-REPO_URL           = https://github.com/WkWkp-Project/dashboard.git
-DEPLOY_BRANCH      = fix-dash-codex                ← หรือ main ถ้า merge แล้ว
-GOOGLE_OAUTH_ID    = 165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com
-FIREBASE_PROJECT   = (ดูจาก index.html — firebaseConfig.projectId)
-```
+| ตัวแปร | ค่า |
+|---|---|
+| Subdomain ใหม่ | `content-asset-db.wkwkp.com` |
+| URL ใหม่เต็ม | `https://content-asset-db.wkwkp.com/` |
+| Domain เดิม | `wkwkp-project.github.io/dashboard` |
+| URL เดิมเต็ม | `https://wkwkp-project.github.io/dashboard/` |
+| Repo URL | `https://github.com/WkWkp-Project/dashboard.git` |
+| Deploy branch | `fix-dash-codex` |
+| Google OAuth Client ID | `165279376241-gbee5rudn234trve8fsm6ccl35kgrrei.apps.googleusercontent.com` |
+| Firebase Project ID | `wkwkp-project` |
 
-> ⚠️ ใช้ **find & replace** ในเอกสารนี้ก่อนเริ่ม — เปลี่ยนทุกที่ที่เขียน `SUBDOMAIN` เป็นค่าจริง
+> ⚠️ **หมายเหตุสำคัญ 2 จุด:**
+>
+> **1. Subdomain ใช้ตัวพิมพ์เล็กทั้งหมด** — แม้คุณตั้งใจ `Content-Asset-DB.wkwkp.com`
+>    Browser/DNS จะ normalize เป็น `content-asset-db.wkwkp.com` อัตโนมัติ
+>    เวลาเพิ่มใน OAuth/Firebase ให้ใช้ตัวเล็กตามที่ระบบเก็บจริง
+>
+> **2. Path เปลี่ยน:** เดิม `wkwkp-project.github.io/dashboard/` (sub-path)
+>    ใหม่ `content-asset-db.wkwkp.com/` (root) — ตรวจแล้วไม่มี hardcoded
+>    `/dashboard/` ใน code (ใช้ relative path) → ปลอดภัย
+>    Admin ต้องจำ URL ใหม่ **ไม่มี `/dashboard/` ต่อท้าย**
 
 ---
 
@@ -41,15 +52,15 @@ node test/run-tests.mjs 2>&1 | tail -5  # ควรเห็น 325+/329 pass
 ## Phase 1 — DNS Preparation (1 ชั่วโมง ก่อนเริ่ม — รอ propagate)
 
 ### 1.1 ลด TTL ของ DNS เดิม (ถ้ามี)
-ถ้า `SUBDOMAIN` ยังไม่มี A/CNAME record:
+ถ้า `content-asset-db.wkwkp.com` ยังไม่มี A/CNAME record:
 - ข้าม — ตั้งใหม่ใน Phase 3.2
 
 ถ้ามี record อยู่แล้ว:
 - ไปที่ DNS provider (Cloudflare / GoDaddy / domain registrar)
-- หา record ของ `SUBDOMAIN` → แก้ TTL เหลือ **300** (5 นาที)
+- หา record ของ `content-asset-db.wkwkp.com` → แก้ TTL เหลือ **300** (5 นาที)
 - รอ propagate ตาม TTL เดิม (max 1 ชั่วโมง)
 
-**Verify:** `dig +short SUBDOMAIN` (หรือใช้ https://dnschecker.org)
+**Verify:** `dig +short content-asset-db.wkwkp.com` (หรือใช้ https://dnschecker.org)
 
 - [ ] DNS TTL = 300s
 - [ ] ตรวจแล้ว propagate ทั่วโลก
@@ -62,9 +73,9 @@ node test/run-tests.mjs 2>&1 | tail -5  # ควรเห็น 325+/329 pass
 1. Login Plesk panel (`https://your-plesk-server:8443`)
 2. ไปที่ **Domains** → กด **Add Subdomain**
 3. กรอก:
-   - Subdomain name: `dashboard` (หรือชื่อที่เลือก)
+   - Subdomain name: `content-asset-db`
    - Parent domain: `wkwkp.com`
-   - Document root: ใช้ default (เช่น `/httpdocs/dashboard.wkwkp.com/`) — **จด path นี้ไว้**
+   - Document root: ใช้ default (เช่น `/httpdocs/content-asset-db.wkwkp.com/`) — **จด path นี้ไว้**
 4. กด **OK**
 
 - [ ] Subdomain ถูกสร้าง
@@ -82,7 +93,7 @@ node test/run-tests.mjs 2>&1 | tail -5  # ควรเห็น 325+/329 pass
 
 **Verify:**
 ```bash
-curl -I https://SUBDOMAIN
+curl -I https://content-asset-db.wkwkp.com
 # ควรเห็น HTTP/2 200 หรือ 403 (เพราะยังไม่มีไฟล์) แต่ ไม่ใช่ SSL error
 ```
 
@@ -109,20 +120,20 @@ curl -I https://SUBDOMAIN
 1. ที่ subdomain → คลิก **Git** ในเมนู
 2. กด **Add Repository**
 3. กรอก:
-   - Repository URL: `REPO_URL`
+   - Repository URL: `https://github.com/WkWkp-Project/dashboard.git`
    - Use Git authentication: ถ้า repo private → กรอก deploy key หรือ token
    - Server path: document root ของ subdomain (จาก Phase 2.1)
    - Webhook: ☑ **เปิด** (เพื่อ auto-deploy เมื่อ push)
-   - Tracking branch: `DEPLOY_BRANCH`
+   - Tracking branch: `fix-dash-codex`
 4. กด **OK**
 5. กด **Pull Updates** เพื่อ pull ครั้งแรก
 
 **Verify:**
 ```bash
-curl -sI https://SUBDOMAIN/index.html | head -1
+curl -sI https://content-asset-db.wkwkp.com/index.html | head -1
 # ควรเห็น HTTP/2 200
 
-curl -s https://SUBDOMAIN/ | grep -o '<title>[^<]*</title>'
+curl -s https://content-asset-db.wkwkp.com/ | grep -o '<title>[^<]*</title>'
 # ควรเห็น <title>...Wakuwaku...</title>
 ```
 
@@ -172,7 +183,7 @@ add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
 **Verify:**
 ```bash
-curl -I https://SUBDOMAIN/index.html | grep -i cache-control
+curl -I https://content-asset-db.wkwkp.com/index.html | grep -i cache-control
 # ควรเห็น: cache-control: no-cache, no-store, must-revalidate
 ```
 
@@ -189,7 +200,7 @@ curl -I https://SUBDOMAIN/index.html | grep -i cache-control
 3. ส่วน **Authorized JavaScript origins**:
    - **❗ ห้ามลบ origin เดิม** (`https://wkwkp-project.github.io` หรือเดิม)
    - กด **+ ADD URI**
-   - ใส่: `https://SUBDOMAIN` (ไม่มี trailing slash, ไม่มี path)
+   - ใส่: `https://content-asset-db.wkwkp.com` (ไม่มี trailing slash, ไม่มี path)
 4. กด **SAVE**
 5. **รอ 5-10 นาที** ให้ propagate (Google บอกในหน้า)
 
@@ -203,7 +214,7 @@ curl -I https://SUBDOMAIN/index.html | grep -i cache-control
 2. เลือก project (ดูจาก `firebaseConfig.projectId` ใน `index.html`)
 3. **Authentication** → **Settings** tab → **Authorized domains**
 4. กด **Add domain**
-5. ใส่: `SUBDOMAIN` (ไม่มี https://, แค่ host)
+5. ใส่: `content-asset-db.wkwkp.com` (ไม่มี https://, แค่ host)
 6. กด **Add**
 
 - [ ] เพิ่ม domain ใหม่
@@ -211,7 +222,7 @@ curl -I https://SUBDOMAIN/index.html | grep -i cache-control
 
 ### 5.3 Verify (หลัง wait 10 นาที)
 ทดสอบใน browser ของคุณเอง (ห้ามให้ admin คนอื่น login ก่อน):
-1. เปิด `https://SUBDOMAIN/` ในโหมด **Incognito**
+1. เปิด `https://content-asset-db.wkwkp.com/` ในโหมด **Incognito**
 2. กด "Continue with Google Workspace"
 3. ถ้า popup login ขึ้นปกติ → ✅
 4. ถ้าขึ้น `redirect_uri_mismatch` → รออีก 5 นาที (propagate ช้า)
@@ -227,7 +238,7 @@ curl -I https://SUBDOMAIN/index.html | grep -i cache-control
 ทำคุณคนเดียว ใน Incognito ของ subdomain ใหม่
 
 ### 6.1 Basic load
-- [ ] เปิด `https://SUBDOMAIN/` → ไม่มี error ใน Console (F12)
+- [ ] เปิด `https://content-asset-db.wkwkp.com/` → ไม่มี error ใน Console (F12)
 - [ ] Login ผ่าน Google → เห็นชื่อตัวเองใน sidebar
 - [ ] Sidebar แสดง members ครบ (เหมือนเดิม)
 - [ ] คลิกเข้า member → เห็น campaigns ของเขา (เหมือนเดิม)
@@ -266,8 +277,8 @@ curl -I https://SUBDOMAIN/index.html | grep -i cache-control
 
 📅 วันที่ย้าย: ___________ เวลา ___________
 
-URL ใหม่: https://SUBDOMAIN
-URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน เป็น backup)
+URL ใหม่: https://content-asset-db.wkwkp.com
+URL เดิม: https://wkwkp-project.github.io/dashboard (ยังใช้ได้ 30 วัน เป็น backup)
 
 📋 สิ่งที่ทุกคนต้องทำ ก่อนเวลาย้าย:
 1. เซฟทุกงานที่ค้างให้หมด (ดู save indicator เขียว "Drive JSON saved")
@@ -300,7 +311,7 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 ### 8.1 Soft cutover (แนะนำ — ปลอดภัยสุด)
 
 ไม่ต้องตัด origin เดิม — แค่ประกาศให้ใช้ URL ใหม่
-- [ ] ส่งข้อความ "เริ่มใช้ URL ใหม่ได้แล้ว: `https://SUBDOMAIN`"
+- [ ] ส่งข้อความ "เริ่มใช้ URL ใหม่ได้แล้ว: `https://content-asset-db.wkwkp.com`"
 - [ ] ทุกคนเปลี่ยน bookmark
 - [ ] เก็บ origin เดิมไว้ 30 วันเป็น fallback
 
@@ -308,10 +319,10 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 เพิ่ม JS redirect ที่ origin เดิม:
 - Edit `index.html` ใน GitHub repo → เพิ่มบรรทัดล่างสุดก่อน `</head>`:
 ```html
-<script>location.replace('https://SUBDOMAIN' + location.pathname + location.search);</script>
+<script>location.replace('https://content-asset-db.wkwkp.com' + location.pathname + location.search);</script>
 ```
 - Push → GitHub Pages deploy 1 นาที
-- [ ] เปิด `OLD_DOMAIN` ใน Incognito → redirect ไป `SUBDOMAIN` อัตโนมัติ
+- [ ] เปิด `wkwkp-project.github.io/dashboard` ใน Incognito → redirect ไป `content-asset-db.wkwkp.com` อัตโนมัติ
 
 ⚠️ Hard cutover **ทำให้ rollback ยากขึ้น** — แนะนำ soft 30 วันก่อน
 
@@ -346,10 +357,10 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 - [ ] วันที่ 7: ถ้า zero issue → พิจารณาลบ origin เดิม
 
 ### Cleanup หลัง 7 วัน (ถ้าทุกอย่าง OK)
-- [ ] Google OAuth: ลบ origin เดิม (`OLD_DOMAIN`) ออกจาก Authorized JS origins
+- [ ] Google OAuth: ลบ origin เดิม (`wkwkp-project.github.io/dashboard`) ออกจาก Authorized JS origins
 - [ ] Firebase: ลบ domain เดิมออกจาก Authorized domains
 - [ ] GitHub Pages: ปิด (Settings → Pages → Source: None)
-- [ ] DNS: ลบ record ของ `OLD_DOMAIN`
+- [ ] DNS: ลบ record ของ `wkwkp-project.github.io/dashboard`
 
 ⚠️ **อย่ารีบลบ origin เดิม** — รอครบ 7 วันที่ zero issue จริง
 
@@ -361,13 +372,13 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 **สาเหตุ:** OAuth/Firebase whitelist ยังไม่ propagate
 **แก้:**
 - รอเพิ่ม 10 นาที
-- บอก admin ใช้ `OLD_DOMAIN` ชั่วคราว (ยังใช้ได้)
+- บอก admin ใช้ `wkwkp-project.github.io/dashboard` ชั่วคราว (ยังใช้ได้)
 - เช็คอีกครั้ง
 
 ### กรณีที่ 2: Subdomain โหลดไม่ขึ้น / 502 / SSL error
 **สาเหตุ:** Plesk config ผิด
 **แก้ฉุกเฉิน (admin ใช้งานต่อได้):**
-- บอกทีม "ใช้ `OLD_DOMAIN` ต่อก่อน"
+- บอกทีม "ใช้ `wkwkp-project.github.io/dashboard` ต่อก่อน"
 - คุณ debug Plesk
 - ไม่ต้องแก้ DNS — แค่ใช้ URL เดิม
 
@@ -375,21 +386,21 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 **สาเหตุ:** ไม่น่าเกิด — data อยู่ที่ Drive/Firestore ไม่ใช่ hosting
 **ตรวจ:**
 1. F12 Console → มี error อะไร?
-2. เปิด `OLD_DOMAIN` ทันที — ถ้าเห็นงานครบที่เดิม = Plesk config ปัญหา ไม่ใช่ data
+2. เปิด `wkwkp-project.github.io/dashboard` ทันที — ถ้าเห็นงานครบที่เดิม = Plesk config ปัญหา ไม่ใช่ data
 3. ถ้าเห็นไม่ครบที่ **ทั้ง 2 origin** = ปัญหา Drive permission, แจ้งผม
 **แก้:**
-- ทุกคนใช้ `OLD_DOMAIN` ต่อ
+- ทุกคนใช้ `wkwkp-project.github.io/dashboard` ต่อ
 - คุณส่ง screenshot console + รายชื่อ campaign ที่หาย ให้ผม
 
 ### กรณีที่ 4: ฉุกเฉินสุด — ต้องตัด subdomain ทันที
 **แก้:**
 - Plesk → subdomain → **Disable** (ไม่ใช่ลบ)
 - subdomain จะ down ทันที
-- ทุกคนเด้งกลับใช้ `OLD_DOMAIN` อัตโนมัติ (ถ้าเข้า bookmark เดิม)
+- ทุกคนเด้งกลับใช้ `wkwkp-project.github.io/dashboard` อัตโนมัติ (ถ้าเข้า bookmark เดิม)
 - DNS ไม่ต้องแก้
 
 ### กรณีที่ 5: admin บางคนแก้งานบน subdomain แล้ว rollback
-**สถานการณ์:** admin A แก้งานบน subdomain ใหม่, save ขึ้น Drive แล้ว → เรา rollback ใช้ `OLD_DOMAIN`
+**สถานการณ์:** admin A แก้งานบน subdomain ใหม่, save ขึ้น Drive แล้ว → เรา rollback ใช้ `wkwkp-project.github.io/dashboard`
 **ผล:** **ไม่หาย** — งานอยู่ที่ Drive แล้ว, ใช้ origin ไหนก็โหลดได้
 **ถ้า admin B แก้ค้างไว้ใน localStorage subdomain ใหม่ ไม่ได้ save:**
 - ไม่หายถาวร — เปิด subdomain นั้นอีกครั้งเมื่อ revive ระบบ → localStorage ยังอยู่
@@ -401,16 +412,16 @@ URL เดิม: https://OLD_DOMAIN (ยังใช้ได้ 30 วัน �
 
 ```bash
 # ตรวจ SSL ทำงาน
-curl -I https://SUBDOMAIN
+curl -I https://content-asset-db.wkwkp.com
 
 # ตรวจ cache header
-curl -I https://SUBDOMAIN/index.html | grep -i cache-control
+curl -I https://content-asset-db.wkwkp.com/index.html | grep -i cache-control
 
 # ตรวจ HTML โหลด
-curl -s https://SUBDOMAIN/ | head -20
+curl -s https://content-asset-db.wkwkp.com/ | head -20
 
 # ตรวจ DNS propagate
-dig +short SUBDOMAIN
+dig +short content-asset-db.wkwkp.com
 
 # ตรวจ commit hash ใน Plesk
 ssh plesk-user@plesk-host "cd /path/to/subdomain && git log --oneline -1"
