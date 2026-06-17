@@ -2722,7 +2722,12 @@ function _drainTokenWaiters(newToken) {
   ws.forEach(r => r(newToken || null));
 }
 
-async function authFetch(url, options = {}, _retried) {
+// Drive rate-limit (429) retry counter — per-call, lives on the call stack.
+// Maximum 3 retries with exponential backoff + jitter so a transient burst
+// (e.g. 5 admins all save at the same instant) resolves itself transparently
+// instead of falling into the save-failed banner path.
+const _RATE_LIMIT_RETRY_DELAYS = [500, 1500, 4000];
+async function authFetch(url, options = {}, _retried, _rateLimitAttempt) {
   options.headers = { ...options.headers, Authorization: `Bearer ${accessToken}` };
   let resp;
   try {
@@ -2736,9 +2741,33 @@ async function authFetch(url, options = {}, _retried) {
     if (fresh) {
       accessToken = fresh;
       options.headers.Authorization = `Bearer ${accessToken}`;
-      return authFetch(url, options, true);
+      return authFetch(url, options, true, _rateLimitAttempt);
     }
     throw new Error('Session expired — please sign in again');
+  }
+  // 429 (Drive rate limit) and 403 with "rateLimitExceeded" reason both mean
+  // "too many requests too fast" — Drive's per-user quota is 1000 q/100s. With
+  // multiple admins saving at the same moment we can pop this transiently.
+  // Exponential backoff + jitter spreads the retry storm so callers don't
+  // re-collide. Errors after the cap propagate normally so the existing
+  // banner + retry queue paths still fire.
+  const attempt = _rateLimitAttempt || 0;
+  if ((resp.status === 429 || resp.status === 403) && attempt < _RATE_LIMIT_RETRY_DELAYS.length) {
+    let isRateLimit = resp.status === 429;
+    if (!isRateLimit && resp.status === 403) {
+      // Peek at the body to distinguish quota-throttle from real permission
+      // denial. Clone so the original response stream isn't consumed.
+      try {
+        const peek = await resp.clone().text();
+        isRateLimit = /rateLimitExceeded|userRateLimitExceeded|quota/i.test(peek);
+      } catch(e) {}
+    }
+    if (isRateLimit) {
+      const base = _RATE_LIMIT_RETRY_DELAYS[attempt];
+      const jitter = Math.random() * base * 0.5;
+      await new Promise(r => setTimeout(r, base + jitter));
+      return authFetch(url, options, _retried, attempt + 1);
+    }
   }
   return resp;
 }
@@ -3329,16 +3358,17 @@ async function saveToDrive() {
       ? targets.filter(c => _dirtyCampaignIds.has(c.id))
       : targets;
     const toSave = dirty.length ? dirty : targets;
-    // Parallel save with concurrency cap = 3. Each saveCampaignJsonToDrive
+    // Parallel save with concurrency cap = 6. Each saveCampaignJsonToDrive
     // hits a different Drive folder + a different Firestore index doc + its
-    // own signal — no inter-campaign conflict to worry about. The cap keeps
-    // us well under the Drive per-user quota (1000 queries / 100s) and avoids
-    // a thundering-herd of N concurrent uploads on big dirty sets.
+    // own signal — no inter-campaign conflict to worry about. cap=6 keeps
+    // us well under the Drive per-user quota (1000 queries / 100s) — 6 in
+    // flight × ~5 concurrent calls each = ~30/save < 1000/100s easily —
+    // and roughly halves wall-clock time for an 11-campaign dirty set.
     // Failed campaigns stay in _dirtyCampaignIds; only successes are cleared
     // so the auto-retry loop (scheduleSaveRetry) re-attempts exactly what
     // didn't land. If ANY campaign failed, we throw at the end so the outer
     // catch fires its banner + retry — matches the old serial behaviour.
-    const SAVE_CONCURRENCY = 3;
+    const SAVE_CONCURRENCY = 6;
     let savedCount = 0;
     const failures = [];
     const conflicts = [];
@@ -3974,20 +4004,43 @@ function campaignDriveJsonPayload(camp) {
   };
 }
 
+// In-session cache for findCampaignJsonFile results. Every saveCampaignJsonToDrive
+// call hits it to discover the file id + current modifiedTime. For an admin
+// who edits the same campaign repeatedly within a short window (typical
+// flow: add asset → save → add another asset → save), we were issuing one
+// Drive GET per save just to re-confirm metadata we already knew. 10s TTL
+// keeps the cache tight enough that optimistic-concurrency checks still
+// catch real conflicts (auto-merge handles the edge case anyway).
+//
+// Cache is INVALIDATED in saveCampaignJsonToDrive on every successful
+// upload — we just wrote a new modifiedTime, so the cached one is stale.
+const _CAMP_FILE_CACHE = new Map();
+const _CAMP_FILE_CACHE_TTL_MS = 10000;
+function _invalidateCampaignFileCache(campId) {
+  if (campId) _CAMP_FILE_CACHE.delete(campId);
+  else _CAMP_FILE_CACHE.clear();
+}
 async function findCampaignJsonFile(camp) {
   if (!camp || !camp.driveFolderId) return null;
+  const cached = camp.id ? _CAMP_FILE_CACHE.get(camp.id) : null;
+  if (cached && Date.now() - cached.ts < _CAMP_FILE_CACHE_TTL_MS) return cached.value;
+  let result = null;
   if (camp.driveDbFileId) {
     const vr = await authFetch(`https://www.googleapis.com/drive/v3/files/${camp.driveDbFileId}?fields=id,modifiedTime,trashed,parents,webViewLink`);
     if (vr.ok) {
       const vj = await vr.json();
-      if (!vj.trashed && Array.isArray(vj.parents) && vj.parents.includes(camp.driveFolderId)) return vj;
+      if (!vj.trashed && Array.isArray(vj.parents) && vj.parents.includes(camp.driveFolderId)) result = vj;
     }
   }
-  const q = encodeURIComponent(`name='${CAMPAIGN_DB_FILENAME}' and '${camp.driveFolderId}' in parents and trashed=false`);
-  const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,webViewLink,parents)&orderBy=modifiedTime desc`);
-  if (!r.ok) throw await driveError(r);
-  const j = await r.json();
-  return (j.files && j.files[0]) || null;
+  if (!result) {
+    const q = encodeURIComponent(`name='${CAMPAIGN_DB_FILENAME}' and '${camp.driveFolderId}' in parents and trashed=false`);
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime,webViewLink,parents)&orderBy=modifiedTime desc`);
+    if (!r.ok) throw await driveError(r);
+    const j = await r.json();
+    result = (j.files && j.files[0]) || null;
+  }
+  if (camp.id) _CAMP_FILE_CACHE.set(camp.id, { ts: Date.now(), value: result });
+  return result;
 }
 
 // Threshold for optimistic concurrency check. A 1-second buffer absorbs minor
@@ -4033,6 +4086,9 @@ async function saveCampaignJsonToDrive(camp, opts) {
   if (!res || !res.id) throw new Error('Drive JSON save returned no file id');
   camp.driveDbFileId = res.id;
   camp.driveDbModifiedTime = res.modifiedTime || new Date().toISOString();
+  // Cached metadata is now stale — the modifiedTime we just minted needs to
+  // win over the previously-cached one on the next save.
+  _invalidateCampaignFileCache(camp.id);
   // Make the campaign visible to every admin: share the folder with all admins
   // and register it in the shared Firestore index. Both best-effort/non-fatal
   // so a Firestore or permission hiccup never blocks the Drive save itself.
@@ -8740,6 +8796,28 @@ window.__runTests = async function() {
     // Must abort with a return inside the catch when driveDbFileId is set,
     // not fall through to local/index/signal removal.
     ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
+  });
+  t('SAVE_CONCURRENCY cap is 6 (multi-admin throughput)', () => {
+    const src = saveToDrive.toString();
+    ok(/SAVE_CONCURRENCY\s*=\s*6\b/.test(src), 'must be 6, not 3');
+  });
+  t('findCampaignJsonFile uses 10s TTL cache + invalidation hook', () => {
+    ok(typeof _invalidateCampaignFileCache === 'function');
+    ok(_CAMP_FILE_CACHE instanceof Map);
+    ok(_CAMP_FILE_CACHE_TTL_MS === 10000);
+    const src = findCampaignJsonFile.toString();
+    ok(/_CAMP_FILE_CACHE\b/.test(src) && /Date\.now\(\)\s*-\s*cached\.ts/.test(src),
+       'must hit cache before issuing Drive GET');
+    const ssrc = saveCampaignJsonToDrive.toString();
+    ok(/_invalidateCampaignFileCache/.test(ssrc),
+       'save must invalidate cache after a successful write');
+  });
+  t('authFetch retries 429 / rateLimitExceeded with exponential backoff', () => {
+    ok(Array.isArray(_RATE_LIMIT_RETRY_DELAYS) && _RATE_LIMIT_RETRY_DELAYS.length === 3);
+    const src = authFetch.toString();
+    ok(/429/.test(src) && /_RATE_LIMIT_RETRY_DELAYS/.test(src) && /rateLimitExceeded/.test(src),
+       'rate-limit branch must detect both 429 and the 403 rateLimitExceeded variant');
+    ok(/Math\.random/.test(src), 'must add jitter so concurrent admins do not re-collide');
   });
   t('soft-deleted campaign ids persist + filter out on next sync (zombie guard)', () => {
     // Regression: customer-owned Drive JSON file can't be trashed by admin
