@@ -397,15 +397,20 @@
   .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px;}
 
   /* Config Fields */
-  .config-cat-block { border:1px solid var(--line); border-radius:var(--radius); margin-bottom:16px; overflow:hidden; }
-  .config-cat-head { padding:10px 14px; background:var(--paper-2); display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line);}
+  .config-cat-block { border:1px solid var(--line); border-radius:var(--radius); margin-bottom:16px; overflow:hidden; min-width:0; }
+  .config-cat-head { padding:10px 14px; background:var(--paper-2); display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); flex-wrap:wrap; min-width:0;}
   .config-cat-head .cat-pill { margin-right:4px;}
-  .config-cat-body { padding:14px; }
-  .config-row { display:grid; grid-template-columns:120px 1fr 1fr 36px; gap:8px; margin-bottom:8px; align-items:center;}
+  .config-cat-body { padding:14px; min-width:0; }
+  .config-row { display:grid; grid-template-columns:120px minmax(0, 1fr) minmax(0, 1fr) 36px; gap:8px; margin-bottom:8px; align-items:center; min-width:0;}
   .config-row.head { font-family:'Geist Mono',monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;}
-  .config-row select, .config-row input { padding:6px 8px; border:1px solid var(--line); border-radius:4px; font-size:12px; background:var(--paper); width:100%;}
+  .config-row select, .config-row input { padding:6px 8px; border:1px solid var(--line); border-radius:4px; font-size:12px; background:var(--paper); width:100%; min-width:0; box-sizing:border-box;}
+  .config-row input { overflow:hidden; text-overflow:ellipsis;}
   .config-row .del-btn { background:var(--paper); border:1px solid var(--line); border-radius:4px; cursor:pointer; height:30px; color:var(--err);}
   .config-row .del-btn:hover { background:var(--convert-bg);}
+  @media (max-width: 640px) {
+    .config-row { grid-template-columns:1fr 36px; gap:6px;}
+    .config-row > div:first-child, .config-row > div:nth-child(3) { display:none;}
+  }
   .add-row-btn { background:transparent; border:1px dashed var(--line-2); padding:8px 12px; border-radius:4px; cursor:pointer; font-size:12px; color:var(--muted); width:100%; margin-top:6px;}
   .add-row-btn:hover { border-color:var(--ink); color:var(--ink);}
 
@@ -1189,44 +1194,50 @@
         ปรับ <strong>H2 / H3</strong> ของแต่ละแคมเปญได้ตามต้องการ — Upload Excel ที่ใช้ template มาตรฐาน แล้วระบบแมชอัตโนมัติทั้ง 3 หมวด หรือกรอกเอง. ค่าที่กำหนดที่นี่จะปรากฏเป็น dropdown ตอน Add Asset
       </p>
 
-      <!-- Format help — collapsible -->
-      <details style="margin-bottom:12px; border:1px solid var(--line); border-radius:6px; padding:8px 12px; background:var(--paper-2);">
+      <!-- Format help — collapsible. min-width:0 + overflow-x prevent the
+           nested table from blowing out the modal width on smaller viewports. -->
+      <details style="margin-bottom:12px; border:1px solid var(--line); border-radius:6px; padding:8px 12px; background:var(--paper-2); min-width:0;">
         <summary style="cursor:pointer; font-size:12px; font-weight:600; color:var(--ink); user-select:none;">ℹ️ Excel format ที่แมชอัตโนมัติ (กดดูตัวอย่าง)</summary>
-        <div style="margin-top:10px; font-size:12px; color:var(--ink); line-height:1.6;">
+        <div style="margin-top:10px; font-size:12px; color:var(--ink); line-height:1.6; min-width:0;">
           ไฟล์ <code>.xlsx</code> หรือ <code>.csv</code> ที่มี <strong>3 columns headers</strong> ชื่อ <code>category</code>, <code>h2</code>, <code>h3</code> (ตัวพิมพ์ใหญ่/เล็กไม่สำคัญ)
-          <table style="margin:8px 0; border-collapse:collapse; font-family:'Geist Mono',monospace; font-size:11px;">
-            <thead>
-              <tr style="background:var(--paper-3);">
-                <th style="border:1px solid var(--line); padding:4px 10px; text-align:left;">category</th>
-                <th style="border:1px solid var(--line); padding:4px 10px; text-align:left;">h2</th>
-                <th style="border:1px solid var(--line); padding:4px 10px; text-align:left;">h3</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td style="border:1px solid var(--line); padding:3px 10px;">catch</td><td style="border:1px solid var(--line); padding:3px 10px;">Product USP</td><td style="border:1px solid var(--line); padding:3px 10px;">Taste &amp; Flavor</td></tr>
-              <tr><td style="border:1px solid var(--line); padding:3px 10px;">catch</td><td style="border:1px solid var(--line); padding:3px 10px;">Product USP</td><td style="border:1px solid var(--line); padding:3px 10px;">Aroma</td></tr>
-              <tr><td style="border:1px solid var(--line); padding:3px 10px;">connect</td><td style="border:1px solid var(--line); padding:3px 10px;">Recipe Application</td><td style="border:1px solid var(--line); padding:3px 10px;">Basic Recipes</td></tr>
-              <tr><td style="border:1px solid var(--line); padding:3px 10px;">convert</td><td style="border:1px solid var(--line); padding:3px 10px;">Platform Promotion</td><td style="border:1px solid var(--line); padding:3px 10px;">Shopee Campaigns</td></tr>
-            </tbody>
-          </table>
+          <div style="overflow-x:auto; -webkit-overflow-scrolling:touch; margin:8px 0;">
+            <table style="border-collapse:collapse; font-family:'Geist Mono',monospace; font-size:11px; width:100%; min-width:360px;">
+              <thead>
+                <tr style="background:var(--paper-3);">
+                  <th style="border:1px solid var(--line); padding:4px 10px; text-align:left; white-space:nowrap;">category</th>
+                  <th style="border:1px solid var(--line); padding:4px 10px; text-align:left; white-space:nowrap;">h2</th>
+                  <th style="border:1px solid var(--line); padding:4px 10px; text-align:left; white-space:nowrap;">h3</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td style="border:1px solid var(--line); padding:3px 10px;">catch</td><td style="border:1px solid var(--line); padding:3px 10px;">Product USP</td><td style="border:1px solid var(--line); padding:3px 10px;">Taste &amp; Flavor</td></tr>
+                <tr><td style="border:1px solid var(--line); padding:3px 10px;">catch</td><td style="border:1px solid var(--line); padding:3px 10px;">Product USP</td><td style="border:1px solid var(--line); padding:3px 10px;">Aroma</td></tr>
+                <tr><td style="border:1px solid var(--line); padding:3px 10px;">connect</td><td style="border:1px solid var(--line); padding:3px 10px;">Recipe Application</td><td style="border:1px solid var(--line); padding:3px 10px;">Basic Recipes</td></tr>
+                <tr><td style="border:1px solid var(--line); padding:3px 10px;">convert</td><td style="border:1px solid var(--line); padding:3px 10px;">Platform Promotion</td><td style="border:1px solid var(--line); padding:3px 10px;">Shopee Campaigns</td></tr>
+              </tbody>
+            </table>
+          </div>
           <ul style="margin:0 0 0 18px; font-size:11px; color:var(--muted);">
             <li><code>category</code> ต้องเป็น <code>catch</code> · <code>connect</code> · <code>convert</code> เท่านั้น</li>
             <li>หลาย row ของ category เดียวกันได้ — ระบบ dedupe ค่าให้</li>
             <li>เว้น h2 หรือ h3 ว่างได้ — แค่ไม่นับ row นั้น</li>
-            <li>ถ้า file ไม่ตาม format → จะ fallback ไปเลือก column เอง</li>
+            <li>ถ้า file ไม่ตาม format → upload สำเร็จแต่ template apply จะปิดไว้ — ใช้ Manual ข้างล่างได้</li>
           </ul>
           <button class="btn sm" onclick="downloadConfigTemplate()" style="margin-top:10px;">📥 Download template (.xlsx)</button>
         </div>
       </details>
 
-      <div class="excel-status empty" id="excel-status">
+      <div class="excel-status empty" id="excel-status" style="min-width:0; flex-wrap:wrap; gap:8px;">
         <span>📄</span>
-        <span id="excel-status-text">ยังไม่ได้อัปโหลดไฟล์ Excel</span>
-        <button class="btn sm" onclick="document.getElementById('excelFileInput').click()" style="margin-left:auto;">Upload .xlsx / .csv</button>
+        <span id="excel-status-text" style="flex:1; min-width:0; overflow-wrap:anywhere; word-break:break-word;">ยังไม่ได้อัปโหลดไฟล์ Excel</span>
+        <button class="btn sm" onclick="document.getElementById('excelFileInput').click()" style="flex-shrink:0;">Upload .xlsx / .csv</button>
         <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none;" onchange="handleExcelUpload(event)" />
       </div>
 
-      <div id="config-blocks"></div>
+      <!-- Template apply preview card — rendered by renderTemplateApplyCard() -->
+      <div id="template-apply-card" style="display:none; margin:12px 0;"></div>
+
+      <div id="config-blocks" style="min-width:0;"></div>
     </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeConfigModal()">Cancel</button>
@@ -6614,6 +6625,10 @@ function renderConfigBlocks() {
       </div>`;
     wrap.appendChild(block);
   });
+  // Template Apply card (preview + apply + undo) — only shown when an Excel
+  // is loaded. Card is OUTSIDE #config-blocks so renderConfigBlocks can
+  // re-render per-category sections without nuking the preview card state.
+  if (typeof renderTemplateApplyCard === 'function') renderTemplateApplyCard();
 }
 
 function renderHConfig(catKey, level, cfg) {
@@ -6706,28 +6721,26 @@ async function handleExcelUpload(e) {
     const camp = getCurrentCampaign();
     camp.excelData = { sheetName, headers, rows: dataRows };
     logAction('IMPORT', `Loaded Excel: ${file.name} (${dataRows.length} rows · ${headers.length} cols)`);
-    // If the file matches the standard 3-column template
-    // (category / h2 / h3) auto-populate every category × level at once.
-    // Otherwise the admin still gets the legacy per-category column picker.
-    const auto = _autoFillSchemaFromExcel(camp);
+    // IMPORTANT: do NOT auto-apply. The admin must click "Apply Template"
+    // after reviewing the preview — destructive bulk overwrite of the
+    // schema cannot happen as a side effect of a file upload.
     renderExcelStatus();
     renderConfigBlocks();
-    if (auto.matched) {
-      showToast(`✓ Excel format ถูกต้อง · แมชอัตโนมัติ ${auto.totalValues} ค่า ใน ${auto.cats.join(', ')}`, 'ok');
+    if (_excelHasCategoryFormat(camp)) {
+      showToast('✓ Template format detected — ดู preview ที่กล่อง "📊 Template Apply" แล้วกด Apply เพื่อแมช', 'ok');
     } else {
-      showToast(`Excel loaded · ${dataRows.length} rows — ใช้ template format จะแมชอัตโนมัติ (กดปุ่ม ℹ️)`, 'warn');
+      showToast(`Excel loaded · ${dataRows.length} rows — Manual mode (กดดู ℹ️ Format สำหรับ template auto-match)`, 'warn');
     }
+    e.target.value = ''; // allow re-upload same file
   } catch (err) {
     showToast('Excel parse error: ' + err.message, 'err');
   }
 }
 
 // Standard template: 3 columns named category / h2 / h3 (case-insensitive).
-// Detection: column header must equal one of those words after trim+lower.
-// When present, we group the rows by category value (catch | connect |
-// convert) and feed the unique h2/h3 values into each schema bucket.
-// This is what the "ℹ️ Format" tooltip describes; downloadConfigTemplate
-// emits a ready-to-fill .xlsx with the same column headers.
+// _autoFillSchemaFromExcel is only called from applyExcelTemplate (admin
+// explicit click). It snapshots the previous schema first so undo can
+// restore it.
 const _CAT_KEYS = ['catch', 'connect', 'convert'];
 function _findHeaderIdx(headers, target) {
   const t = String(target).toLowerCase().trim();
@@ -6741,42 +6754,75 @@ function _excelHasCategoryFormat(camp) {
   const h = camp.excelData.headers;
   return _findHeaderIdx(h, 'category') >= 0 && (_findHeaderIdx(h, 'h2') >= 0 || _findHeaderIdx(h, 'h3') >= 0);
 }
-function _autoFillSchemaFromExcel(camp) {
-  const result = { matched: false, cats: [], totalValues: 0 };
-  if (!camp || !camp.excelData || !_excelHasCategoryFormat(camp)) return result;
+// Build a dry-run preview of what _autoFillSchemaFromExcel would set.
+// Returns { matched, perCategory: { catch:{h2:[],h3:[]}, ... } }. Pure —
+// does not mutate camp.schema.
+function _previewTemplateApply(camp) {
+  const result = { matched: false, perCategory: {} };
+  if (!_excelHasCategoryFormat(camp)) return result;
   const headers = camp.excelData.headers;
   const catIdx = _findHeaderIdx(headers, 'category');
   const h2Idx = _findHeaderIdx(headers, 'h2');
   const h3Idx = _findHeaderIdx(headers, 'h3');
-  const buckets = {};
-  _CAT_KEYS.forEach(k => { buckets[k] = { h2: new Set(), h3: new Set() }; });
+  _CAT_KEYS.forEach(k => { result.perCategory[k] = { h2: new Set(), h3: new Set() }; });
   camp.excelData.rows.forEach(r => {
     const cat = String(r[catIdx] || '').toLowerCase().trim();
-    if (!buckets[cat]) return;
-    if (h2Idx >= 0 && r[h2Idx] != null && String(r[h2Idx]).trim()) buckets[cat].h2.add(String(r[h2Idx]).trim());
-    if (h3Idx >= 0 && r[h3Idx] != null && String(r[h3Idx]).trim()) buckets[cat].h3.add(String(r[h3Idx]).trim());
+    if (!result.perCategory[cat]) return;
+    if (h2Idx >= 0 && r[h2Idx] != null && String(r[h2Idx]).trim()) result.perCategory[cat].h2.add(String(r[h2Idx]).trim());
+    if (h3Idx >= 0 && r[h3Idx] != null && String(r[h3Idx]).trim()) result.perCategory[cat].h3.add(String(r[h3Idx]).trim());
   });
-  const filled = [];
-  _CAT_KEYS.forEach(cat => {
-    if (!camp.schema || !camp.schema[cat]) return;
-    let any = false;
-    if (buckets[cat].h2.size) {
-      camp.schema[cat].h2.source = 'manual';
-      camp.schema[cat].h2.values = Array.from(buckets[cat].h2);
-      result.totalValues += buckets[cat].h2.size;
-      any = true;
-    }
-    if (buckets[cat].h3.size) {
-      camp.schema[cat].h3.source = 'manual';
-      camp.schema[cat].h3.values = Array.from(buckets[cat].h3);
-      result.totalValues += buckets[cat].h3.size;
-      any = true;
-    }
-    if (any) filled.push(cat);
+  // Convert Sets → Arrays for rendering
+  let total = 0;
+  _CAT_KEYS.forEach(k => {
+    result.perCategory[k] = {
+      h2: Array.from(result.perCategory[k].h2),
+      h3: Array.from(result.perCategory[k].h3)
+    };
+    total += result.perCategory[k].h2.length + result.perCategory[k].h3.length;
   });
-  result.matched = filled.length > 0;
-  result.cats = filled;
+  result.matched = total > 0;
+  result.totalValues = total;
   return result;
+}
+// Explicit admin action — snapshot previous schema, then apply.
+function applyExcelTemplate() {
+  const camp = getCurrentCampaign();
+  if (!camp || !_excelHasCategoryFormat(camp)) {
+    showToast('ไม่มี Excel template ที่ format ถูกต้อง', 'err');
+    return;
+  }
+  const preview = _previewTemplateApply(camp);
+  if (!preview.matched) { showToast('Template ว่าง — ไม่มีค่าให้แมช', 'warn'); return; }
+  // Snapshot current schema so undo can restore.
+  camp._schemaBackup = JSON.parse(JSON.stringify(camp.schema));
+  camp._schemaBackupAt = new Date().toISOString();
+  _CAT_KEYS.forEach(cat => {
+    if (!camp.schema[cat]) return;
+    if (preview.perCategory[cat].h2.length) {
+      camp.schema[cat].h2.source = 'manual';
+      camp.schema[cat].h2.values = preview.perCategory[cat].h2;
+    }
+    if (preview.perCategory[cat].h3.length) {
+      camp.schema[cat].h3.source = 'manual';
+      camp.schema[cat].h3.values = preview.perCategory[cat].h3;
+    }
+  });
+  logAction('UPDATE', `Applied Excel template (${preview.totalValues} values across ${_CAT_KEYS.filter(k => preview.perCategory[k].h2.length || preview.perCategory[k].h3.length).join(', ')})`);
+  renderConfigBlocks();
+  showToast(`✓ Applied · ${preview.totalValues} values · กด "↶ Undo" ได้ ภายในการเปิด modal นี้`, 'ok');
+}
+function undoSchemaChange() {
+  const camp = getCurrentCampaign();
+  if (!camp || !camp._schemaBackup) {
+    showToast('ไม่มี backup ให้ undo', 'err');
+    return;
+  }
+  camp.schema = JSON.parse(JSON.stringify(camp._schemaBackup));
+  delete camp._schemaBackup;
+  delete camp._schemaBackupAt;
+  logAction('UPDATE', 'Undo Excel template apply');
+  renderConfigBlocks();
+  showToast('✓ Undone — schema กลับเป็นค่าเดิม', 'ok');
 }
 function downloadConfigTemplate() {
   if (typeof XLSX === 'undefined') {
@@ -6799,12 +6845,66 @@ function downloadConfigTemplate() {
     ['convert', 'Double-Date Activation', 'Payday Sales']
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  // Header row styling — bold by setting cell width
   ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 24 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Config');
   XLSX.writeFile(wb, 'config_fields_template.xlsx');
   showToast('📥 Template downloaded — กรอกแล้วกลับมา Upload', 'ok');
+}
+// Render the Template Apply card — shown only when Excel is loaded.
+// Displays preview table + apply button. After apply, shows undo.
+function renderTemplateApplyCard() {
+  const wrap = document.getElementById('template-apply-card');
+  if (!wrap) return;
+  const camp = getCurrentCampaign();
+  if (!camp || !camp.excelData) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+  const preview = _previewTemplateApply(camp);
+  const hasBackup = !!camp._schemaBackup;
+  if (!preview.matched && !hasBackup) {
+    wrap.style.display = 'block';
+    wrap.innerHTML = `
+      <div style="padding:12px 14px; background:#FAEBDF; border:1px solid #F0C7A8; border-left:4px solid var(--warn); border-radius:6px; font-size:12px;">
+        <strong>⚠️ Excel format ไม่ตรง template</strong> — file ที่อัปขาด column <code>category</code> / <code>h2</code> / <code>h3</code>.
+        ใช้ <strong>Manual mode</strong> หรือ <strong>Advanced column picker</strong> ข้างล่างได้ — หรือกดดู <strong>ℹ️ Format</strong> ด้านบนเพื่อ download template ที่ถูก
+      </div>`;
+    return;
+  }
+  let html = `<div style="padding:14px; background:#F4F8F2; border:1px solid #B8D8B5; border-left:4px solid var(--ok); border-radius:6px; min-width:0;">`;
+  html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+    <strong style="font-size:13px; color:var(--ink);">📊 Template Apply — Preview</strong>
+    <span style="font-size:10px; color:var(--muted); font-family:'Geist Mono',monospace; min-width:0; overflow-wrap:anywhere;">${preview.totalValues} values · ${_CAT_KEYS.filter(k => preview.perCategory[k].h2.length || preview.perCategory[k].h3.length).join(' · ')}</span>
+  </div>`;
+  // Preview cards — auto-fit so the grid wraps before any single card has to
+  // overflow horizontally. minmax(180px,1fr) lets up to 3 cards sit side by
+  // side on a wide modal and stack on a narrow one (no clipped text).
+  html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:12px;">`;
+  _CAT_KEYS.forEach(cat => {
+    const bucket = preview.perCategory[cat];
+    const h2List = bucket.h2.length
+      ? bucket.h2.slice(0,5).map(v => escapeHtml(v)).join(', ') + (bucket.h2.length > 5 ? ` <em style="color:var(--muted);">+${bucket.h2.length-5}…</em>` : '')
+      : '<em style="color:var(--muted-2);">—</em>';
+    const h3List = bucket.h3.length
+      ? bucket.h3.slice(0,5).map(v => escapeHtml(v)).join(', ') + (bucket.h3.length > 5 ? ` <em style="color:var(--muted);">+${bucket.h3.length-5}…</em>` : '')
+      : '<em style="color:var(--muted-2);">—</em>';
+    html += `<div style="background:white; border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:11px; min-width:0; overflow:hidden;">
+      <div style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--${cat}); margin-bottom:6px; text-transform:uppercase;">${cat}</div>
+      <div style="color:var(--muted); margin-bottom:3px;">H2 (${bucket.h2.length}):</div>
+      <div style="color:var(--ink); max-height:72px; overflow-y:auto; margin-bottom:6px; overflow-wrap:anywhere; word-break:break-word; line-height:1.4;">${h2List}</div>
+      <div style="color:var(--muted); margin-bottom:3px;">H3 (${bucket.h3.length}):</div>
+      <div style="color:var(--ink); max-height:72px; overflow-y:auto; overflow-wrap:anywhere; word-break:break-word; line-height:1.4;">${h3List}</div>
+    </div>`;
+  });
+  html += `</div>`;
+  html += `<div style="display:flex; gap:10px; align-items:center; font-size:11px; color:var(--muted); flex-wrap:wrap;">
+    <button class="btn primary sm" onclick="applyExcelTemplate()" ${preview.matched ? '' : 'disabled'}>✓ Apply Template (overwrite ค่าที่มีอยู่)</button>`;
+  if (hasBackup) {
+    html += `<button class="btn sm" onclick="undoSchemaChange()" style="color:var(--err); border-color:var(--err);">↶ Undo (กลับเป็นก่อน apply)</button>
+      <span style="font-family:'Geist Mono',monospace; font-size:10px;">backup ${new Date(camp._schemaBackupAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</span>`;
+  }
+  html += `<span style="margin-left:auto; min-width:0; overflow-wrap:anywhere;">⚠️ Apply จะเขียนทับ values เดิมทุกหมวด — ใช้ Undo ได้ระหว่างที่ modal เปิดอยู่</span></div>`;
+  html += `</div>`;
+  wrap.style.display = 'block';
+  wrap.innerHTML = html;
 }
 
 // ============================================================================
@@ -9006,45 +9106,37 @@ window.__runTests = async function() {
     // not fall through to local/index/signal removal.
     ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
   });
-  t('Config Fields Excel template format: category/h2/h3 auto-fills all 3 categories', () => {
-    ok(typeof _excelHasCategoryFormat === 'function');
-    ok(typeof _autoFillSchemaFromExcel === 'function');
+  t('Config Fields: preview is pure (does not mutate schema)', () => {
+    ok(typeof _previewTemplateApply === 'function');
+    ok(typeof applyExcelTemplate === 'function');
+    ok(typeof undoSchemaChange === 'function');
     ok(typeof downloadConfigTemplate === 'function');
     const fakeCamp = {
       schema: defaultSchema(),
       excelData: {
-        sheetName: 'Test',
+        sheetName: 'T',
         headers: ['category', 'h2', 'h3'],
-        rows: [
-          ['catch', 'USP', 'Sweet'],
-          ['catch', 'USP', 'Sour'],
-          ['catch', 'Visual', 'Plating'],
-          ['connect', 'Recipe', 'Basic'],
-          ['convert', 'Promo', 'Shopee']
-        ]
+        rows: [['catch', 'USP', 'Sweet'], ['connect', 'Recipe', 'Basic']]
       }
     };
-    ok(_excelHasCategoryFormat(fakeCamp), 'must detect category/h2/h3 columns');
-    const result = _autoFillSchemaFromExcel(fakeCamp);
-    ok(result.matched, 'should match');
-    ok(result.cats.length === 3, `must fill all 3 cats, got ${result.cats.length}`);
-    ok(fakeCamp.schema.catch.h2.values.length === 2, 'USP + Visual unique = 2');
-    ok(fakeCamp.schema.catch.h3.values.length === 3, 'Sweet/Sour/Plating = 3');
-    ok(fakeCamp.schema.connect.h2.values.length === 1);
-    ok(fakeCamp.schema.convert.h3.values.includes('Shopee'));
+    const beforeCatchH2 = JSON.stringify(fakeCamp.schema.catch.h2.values);
+    const preview = _previewTemplateApply(fakeCamp);
+    ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
+    ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
+       'preview MUST NOT mutate the schema — that is the bug we are fixing');
   });
-  t('Config Fields rejects non-template files gracefully (fallback to manual)', () => {
-    const fakeCamp = {
-      schema: defaultSchema(),
-      excelData: {
-        sheetName: 'Test',
-        headers: ['Some Column', 'Other'],
-        rows: [['x','y']]
-      }
-    };
-    ok(!_excelHasCategoryFormat(fakeCamp));
-    const result = _autoFillSchemaFromExcel(fakeCamp);
-    ok(!result.matched, 'must not silently match a random file');
+  t('Config Fields: handleExcelUpload no longer auto-applies (admin must click Apply)', () => {
+    const src = handleExcelUpload.toString();
+    ok(!/_autoFillSchemaFromExcel/.test(src),
+       'upload handler must not call the destructive bulk apply directly');
+    ok(/_excelHasCategoryFormat/.test(src),
+       'must still detect the format so the preview card knows to render');
+  });
+  t('Config Fields: renderConfigBlocks calls renderTemplateApplyCard for preview state', () => {
+    ok(typeof renderTemplateApplyCard === 'function');
+    ok(document.getElementById('template-apply-card'), 'placeholder DOM must exist in modal');
+    const src = renderConfigBlocks.toString();
+    ok(/renderTemplateApplyCard/.test(src));
   });
   t('editing indicator: broadcast / subscribe / banner wired (multi-admin social queue)', () => {
     ok(typeof _broadcastEditingStart === 'function' && typeof _broadcastEditingEnd === 'function');
