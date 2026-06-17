@@ -767,6 +767,7 @@
 
     <!-- ============ OVERVIEW VIEW ============ -->
     <div class="page view-container active" id="view-overview">
+      <div id="editing-indicator" style="display:none; margin:8px 0 12px; padding:10px 14px; background:#FAEBDF; border:1px solid #F0C7A8; border-left:4px solid var(--err); border-radius:6px; font-size:13px; color:var(--ink); display:flex; align-items:center; gap:8px;"></div>
       <div class="handoff-banner hidden" id="handoffBanner">
         <div class="handoff-banner-icon">📦</div>
         <div class="handoff-banner-info">
@@ -2106,6 +2107,9 @@ async function resolveUserRoleFromControl(email, displayName) {
     // Signal channel: live "campaign changed on Drive" notifications. Drive
     // is still the source of truth — this just avoids the 45s poll wait.
     try { window.Control.subscribeSignals(onCampaignSignal); } catch(e) { console.warn('subscribeSignals failed:', e); }
+    // Multi-admin editing indicator — see _broadcastEditingStart.
+    try { if (window.Control.subscribeEditing) window.Control.subscribeEditing(onControlEditingChanged); }
+    catch(e) { console.warn('subscribeEditing failed:', e); }
   } catch(e) {
     console.warn('resolveUserRoleFromControl failed, falling back to domain check:', e);
     isAdmin = email.endsWith('@' + ADMIN_EMAIL_DOMAIN) || SUPER_ADMINS.indexOf(email) >= 0;
@@ -4352,6 +4356,52 @@ async function readDriveError(resp) { return (await driveError(resp)).message; }
 let _editModalOpenCount = 0;
 function _enterEditModal() { _editModalOpenCount++; }
 function _exitEditModal() { _editModalOpenCount = Math.max(0, _editModalOpenCount - 1); }
+
+// Multi-admin "social queue" — broadcast to other admins that this user
+// has opened a modal editing campaign X. They see a "🔴 Y is editing this
+// campaign" banner and naturally hold off instead of clobbering each other.
+// No global lock, no serial save queue — just visibility. Heartbeat every
+// 60s while modal open so the indicator doesn't go stale until well after
+// the modal actually closes; lastSeen + 5min TTL in Control catches dead
+// entries client-side.
+let _editingHeartbeatTimer = null;
+function _broadcastEditingStart(campaignId, modalType) {
+  if (!window.Control || !window.Control.setEditing) return;
+  if (!currentUserEmail || !campaignId) return;
+  const name = (typeof currentUserName === 'function' && currentUserName()) || currentUserEmail;
+  try { window.Control.setEditing(currentUserEmail, campaignId, modalType || '', name); } catch(e) {}
+  if (_editingHeartbeatTimer) clearInterval(_editingHeartbeatTimer);
+  _editingHeartbeatTimer = setInterval(() => {
+    try { window.Control.setEditing(currentUserEmail, campaignId, modalType || '', name); } catch(e) {}
+  }, 60000);
+}
+function _broadcastEditingEnd() {
+  if (_editingHeartbeatTimer) { clearInterval(_editingHeartbeatTimer); _editingHeartbeatTimer = null; }
+  if (!window.Control || !window.Control.clearEditing) return;
+  if (!currentUserEmail) return;
+  try { window.Control.clearEditing(currentUserEmail); } catch(e) {}
+}
+function onControlEditingChanged(list) {
+  if (typeof renderEditingIndicator === 'function') renderEditingIndicator();
+}
+function renderEditingIndicator() {
+  const bar = document.getElementById('editing-indicator');
+  if (!bar) return;
+  if (!window.Control || !window.Control.cachedEditing) { bar.style.display = 'none'; return; }
+  const list = window.Control.cachedEditing();
+  // Only show the indicator on the currently-viewed campaign, and only for
+  // OTHER admins (not ourselves).
+  const others = list.filter(d =>
+    d && d.editingCampaignId === currentCampaignId &&
+    d.email && d.email.toLowerCase() !== (currentUserEmail || '').toLowerCase()
+  );
+  if (!others.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const names = others.map(d => escapeHtml(d.displayName || d.email)).join(', ');
+  const typeLabel = (t) => ({ asset:'asset', 'edit-info':'campaign info', connect:'drive links' }[t] || 'this campaign');
+  const typeStr = escapeHtml(typeLabel(others[0].editingType));
+  bar.style.display = '';
+  bar.innerHTML = `<span style="font-size:14px;">🔴</span> <strong>${names}</strong> กำลังแก้ ${typeStr} ของแคมเปญนี้อยู่ — ระวังการแก้ทับ`;
+}
 function _hasLocalEditInFlight() {
   return !!(pendingChanges || saveTimer || isSaving || _editModalOpenCount > 0);
 }
@@ -5142,6 +5192,7 @@ function renderEverything() {
   renderHistory();
   restoreLinkedDriveCards();
   if (typeof renderHubSidebar === 'function') renderHubSidebar();
+  if (typeof renderEditingIndicator === 'function') renderEditingIndicator();
 }
 
 // Show a blank-state overlay in the main area when no member is selected.
@@ -6091,6 +6142,7 @@ function _lockAssetModal() {
   const alreadyLocked = _assetModalCampaignId !== null;
   _assetModalCampaignId = camp.id;
   if (!alreadyLocked) _enterEditModal();
+  _broadcastEditingStart(camp.id, 'asset');
   return camp;
 }
 function openAddAssetModal() {
@@ -6150,7 +6202,7 @@ function closeAssetModal() {
   editingAssetId = null;
   pendingFiles = [];
   pendingLinks = [];
-  if (_assetModalCampaignId !== null) { _exitEditModal(); _assetModalCampaignId = null; }
+  if (_assetModalCampaignId !== null) { _exitEditModal(); _assetModalCampaignId = null; _broadcastEditingEnd(); }
 }
 
 function renderAssetLinksList() {
@@ -7750,6 +7802,7 @@ function openEditModal() {
   const alreadyLocked = _editInfoModalCampaignId !== null;
   _editInfoModalCampaignId = camp.id;
   if (!alreadyLocked) _enterEditModal();
+  _broadcastEditingStart(camp.id, 'edit-info');
   document.getElementById('editClient').value = camp.client || '';
   document.getElementById('editCampaign').value = camp.campaign || '';
   document.getElementById('editStart').value = camp.startPeriod || '';
@@ -7779,7 +7832,7 @@ function openEditDriveFolder() {
 }
 function closeEditModal() {
   document.getElementById('editInfoModal').classList.remove('show');
-  if (_editInfoModalCampaignId !== null) { _exitEditModal(); _editInfoModalCampaignId = null; }
+  if (_editInfoModalCampaignId !== null) { _exitEditModal(); _editInfoModalCampaignId = null; _broadcastEditingEnd(); }
 }
 
 // Kept for backwards-compat (event listener calls it); period now manual text
@@ -8035,10 +8088,11 @@ function openConnectModal() {
   for (let i = 0; i < 4; i++) document.getElementById(`linkInput${i}`).value = camp.driveLinks[i]?.url || '';
   document.getElementById('connectModal').classList.add('show');
   if (!alreadyLocked) _enterEditModal();
+  _broadcastEditingStart(camp.id, 'connect');
 }
 function closeConnectModal() {
   document.getElementById('connectModal').classList.remove('show');
-  if (_connectModalCampaignId !== null) { _exitEditModal(); _connectModalCampaignId = null; }
+  if (_connectModalCampaignId !== null) { _exitEditModal(); _connectModalCampaignId = null; _broadcastEditingEnd(); }
 }
 function saveDriveLinks() {
   if (blockIfClient('Connect Drive เฉพาะทีม Wakuwaku')) return;
@@ -8824,6 +8878,27 @@ window.__runTests = async function() {
     // Must abort with a return inside the catch when driveDbFileId is set,
     // not fall through to local/index/signal removal.
     ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
+  });
+  t('editing indicator: broadcast / subscribe / banner wired (multi-admin social queue)', () => {
+    ok(typeof _broadcastEditingStart === 'function' && typeof _broadcastEditingEnd === 'function');
+    ok(typeof renderEditingIndicator === 'function');
+    ok(typeof onControlEditingChanged === 'function');
+    ok(document.getElementById('editing-indicator'), 'banner DOM exists in #view-overview');
+    // Open hooks must broadcast
+    ok(/_broadcastEditingStart/.test(_lockAssetModal.toString()), 'asset modal');
+    ok(/_broadcastEditingStart/.test(openEditModal.toString()), 'edit-info modal');
+    ok(/_broadcastEditingStart/.test(openConnectModal.toString()), 'connect modal');
+    // Close hooks must end
+    ok(/_broadcastEditingEnd/.test(closeAssetModal.toString()), 'asset close');
+    ok(/_broadcastEditingEnd/.test(closeEditModal.toString()), 'edit-info close');
+    ok(/_broadcastEditingEnd/.test(closeConnectModal.toString()), 'connect close');
+    // Control plane has the helpers
+    if (window.Control) {
+      ok(typeof window.Control.setEditing === 'function', 'Control.setEditing');
+      ok(typeof window.Control.clearEditing === 'function', 'Control.clearEditing');
+      ok(typeof window.Control.subscribeEditing === 'function', 'Control.subscribeEditing');
+      ok(typeof window.Control.cachedEditing === 'function', 'Control.cachedEditing');
+    }
   });
   t('flushSaveNow bypasses the 2.5s debounce (refresh-after-save data-loss guard)', () => {
     ok(typeof flushSaveNow === 'function');

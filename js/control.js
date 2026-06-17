@@ -392,6 +392,74 @@
       return this._db.collection(COLLECTION_PRESENCE).doc(key).delete();
     },
 
+    // --- Editing indicator (multi-admin social-queue) -------------------------
+    // Each admin writes {editingCampaignId, editingType, displayName, lastSeen}
+    // into their own control_presence doc (existing rule: key must contain
+    // request.auth.token.email — emails-as-keys satisfy that). Other admins
+    // subscribe to the whole collection and surface a "🔴 X is editing this
+    // campaign" banner on the matching campaign view. Lets the team coordinate
+    // without the system having to serialize saves globally.
+    _editing: [],
+    _editingUnsub: null,
+    _onEditingChange: null,
+
+    setEditing: function (email, campaignId, modalType, displayName) {
+      if (!this._db || !email) return Promise.resolve();
+      var key = normEmail(email);
+      return this._db.collection(COLLECTION_PRESENCE).doc(key).set({
+        email: key,
+        editingCampaignId: campaignId || '',
+        editingType: modalType || '',
+        displayName: displayName || '',
+        lastSeen: new Date().toISOString()
+      }, { merge: true });
+    },
+
+    clearEditing: function (email) {
+      if (!this._db || !email) return Promise.resolve();
+      var key = normEmail(email);
+      // Don't delete the doc — other fields (legacy presence) might live there.
+      // Just clear the editing-specific fields.
+      return this._db.collection(COLLECTION_PRESENCE).doc(key).set({
+        editingCampaignId: '',
+        editingType: '',
+        lastSeen: new Date().toISOString()
+      }, { merge: true });
+    },
+
+    subscribeEditing: function (onChange) {
+      var self = this;
+      this._onEditingChange = typeof onChange === 'function' ? onChange : null;
+      if (!this._db) {
+        if (self._onEditingChange) self._onEditingChange([]);
+        return function () {};
+      }
+      if (this._editingUnsub) { try { this._editingUnsub(); } catch (e) {} this._editingUnsub = null; }
+      this._editingUnsub = this._db.collection(COLLECTION_PRESENCE).onSnapshot(function (snap) {
+        var STALE_MS = 5 * 60 * 1000;
+        var now = Date.now();
+        var list = [];
+        snap.forEach(function (doc) {
+          var d = doc.data() || {};
+          if (!d.editingCampaignId) return;
+          // Stale entries (browser closed mid-edit, crashed) are ignored
+          // client-side so the indicator doesn't stick forever.
+          if (d.lastSeen) {
+            var t = Date.parse(d.lastSeen);
+            if (!isNaN(t) && now - t > STALE_MS) return;
+          }
+          list.push(d);
+        });
+        self._editing = list;
+        if (self._onEditingChange) self._onEditingChange(list.slice());
+      }, function (err) {
+        console.error('[Control] editing snapshot error:', err);
+      });
+      return this._editingUnsub;
+    },
+
+    cachedEditing: function () { return this._editing.slice(); },
+
     // --- Signal channel (campaign change notifications) ----------------------
     // After saving a campaign JSON to Drive, the writer pings the corresponding
     // signal doc. Other clients listen via onSnapshot and surface a "Refresh"
