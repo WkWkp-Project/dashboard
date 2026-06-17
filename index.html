@@ -6784,7 +6784,11 @@ function _previewTemplateApply(camp) {
   result.totalValues = total;
   return result;
 }
-// Explicit admin action — snapshot previous schema, then apply.
+// Explicit admin action — snapshot previous schema, then MERGE (append)
+// unique values from the Excel template into the existing schema. The
+// admin's existing values stay intact; only values that don't already
+// exist (case-insensitive de-dupe) are added. Deletion remains an
+// explicit per-row "×" click — never silent.
 function applyExcelTemplate() {
   const camp = getCurrentCampaign();
   if (!camp || !_excelHasCategoryFormat(camp)) {
@@ -6793,23 +6797,50 @@ function applyExcelTemplate() {
   }
   const preview = _previewTemplateApply(camp);
   if (!preview.matched) { showToast('Template ว่าง — ไม่มีค่าให้แมช', 'warn'); return; }
-  // Snapshot current schema so undo can restore.
+  // Snapshot current schema so Undo can restore (even if no value was
+  // ultimately added — admin might still want to revert source/state).
   camp._schemaBackup = JSON.parse(JSON.stringify(camp.schema));
   camp._schemaBackupAt = new Date().toISOString();
+  let totalAdded = 0;
+  const addedPerCat = {};
   _CAT_KEYS.forEach(cat => {
     if (!camp.schema[cat]) return;
-    if (preview.perCategory[cat].h2.length) {
-      camp.schema[cat].h2.source = 'manual';
-      camp.schema[cat].h2.values = preview.perCategory[cat].h2;
-    }
-    if (preview.perCategory[cat].h3.length) {
-      camp.schema[cat].h3.source = 'manual';
-      camp.schema[cat].h3.values = preview.perCategory[cat].h3;
-    }
+    addedPerCat[cat] = { h2: 0, h3: 0 };
+    ['h2', 'h3'].forEach(level => {
+      const existing = camp.schema[cat][level].values || [];
+      const incoming = preview.perCategory[cat][level] || [];
+      const existingKeys = new Set(existing.map(v => String(v).trim().toLowerCase()));
+      const additions = [];
+      incoming.forEach(v => {
+        const key = String(v).trim().toLowerCase();
+        if (key && !existingKeys.has(key)) {
+          additions.push(v);
+          existingKeys.add(key);
+        }
+      });
+      if (additions.length) {
+        camp.schema[cat][level].source = 'manual';
+        camp.schema[cat][level].values = existing.concat(additions);
+        addedPerCat[cat][level] = additions.length;
+        totalAdded += additions.length;
+      }
+    });
   });
-  logAction('UPDATE', `Applied Excel template (${preview.totalValues} values across ${_CAT_KEYS.filter(k => preview.perCategory[k].h2.length || preview.perCategory[k].h3.length).join(', ')})`);
+  if (totalAdded === 0) {
+    // Nothing to do — drop the backup, no log entry, transparent no-op.
+    delete camp._schemaBackup;
+    delete camp._schemaBackupAt;
+    showToast('ทุกค่าจาก template มีอยู่แล้ว — ไม่ได้เพิ่มอะไร · ของเดิมไม่ถูกแตะ', 'warn');
+    renderConfigBlocks();
+    return;
+  }
+  const catSummary = _CAT_KEYS
+    .filter(c => addedPerCat[c] && (addedPerCat[c].h2 || addedPerCat[c].h3))
+    .map(c => `${c} +${(addedPerCat[c].h2 || 0) + (addedPerCat[c].h3 || 0)}`)
+    .join(' · ');
+  logAction('UPDATE', `Appended Excel template: ${totalAdded} new values (${catSummary})`);
   renderConfigBlocks();
-  showToast(`✓ Applied · ${preview.totalValues} values · กด "↶ Undo" ได้ ภายในการเปิด modal นี้`, 'ok');
+  showToast(`✓ เพิ่ม ${totalAdded} ค่าใหม่ — ของเดิมยังอยู่ครบ · กด "↶ Undo" ได้ในขณะ modal เปิด`, 'ok');
 }
 function undoSchemaChange() {
   const camp = getCurrentCampaign();
@@ -6822,7 +6853,35 @@ function undoSchemaChange() {
   delete camp._schemaBackupAt;
   logAction('UPDATE', 'Undo Excel template apply');
   renderConfigBlocks();
-  showToast('✓ Undone — schema กลับเป็นค่าเดิม', 'ok');
+  showToast('✓ Undone — schema กลับเป็นค่าเดิมก่อน apply', 'ok');
+}
+// Compares preview values against the campaign's current schema so the
+// preview card can say "X existing, +N new" instead of just "X values".
+// Returns per-category counts + the actual list of new values (for the
+// "+N new" detail rendering).
+function _computeAppendDiff(camp) {
+  const preview = _previewTemplateApply(camp);
+  if (!preview.matched) return null;
+  const diff = { totalExisting: 0, totalNew: 0, perCategory: {} };
+  _CAT_KEYS.forEach(cat => {
+    diff.perCategory[cat] = { h2: { existing: 0, newValues: [] }, h3: { existing: 0, newValues: [] } };
+    if (!camp.schema || !camp.schema[cat]) return;
+    ['h2','h3'].forEach(level => {
+      const existing = camp.schema[cat][level].values || [];
+      const keys = new Set(existing.map(v => String(v).trim().toLowerCase()));
+      diff.perCategory[cat][level].existing = existing.length;
+      diff.totalExisting += existing.length;
+      preview.perCategory[cat][level].forEach(v => {
+        const k = String(v).trim().toLowerCase();
+        if (k && !keys.has(k)) {
+          diff.perCategory[cat][level].newValues.push(v);
+          keys.add(k);
+          diff.totalNew++;
+        }
+      });
+    });
+  });
+  return diff;
 }
 function downloadConfigTemplate() {
   if (typeof XLSX === 'undefined') {
@@ -6851,60 +6910,93 @@ function downloadConfigTemplate() {
   XLSX.writeFile(wb, 'config_fields_template.xlsx');
   showToast('📥 Template downloaded — กรอกแล้วกลับมา Upload', 'ok');
 }
-// Render the Template Apply card — shown only when Excel is loaded.
-// Displays preview table + apply button. After apply, shows undo.
+// Render the Template Apply card — shown when Excel is loaded OR when a
+// backup is available (so Undo stays reachable even after the preview
+// has been applied). Shows a clear diff: "X existing (kept), +N new
+// (will be added)". Apply = MERGE/APPEND, not overwrite. Delete is
+// still an explicit per-row "×" click in the manual editor below.
 function renderTemplateApplyCard() {
   const wrap = document.getElementById('template-apply-card');
   if (!wrap) return;
   const camp = getCurrentCampaign();
-  if (!camp || !camp.excelData) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
-  const preview = _previewTemplateApply(camp);
-  const hasBackup = !!camp._schemaBackup;
-  if (!preview.matched && !hasBackup) {
+  const hasBackup = !!(camp && camp._schemaBackup);
+  // No Excel and no backup → nothing to show.
+  if ((!camp || !camp.excelData) && !hasBackup) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+  // Excel loaded but wrong format → warning (and show Undo if a previous
+  // apply still has a backup).
+  if (camp && camp.excelData && !_excelHasCategoryFormat(camp)) {
     wrap.style.display = 'block';
-    wrap.innerHTML = `
-      <div style="padding:12px 14px; background:#FAEBDF; border:1px solid #F0C7A8; border-left:4px solid var(--warn); border-radius:6px; font-size:12px;">
-        <strong>⚠️ Excel format ไม่ตรง template</strong> — file ที่อัปขาด column <code>category</code> / <code>h2</code> / <code>h3</code>.
-        ใช้ <strong>Manual mode</strong> หรือ <strong>Advanced column picker</strong> ข้างล่างได้ — หรือกดดู <strong>ℹ️ Format</strong> ด้านบนเพื่อ download template ที่ถูก
-      </div>`;
+    let html = `<div style="padding:12px 14px; background:#FAEBDF; border:1px solid #F0C7A8; border-left:4px solid var(--warn); border-radius:6px; font-size:12px;">
+      <strong>⚠️ Excel format ไม่ตรง template</strong> — file ที่อัปขาด column <code>category</code> / <code>h2</code> / <code>h3</code>.
+      ใช้ <strong>Manual mode</strong> หรือ <strong>Advanced column picker</strong> ข้างล่างได้ — หรือกดดู <strong>ℹ️ Format</strong> ด้านบนเพื่อ download template ที่ถูก`;
+    if (hasBackup) html += `<div style="margin-top:8px;">${_renderUndoButton(camp)}</div>`;
+    html += `</div>`;
+    wrap.innerHTML = html;
     return;
   }
+  // No Excel but backup exists → "Undo last apply" panel only.
+  if ((!camp.excelData || !_excelHasCategoryFormat(camp)) && hasBackup) {
+    wrap.style.display = 'block';
+    wrap.innerHTML = `<div style="padding:12px 14px; background:var(--paper-2); border:1px solid var(--line); border-radius:6px; font-size:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span>✓ Template applied at ${new Date(camp._schemaBackupAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</span>
+      <span style="margin-left:auto;"></span>
+      ${_renderUndoButton(camp)}
+    </div>`;
+    return;
+  }
+  // Excel + correct format → show diff preview.
+  const diff = _computeAppendDiff(camp);
+  if (!diff) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
   let html = `<div style="padding:14px; background:#F4F8F2; border:1px solid #B8D8B5; border-left:4px solid var(--ok); border-radius:6px; min-width:0;">`;
   html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
-    <strong style="font-size:13px; color:var(--ink);">📊 Template Apply — Preview</strong>
-    <span style="font-size:10px; color:var(--muted); font-family:'Geist Mono',monospace; min-width:0; overflow-wrap:anywhere;">${preview.totalValues} values · ${_CAT_KEYS.filter(k => preview.perCategory[k].h2.length || preview.perCategory[k].h3.length).join(' · ')}</span>
+    <strong style="font-size:13px; color:var(--ink);">📊 Template Preview — Append Mode</strong>
+    <span style="font-size:10px; color:var(--muted); font-family:'Geist Mono',monospace;">
+      <span style="color:var(--ink);">${diff.totalExisting} existing (kept)</span>
+      ·
+      <span style="color:var(--ok);">+${diff.totalNew} new (will add)</span>
+    </span>
   </div>`;
-  // Preview cards — auto-fit so the grid wraps before any single card has to
-  // overflow horizontally. minmax(180px,1fr) lets up to 3 cards sit side by
-  // side on a wide modal and stack on a narrow one (no clipped text).
-  html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:12px;">`;
+  // Diff cards — show existing count + first few NEW values per category.
+  html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; margin-bottom:12px;">`;
   _CAT_KEYS.forEach(cat => {
-    const bucket = preview.perCategory[cat];
-    const h2List = bucket.h2.length
-      ? bucket.h2.slice(0,5).map(v => escapeHtml(v)).join(', ') + (bucket.h2.length > 5 ? ` <em style="color:var(--muted);">+${bucket.h2.length-5}…</em>` : '')
-      : '<em style="color:var(--muted-2);">—</em>';
-    const h3List = bucket.h3.length
-      ? bucket.h3.slice(0,5).map(v => escapeHtml(v)).join(', ') + (bucket.h3.length > 5 ? ` <em style="color:var(--muted);">+${bucket.h3.length-5}…</em>` : '')
-      : '<em style="color:var(--muted-2);">—</em>';
-    html += `<div style="background:white; border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:11px; min-width:0; overflow:hidden;">
+    const d = diff.perCategory[cat];
+    const renderLevel = (label, info) => {
+      const newCount = info.newValues.length;
+      const newSample = newCount
+        ? `<span style="color:var(--ok); font-weight:600;">+${newCount}</span> <span style="color:var(--ink);">${info.newValues.slice(0,4).map(v => escapeHtml(v)).join(', ')}${newCount > 4 ? ` <em style="color:var(--muted);">+${newCount-4}…</em>` : ''}</span>`
+        : `<em style="color:var(--muted-2);">no new values</em>`;
+      return `<div style="margin-bottom:4px;">
+        <span style="color:var(--muted); font-size:10px;">${label}: </span>
+        <span style="color:var(--ink); font-size:11px;">${info.existing} kept</span>
+        <span style="color:var(--muted-2);"> · </span>
+        <span style="font-size:11px;">${newSample}</span>
+      </div>`;
+    };
+    html += `<div style="background:white; border:1px solid var(--line); border-radius:4px; padding:8px 10px; min-width:0; overflow:hidden; overflow-wrap:anywhere; word-break:break-word;">
       <div style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--${cat}); margin-bottom:6px; text-transform:uppercase;">${cat}</div>
-      <div style="color:var(--muted); margin-bottom:3px;">H2 (${bucket.h2.length}):</div>
-      <div style="color:var(--ink); max-height:72px; overflow-y:auto; margin-bottom:6px; overflow-wrap:anywhere; word-break:break-word; line-height:1.4;">${h2List}</div>
-      <div style="color:var(--muted); margin-bottom:3px;">H3 (${bucket.h3.length}):</div>
-      <div style="color:var(--ink); max-height:72px; overflow-y:auto; overflow-wrap:anywhere; word-break:break-word; line-height:1.4;">${h3List}</div>
+      ${renderLevel('H2', d.h2)}
+      ${renderLevel('H3', d.h3)}
     </div>`;
   });
   html += `</div>`;
+  // Action row — Apply (always visible) + Undo (whenever a backup exists).
+  const applyDisabled = diff.totalNew === 0 ? 'disabled' : '';
+  const applyLabel = diff.totalNew === 0
+    ? '✓ ทุกค่ามีอยู่แล้ว — ไม่มีอะไรให้ append'
+    : `✓ Append ${diff.totalNew} ค่าใหม่ (ของเดิมไม่ถูกแตะ)`;
   html += `<div style="display:flex; gap:10px; align-items:center; font-size:11px; color:var(--muted); flex-wrap:wrap;">
-    <button class="btn primary sm" onclick="applyExcelTemplate()" ${preview.matched ? '' : 'disabled'}>✓ Apply Template (overwrite ค่าที่มีอยู่)</button>`;
-  if (hasBackup) {
-    html += `<button class="btn sm" onclick="undoSchemaChange()" style="color:var(--err); border-color:var(--err);">↶ Undo (กลับเป็นก่อน apply)</button>
-      <span style="font-family:'Geist Mono',monospace; font-size:10px;">backup ${new Date(camp._schemaBackupAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</span>`;
-  }
-  html += `<span style="margin-left:auto; min-width:0; overflow-wrap:anywhere;">⚠️ Apply จะเขียนทับ values เดิมทุกหมวด — ใช้ Undo ได้ระหว่างที่ modal เปิดอยู่</span></div>`;
+    <button class="btn primary sm" onclick="applyExcelTemplate()" ${applyDisabled}>${applyLabel}</button>
+    ${hasBackup ? _renderUndoButton(camp) : ''}
+    <span style="margin-left:auto; min-width:0; overflow-wrap:anywhere;">📌 Append เท่านั้น — ลบของเดิมต้องกด <strong>×</strong> ใน manual editor ด้านล่าง</span>
+  </div>`;
   html += `</div>`;
   wrap.style.display = 'block';
   wrap.innerHTML = html;
+}
+function _renderUndoButton(camp) {
+  if (!camp || !camp._schemaBackup) return '';
+  const at = camp._schemaBackupAt ? new Date(camp._schemaBackupAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+  return `<button class="btn sm" onclick="undoSchemaChange()" style="color:var(--err); border-color:var(--err); font-weight:600;">↶ Undo last apply${at ? ` (${at})` : ''}</button>`;
 }
 
 // ============================================================================
@@ -9111,6 +9203,7 @@ window.__runTests = async function() {
     ok(typeof applyExcelTemplate === 'function');
     ok(typeof undoSchemaChange === 'function');
     ok(typeof downloadConfigTemplate === 'function');
+    ok(typeof _computeAppendDiff === 'function');
     const fakeCamp = {
       schema: defaultSchema(),
       excelData: {
@@ -9123,7 +9216,94 @@ window.__runTests = async function() {
     const preview = _previewTemplateApply(fakeCamp);
     ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
-       'preview MUST NOT mutate the schema — that is the bug we are fixing');
+       'preview MUST NOT mutate the schema');
+  });
+  t('Config Fields: append mode — keeps existing values + adds only new ones', () => {
+    const camp = {
+      schema: defaultSchema(),
+      excelData: {
+        sheetName: 'T',
+        headers: ['category', 'h2', 'h3'],
+        rows: [
+          ['catch', 'Product USP', 'Taste & Flavor'],
+          ['catch', 'NEW H2 catch', 'NEW H3 catch'],
+          ['connect', 'Recipe Application', 'Brand New Basic']
+        ]
+      }
+    };
+    const existingCatchH2Before = camp.schema.catch.h2.values.slice();
+    const diff = _computeAppendDiff(camp);
+    ok(diff.totalExisting > 0, 'must count current values');
+    ok(diff.totalNew > 0, 'must report what would be added');
+    // Sandbox window.getCurrentCampaign / showToast / logAction with restore
+    const origGetCurrent = window.getCurrentCampaign;
+    const origToast = window.showToast;
+    const origLog = window.logAction;
+    try {
+      window.getCurrentCampaign = () => camp;
+      window.showToast = () => {};
+      window.logAction = () => {};
+      applyExcelTemplate();
+    } finally {
+      window.getCurrentCampaign = origGetCurrent;
+      window.showToast = origToast;
+      window.logAction = origLog;
+    }
+    existingCatchH2Before.forEach(v => ok(camp.schema.catch.h2.values.includes(v), `existing "${v}" kept`));
+    ok(camp.schema.catch.h2.values.includes('NEW H2 catch'), 'new H2 appended');
+    ok(camp.schema.connect.h3.values.includes('Brand New Basic'), 'new H3 appended cross-category');
+    ok(!!camp._schemaBackup, 'backup must exist for undo');
+  });
+  t('Config Fields: undo restores pre-apply schema', () => {
+    const camp = {
+      schema: defaultSchema(),
+      excelData: {
+        sheetName: 'T',
+        headers: ['category', 'h2', 'h3'],
+        rows: [['catch', 'ONLY-NEW', 'ALSO-NEW']]
+      }
+    };
+    const snapshotBeforeApply = JSON.stringify(camp.schema);
+    const origGetCurrent = window.getCurrentCampaign;
+    const origToast = window.showToast;
+    const origLog = window.logAction;
+    try {
+      window.getCurrentCampaign = () => camp;
+      window.showToast = () => {};
+      window.logAction = () => {};
+      applyExcelTemplate();
+      ok(camp.schema.catch.h2.values.includes('ONLY-NEW'), 'apply added value');
+      undoSchemaChange();
+    } finally {
+      window.getCurrentCampaign = origGetCurrent;
+      window.showToast = origToast;
+      window.logAction = origLog;
+    }
+    ok(JSON.stringify(camp.schema) === snapshotBeforeApply, 'undo restored exact pre-apply state');
+    ok(!camp._schemaBackup, 'backup cleared after undo');
+  });
+  t('Config Fields: append no-op when every value already exists (no backup created)', () => {
+    const camp = { schema: defaultSchema() };
+    const existing = [];
+    _CAT_KEYS.forEach(cat => {
+      (camp.schema[cat].h2.values || []).forEach(v => existing.push([cat, v, '']));
+      (camp.schema[cat].h3.values || []).forEach(v => existing.push([cat, '', v]));
+    });
+    camp.excelData = { sheetName: 'T', headers: ['category','h2','h3'], rows: existing };
+    const origGetCurrent = window.getCurrentCampaign;
+    const origToast = window.showToast;
+    const origLog = window.logAction;
+    try {
+      window.getCurrentCampaign = () => camp;
+      window.showToast = () => {};
+      window.logAction = () => {};
+      applyExcelTemplate();
+    } finally {
+      window.getCurrentCampaign = origGetCurrent;
+      window.showToast = origToast;
+      window.logAction = origLog;
+    }
+    ok(!camp._schemaBackup, 'no backup if nothing was appended');
   });
   t('Config Fields: handleExcelUpload no longer auto-applies (admin must click Apply)', () => {
     const src = handleExcelUpload.toString();
