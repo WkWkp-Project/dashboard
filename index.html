@@ -2793,6 +2793,29 @@ function markCampaignDirty(id) {
     _dirtyCampaignIds.add(currentCampaignId);
   }
 }
+// Skip the 2.5s debounce: explicit user-action saves (Asset modal save button,
+// Edit Campaign Info save button, Connect Drive save button) MUST land on
+// Drive before the user has a chance to refresh. Without this, the modal
+// closes, the toast says "Saved", and 2.5s of dead air follows where an
+// over-eager refresh wipes the asset — exactly the "ลงงานใน sec b ไปแล้ว
+// รีเฟรช งานหาย" report. Returns the save promise so the caller can chain
+// status updates if it wants to.
+function flushSaveNow(campaignId) {
+  pendingChanges = true;
+  if (typeof markCampaignDirty === 'function') markCampaignDirty(campaignId);
+  try { flushLocalBackupNow(); } catch(e) {} // sync localStorage too, no debounce
+  cancelSaveRetry();
+  _emergencyBackupDone = false;
+  if (isOfflineMode) { setSaveStatus('offline', 'Offline · changes not synced'); return Promise.resolve(); }
+  if (!accessToken) { setSaveStatus('offline', 'Drive token required'); return Promise.resolve(); }
+  if (!_readyToSave) { setSaveStatus('saving', 'รอโหลด DB ก่อนเซฟ...'); return Promise.resolve(); }
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  setSaveStatus('saving', 'Saving to Drive...');
+  return saveToDrive().catch(e => {
+    console.warn('flushSaveNow failed:', e);
+    showToast('Save failed: ' + (e.message || 'unknown'), 'err');
+  });
+}
 function scheduleSave(campaignId) {
   pendingChanges = true;
   markCampaignDirty(campaignId);
@@ -6449,7 +6472,10 @@ function saveAssetFromModal() {
     user: (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Guest'
   });
   if (typeof markCampaignDirty === 'function') markCampaignDirty(lockedId);
-  scheduleSave(lockedId);
+  // Immediate save (no 2.5s debounce). Explicit user clicks on "Save Asset"
+  // need to land on Drive before the modal closes, so a quick refresh can't
+  // wipe the new asset out of the in-memory copy before the timer fires.
+  flushSaveNow(lockedId);
   closeAssetModal();
   // Only re-render the asset grid if the locked campaign is still the one
   // displayed; otherwise the next render picks it up on view switch.
@@ -7835,7 +7861,8 @@ function saveCampaignInfo() {
     user: (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || 'Guest'
   });
   if (typeof markCampaignDirty === 'function') markCampaignDirty(camp.id);
-  scheduleSave(camp.id);
+  // Immediate save — see saveAssetFromModal / flushSaveNow rationale.
+  flushSaveNow(camp.id);
   showToast(`✓ Saved → ${camp.campaign || camp.id}`);
 }
 
@@ -8055,7 +8082,8 @@ function saveDriveLinks() {
       user: document.getElementById('sb-name').textContent || 'Guest'
     });
     if (typeof markCampaignDirty === 'function') markCampaignDirty(lockedId);
-    scheduleSave(lockedId);
+    // Immediate save — see saveAssetFromModal / flushSaveNow rationale.
+    flushSaveNow(lockedId);
     showToast(`✓ Drive links saved (${camp.campaign || lockedId})`, 'ok');
   }
 }
@@ -8796,6 +8824,23 @@ window.__runTests = async function() {
     // Must abort with a return inside the catch when driveDbFileId is set,
     // not fall through to local/index/signal removal.
     ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
+  });
+  t('flushSaveNow bypasses the 2.5s debounce (refresh-after-save data-loss guard)', () => {
+    ok(typeof flushSaveNow === 'function');
+    const src = flushSaveNow.toString();
+    ok(/clearTimeout\(saveTimer\)/.test(src) && /saveToDrive/.test(src),
+       'flushSaveNow must cancel pending debounce + fire saveToDrive immediately');
+    ok(/flushLocalBackupNow/.test(src), 'must also flush localStorage synchronously');
+  });
+  t('Asset / Edit Campaign / Connect Drive saves use flushSaveNow not scheduleSave', () => {
+    // Regression for "ลงงานใน sec b ไปแล้ว รีเฟรช งานหาย": the 2.5s gap
+    // between modal close and Drive PATCH left enough room for a quick
+    // refresh to wipe the new asset. Each explicit user-click save
+    // must call flushSaveNow so Drive sees the write before the user
+    // can navigate away.
+    ok(/flushSaveNow/.test(saveAssetFromModal.toString()), 'saveAssetFromModal');
+    ok(/flushSaveNow/.test(saveCampaignInfo.toString()), 'saveCampaignInfo');
+    ok(/flushSaveNow/.test(saveDriveLinks.toString()), 'saveDriveLinks');
   });
   t('SAVE_CONCURRENCY cap is 6 (multi-admin throughput)', () => {
     const src = saveToDrive.toString();
