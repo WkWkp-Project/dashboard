@@ -1844,11 +1844,31 @@ function onCampaignSignal(sig) {
 }
 
 // Default schema for a new campaign
+// Baseline schema for a brand-new campaign. The values mirror EXACTLY the
+// rows in config_fields_template.xlsx (downloadConfigTemplate) so:
+//   1. New campaigns start with the same set of values the template
+//      defines — admin sees the "canonical" baseline immediately.
+//   2. Uploading + applying the template on a fresh campaign is a clean
+//      no-op (every value already present) — no "ghost" overwrite feeling.
+//   3. Anything beyond this baseline is genuinely additive: admin's own
+//      typed values OR new rows added to a customised Excel.
 function defaultSchema() {
   return {
-    catch:   { label: '01 · Catch',   color: 'catch',   h2: { source:'manual', column:'', values:['Product USP','Visual Appetite Trigger','Seasonal Hook'] }, h3: { source:'manual', column:'', values:['Taste & Flavor','Aroma','Key Ingredients'] } },
-    connect: { label: '02 · Connect', color: 'connect', h2: { source:'manual', column:'', values:['Recipe Application','Menu Expansion','Cooking Education'] }, h3: { source:'manual', column:'', values:['Basic Recipes','Time-Saving','Pairing'] } },
-    convert: { label: '03 · Convert', color: 'convert', h2: { source:'manual', column:'', values:['Platform Promotion','Double-Date Activation'] }, h3: { source:'manual', column:'', values:['Shopee','9.9','10.10','Payday'] } }
+    catch: {
+      label: '01 · Catch', color: 'catch',
+      h2: { source:'manual', column:'', values: ['Product USP', 'Visual Appetite Trigger', 'Seasonal Hook'] },
+      h3: { source:'manual', column:'', values: ['Taste & Flavor', 'Aroma', 'Finished Dish Appeal', 'Songkran (Apr)'] }
+    },
+    connect: {
+      label: '02 · Connect', color: 'connect',
+      h2: { source:'manual', column:'', values: ['Recipe Application', 'Menu Expansion', 'Cooking Education'] },
+      h3: { source:'manual', column:'', values: ['Basic Recipes', 'Time-Saving Recipes', 'Stir-fry Dishes', 'How Much to Use'] }
+    },
+    convert: {
+      label: '03 · Convert', color: 'convert',
+      h2: { source:'manual', column:'', values: ['Platform Promotion', 'Double-Date Activation'] },
+      h3: { source:'manual', column:'', values: ['Shopee Campaigns', 'Bundle Deals', '9.9', 'Payday Sales'] }
+    }
   };
 }
 
@@ -9217,6 +9237,53 @@ window.__runTests = async function() {
     ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
        'preview MUST NOT mutate the schema');
+  });
+  t('Config Fields: defaultSchema matches downloadConfigTemplate (template-as-baseline)', () => {
+    // Whatever rows downloadConfigTemplate emits must already exist in a
+    // fresh campaign's schema, so uploading + applying the template is a
+    // clean no-op (no "ghost" overwrite feeling on first try).
+    const sch = defaultSchema();
+    // Template rows (kept in sync with downloadConfigTemplate above):
+    const expect = {
+      catch:   { h2: ['Product USP','Visual Appetite Trigger','Seasonal Hook'],
+                 h3: ['Taste & Flavor','Aroma','Finished Dish Appeal','Songkran (Apr)'] },
+      connect: { h2: ['Recipe Application','Menu Expansion','Cooking Education'],
+                 h3: ['Basic Recipes','Time-Saving Recipes','Stir-fry Dishes','How Much to Use'] },
+      convert: { h2: ['Platform Promotion','Double-Date Activation'],
+                 h3: ['Shopee Campaigns','Bundle Deals','9.9','Payday Sales'] }
+    };
+    Object.keys(expect).forEach(cat => {
+      ['h2','h3'].forEach(level => {
+        const want = expect[cat][level];
+        const got  = sch[cat][level].values;
+        ok(JSON.stringify(want) === JSON.stringify(got),
+           `${cat}.${level} mismatch — want ${JSON.stringify(want)} · got ${JSON.stringify(got)}`);
+      });
+    });
+    // And the apply-the-template-on-fresh-schema must be a no-op (totalNew=0).
+    const camp = {
+      schema: defaultSchema(),
+      excelData: {
+        sheetName: 'T',
+        headers: ['category','h2','h3'],
+        rows: [
+          ['catch','Product USP','Taste & Flavor'],
+          ['catch','Product USP','Aroma'],
+          ['catch','Visual Appetite Trigger','Finished Dish Appeal'],
+          ['catch','Seasonal Hook','Songkran (Apr)'],
+          ['connect','Recipe Application','Basic Recipes'],
+          ['connect','Recipe Application','Time-Saving Recipes'],
+          ['connect','Menu Expansion','Stir-fry Dishes'],
+          ['connect','Cooking Education','How Much to Use'],
+          ['convert','Platform Promotion','Shopee Campaigns'],
+          ['convert','Platform Promotion','Bundle Deals'],
+          ['convert','Double-Date Activation','9.9'],
+          ['convert','Double-Date Activation','Payday Sales']
+        ]
+      }
+    };
+    const diff = _computeAppendDiff(camp);
+    ok(diff.totalNew === 0, `applying the template on a fresh schema must add 0 — got ${diff.totalNew}`);
   });
   t('Config Fields: append mode — keeps existing values + adds only new ones', () => {
     const camp = {
