@@ -4277,6 +4277,45 @@ function _hasLocalEditInFlight() {
   return !!(pendingChanges || saveTimer || isSaving || _editModalOpenCount > 0);
 }
 
+// Soft-deleted campaign ids — populated from two stores so a deleted
+// campaign can't zombie back via Drive search:
+//   1. Firestore control_signals (cross-admin, real-time): any signal
+//      doc with deleted:true means an admin already removed it.
+//   2. localStorage wkw_deleted_camp_ids_v1 (per-browser fallback): keeps
+//      our own deletes in mind even if Firestore listener is restarting
+//      or signals were pruned. Capped at 500 entries so the Set never
+//      grows unbounded.
+const DELETED_IDS_KEY = 'wkw_deleted_camp_ids_v1';
+const DELETED_IDS_CAP = 500;
+function _getDeletedCampaignIds() {
+  const set = new Set();
+  // (a) Firestore signals — cross-admin truth.
+  try {
+    if (window.Control && typeof window.Control.cachedSignals === 'function') {
+      const sigs = window.Control.cachedSignals() || {};
+      for (const id in sigs) if (sigs[id] && sigs[id].deleted) set.add(id);
+    }
+  } catch(e) { console.warn('_getDeletedCampaignIds signals read failed:', e); }
+  // (b) localStorage backup — survives Firestore listener restarts.
+  try {
+    const raw = localStorage.getItem(DELETED_IDS_KEY);
+    if (raw) JSON.parse(raw).forEach(id => set.add(id));
+  } catch(e) {}
+  return set;
+}
+function _rememberDeletedCampaignId(id) {
+  if (!id) return;
+  try {
+    const raw = localStorage.getItem(DELETED_IDS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    if (arr.indexOf(id) >= 0) return; // already remembered
+    arr.push(id);
+    // Keep newest DELETED_IDS_CAP — drop oldest if over.
+    while (arr.length > DELETED_IDS_CAP) arr.shift();
+    localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(arr));
+  } catch(e) { console.warn('_rememberDeletedCampaignId failed:', e); }
+}
+
 async function syncDatabaseFromDrive(opts) {
   const silent = !!(opts && opts.silent);
   // CRITICAL guard: silent syncs replace the in-memory campaigns array. If
@@ -4306,7 +4345,29 @@ async function syncDatabaseFromDrive(opts) {
     // other admins, possibly in folders not surfaced by our own search).
     const loadedFileIds = new Set(searched.map(c => c.driveDbFileId).filter(Boolean));
     const fromIndex = await loadCampaignsFromIndex(loadedFileIds).catch(e => { console.warn('loadCampaignsFromIndex failed:', e); return []; });
-    const merged = searched.concat(fromIndex);
+    const mergedRaw = searched.concat(fromIndex);
+    // Filter out campaigns marked deleted by another admin (or by us in a
+    // previous session). The delete pipeline is "soft" by design — when an
+    // admin isn't the Drive file's owner (customer owns it), trashing in
+    // Drive returns 403 and we fall back to clearing local + Firestore
+    // index + broadcasting pingCampaignDeleted. But the un-trashed Drive
+    // JSON file remains in the customer's folder, so the next Drive search
+    // re-finds it and "zombies" the campaign back. Two persistent stores
+    // tell us "this id was deleted":
+    //   1. Firestore control_signals doc with deleted:true (shared across
+    //      admins, populated by Control.subscribeSignals).
+    //   2. localStorage 'wkw_deleted_camp_ids_v1' set (per-browser belt-
+    //      and-braces — survives Firestore listener restarts and offline
+    //      logins).
+    const deletedIds = _getDeletedCampaignIds();
+    const merged = mergedRaw.filter(c => {
+      if (!c || !c.id) return true;
+      if (deletedIds.has(c.id)) {
+        console.info('[sync] skipping soft-deleted campaign:', c.id, c.campaign || '');
+        return false;
+      }
+      return true;
+    });
     // Hide duplicates from the sidebar — see dedupCampaigns() above. Drive
     // files for the dropped copies are NOT trashed (customer-owned data).
     const { kept: loaded, dropped: dupDropped } = dedupCampaigns(merged);
@@ -5898,7 +5959,11 @@ function confirmDeleteCampaign() {
         }
       }
     }
-    // 2) Update local state.
+    // 2) Update local state + persist the deletion so the next Drive search
+    //    can't zombie this campaign back. Soft-deletes especially need this:
+    //    the JSON file is still in the customer's Drive untrashed, so
+    //    loadCampaignJsonFilesFromDrive would re-find it without this guard.
+    _rememberDeletedCampaignId(removedId);
     campaigns = campaigns.filter(x => x.id !== removedId);
     const myCamps = currentMemberEmail ? campaigns.filter(x => (x.clientEmail || '') === currentMemberEmail) : [];
     currentCampaignId = myCamps[0] ? myCamps[0].id : null;
@@ -8675,6 +8740,31 @@ window.__runTests = async function() {
     // Must abort with a return inside the catch when driveDbFileId is set,
     // not fall through to local/index/signal removal.
     ok(/trashCampaignJsonInDrive/.test(src) && /return/.test(src) && /Drive\s+error|ลบไม่สำเร็จ/.test(src));
+  });
+  t('soft-deleted campaign ids persist + filter out on next sync (zombie guard)', () => {
+    // Regression: customer-owned Drive JSON file can't be trashed by admin
+    // (403). Soft-delete clears local + Firestore index, but the file stays
+    // and the next Drive search would re-import it ("zombie"). Two stores
+    // remember the deletion across sessions.
+    ok(typeof _getDeletedCampaignIds === 'function' && typeof _rememberDeletedCampaignId === 'function');
+    // Helper writes localStorage
+    const savedRaw = localStorage.getItem(DELETED_IDS_KEY);
+    try {
+      localStorage.removeItem(DELETED_IDS_KEY);
+      _rememberDeletedCampaignId('zombie-test-id');
+      const set = _getDeletedCampaignIds();
+      ok(set.has('zombie-test-id'), 'localStorage round-trip works');
+    } finally {
+      if (savedRaw !== null) localStorage.setItem(DELETED_IDS_KEY, savedRaw);
+      else localStorage.removeItem(DELETED_IDS_KEY);
+    }
+    // confirmDeleteCampaign must call _rememberDeletedCampaignId
+    const dsrc = confirmDeleteCampaign.toString();
+    ok(/_rememberDeletedCampaignId/.test(dsrc), 'delete must persist the id');
+    // syncDatabaseFromDrive must filter via _getDeletedCampaignIds
+    const ssrc = syncDatabaseFromDrive.toString();
+    ok(/_getDeletedCampaignIds/.test(ssrc) && /deletedIds\.has/.test(ssrc),
+       'sync must drop deleted ids from the merged list');
   });
   t('loadCampaignsFromIndex checks trashed before content fetch (source guard)', () => {
     const src = loadCampaignsFromIndex.toString();
