@@ -2165,6 +2165,16 @@ async function resolveUserRoleFromControl(email, displayName) {
     // regardless of who created them (bug: admins not seeing each other's camps).
     await window.Control.listCampaigns().catch(e => { console.warn('listCampaigns failed:', e); });
     window.Control.subscribeCampaigns(onControlCampaignsChanged);
+    // CRITICAL: populate the signals cache BEFORE the first
+    // syncDatabaseFromDrive (which runs in onLoginSuccess right after
+    // resolveUserRoleFromControl returns). Without this one-shot read,
+    // _getDeletedCampaignIds returns an empty set during the initial
+    // sync — and any Drive JSON that wasn't trashable (customer owns
+    // the folder) zombies straight into campaigns[]. subscribeSignals
+    // below keeps the cache live for incoming deletes/changes.
+    if (typeof window.Control.loadSignals === 'function') {
+      await window.Control.loadSignals().catch(e => { console.warn('loadSignals failed:', e); });
+    }
     // Signal channel: live "campaign changed on Drive" notifications. Drive
     // is still the source of truth — this just avoids the 45s poll wait.
     try { window.Control.subscribeSignals(onCampaignSignal); } catch(e) { console.warn('subscribeSignals failed:', e); }
@@ -6165,13 +6175,16 @@ function confirmDeleteCampaign() {
     } else {
       showToast('Campaign moved to Drive trash');
     }
-    // 3) Remove from the shared Firestore index so admins stop seeing it.
+    // 3) Remove from the shared Firestore index AND write the delete
+    //    tombstone. AWAITED — if the user closes the tab before either
+    //    write lands, the deletion would be invisible to every other
+    //    admin/device. The pingCampaignDeleted tombstone is the only
+    //    cross-device source of truth (localStorage is per-browser).
     if (window.Control && window.Control.available()) {
-      window.Control.removeCampaign(removedId).catch(e => console.warn('index removeCampaign failed:', e));
-      // 4) Broadcast a delete signal so other admins remove it from their
-      //    local view immediately, instead of waiting for the next sync.
+      try { await window.Control.removeCampaign(removedId); }
+      catch(e) { console.warn('index removeCampaign failed:', e); }
       try {
-        window.Control.pingCampaignDeleted(removedId, {
+        await window.Control.pingCampaignDeleted(removedId, {
           modifiedBy: currentUserEmail,
           displayName: (typeof currentUserName === 'function' ? currentUserName() : '') || currentUserEmail
         });
@@ -9237,6 +9250,28 @@ window.__runTests = async function() {
     ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
        'preview MUST NOT mutate the schema');
+  });
+  t('Delete-zombie guard A: pingCampaignChanged must NOT write `deleted` field', () => {
+    // Tombstone protection: a save on a zombie campaign would otherwise
+    // overwrite the delete signal and resurrect the camp for everyone.
+    const src = window.Control && window.Control.pingCampaignChanged
+      ? window.Control.pingCampaignChanged.toString() : '';
+    ok(!/deleted\s*:/.test(src),
+       'pingCampaignChanged must not assign the `deleted` field — let merge:true keep an existing tombstone intact');
+  });
+  t('Delete-zombie guard B-alt: Control.loadSignals defined (race-free initial cache)', () => {
+    ok(window.Control && typeof window.Control.loadSignals === 'function',
+       'one-shot signal preload must exist so syncDatabaseFromDrive can see the deleted set on first run');
+    const src = resolveUserRoleFromControl.toString();
+    ok(/loadSignals/.test(src),
+       'resolveUserRoleFromControl must await loadSignals before subscribeSignals');
+  });
+  t('Delete-zombie guard D: confirmDeleteCampaign awaits Firestore removeCampaign + pingCampaignDeleted', () => {
+    const src = confirmDeleteCampaign.toString();
+    ok(/await\s+window\.Control\.removeCampaign/.test(src),
+       'must await removeCampaign — fire-and-forget loses tombstone if tab closes');
+    ok(/await\s+window\.Control\.pingCampaignDeleted/.test(src),
+       'must await pingCampaignDeleted — the tombstone is the only cross-device truth');
   });
   t('Config Fields: defaultSchema matches downloadConfigTemplate (template-as-baseline)', () => {
     // Whatever rows downloadConfigTemplate emits must already exist in a

@@ -475,13 +475,19 @@
       opts = opts || {};
       var ts = Date.now();
       this._selfSignalTs[id] = ts;
+      // DELIBERATELY do NOT write `deleted` here. The change-signal must
+      // never overwrite a delete-signal: a save that happens AFTER a
+      // pingCampaignDeleted (typical zombie path — another admin opens a
+      // not-yet-filtered camp and edits it before subscribeSignals
+      // populates) would otherwise resurrect the campaign for everyone.
+      // The deleted flag is a tombstone written exclusively by
+      // pingCampaignDeleted; merge:true keeps it intact.
       var doc = {
         id: id,
         ts: ts,
         iso: new Date(ts).toISOString(),
         modifiedBy: normEmail(opts.modifiedBy || ''),
-        displayName: opts.displayName || '',
-        deleted: false
+        displayName: opts.displayName || ''
       };
       return this._db.collection(COLLECTION_SIGNALS).doc(id).set(doc, { merge: true })
         .catch(function (e) {
@@ -516,6 +522,36 @@
       var out = {};
       for (var k in this._signals) if (this._signals.hasOwnProperty(k)) out[k] = this._signals[k];
       return out;
+    },
+
+    // One-shot read of the entire signals collection — populates _signals
+    // cache deterministically BEFORE the first syncDatabaseFromDrive runs.
+    // Without this, subscribeSignals's first onSnapshot is async and may
+    // fire AFTER the initial sync — leaving _signals empty, _getDeletedCampaignIds
+    // returning an incomplete set, and Drive search re-importing
+    // tombstoned campaigns into the campaigns[] array. Cross-device
+    // login was the typical reproducer.
+    loadSignals: function () {
+      var self = this;
+      if (!this._db) return Promise.resolve();
+      return this._db.collection(COLLECTION_SIGNALS).get().then(function (snap) {
+        snap.forEach(function (doc) {
+          var data = doc.data() || {};
+          var id = data.id || doc.id;
+          self._signals[id] = {
+            id: id,
+            ts: +data.ts || 0,
+            iso: data.iso || '',
+            modifiedBy: normEmail(data.modifiedBy || ''),
+            displayName: data.displayName || '',
+            deleted: !!data.deleted
+          };
+        });
+      }).catch(function (e) {
+        // Non-fatal — silent fallback to subscribeSignals's first
+        // (eventual) snapshot. UI will catch up after that fires.
+        console.warn('[Control] loadSignals failed (non-fatal):', e);
+      });
     },
 
     subscribeSignals: function (onSignal) {
