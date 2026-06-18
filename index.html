@@ -203,6 +203,14 @@
   .hero { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 32px; padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
   .hero-eyebrow { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
   .hero-eyebrow::before { content: ''; width: 24px; height: 1px; background: var(--accent); }
+  /* Role gating — applied by applyRoleRestrictions():
+       .admin-only     hides for everyone whose userRoleControl !== 'admin'
+                       (Editor / Operation / Customer / Viewer all lose
+                       admin-exclusive controls — Reset, Delete, Edit Info).
+     This sits alongside the existing client-mode / operator-mode body
+     classes which gate broader UI (sidebar, hero buttons, sections). */
+  body:not(.admin-mode) .admin-only { display: none !important; }
+  body.operator-mode .operator-hide { display: none !important; }
   .hero h1 { font-family: 'Fraunces', serif; font-weight: 400; font-size: 52px; line-height: 1; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 8px; }
   .hero h1 em { font-style: italic; font-weight: 300; color: var(--muted); }
   .hero p { color: var(--muted); font-size: 14px; max-width: 540px; }
@@ -783,13 +791,19 @@
       </div>
 
       <div class="hero">
-        <div>
+        <!-- Hero text intentionally hidden — admin requested the
+             "CONTENT CREATION SUITE · CAMPAIGN OVERVIEW" eyebrow, the
+             campaign-name title, and the assets/schedule/links subtitle
+             all be dropped from the overview view. Elements remain in
+             DOM (display:none) so updateCampaignUI's hero-title write
+             stays safe and rollback is a single class flip. -->
+        <div style="display:none;">
           <div class="hero-eyebrow">Content Creation Suite · Campaign Overview</div>
           <h1 id="hero-title">Campaign <em>Name</em></h1>
           <p id="hero-desc">รวบรวม assets, schedule, links — ทั้งหมดเชื่อมโยงกันในที่เดียว</p>
         </div>
-        <div class="hero-actions">
-          <button class="btn" onclick="openEditModal()">
+        <div class="hero-actions" style="margin-left:auto;">
+          <button class="btn admin-only" onclick="openEditModal()">
             <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             Edit Info
           </button>
@@ -1448,8 +1462,8 @@
       <input type="hidden" id="editTags" />
     </div>
     <div class="simple-modal-footer">
-      <button class="btn" onclick="clearCurrentCampaign()" style="margin-right:8px; color:var(--warn); border-color:var(--warn);">🔄 Reset Campaign</button>
-      <button class="btn" onclick="confirmDeleteCampaign()" style="margin-right:auto; color:var(--err); border-color:var(--err);">🗑 Delete Campaign</button>
+      <button class="btn admin-only" onclick="clearCurrentCampaign()" style="margin-right:8px; color:var(--warn); border-color:var(--warn);">🔄 Reset Campaign</button>
+      <button class="btn admin-only" onclick="confirmDeleteCampaign()" style="margin-right:auto; color:var(--err); border-color:var(--err);">🗑 Delete Campaign</button>
       <button class="btn" onclick="closeEditModal()">Cancel</button>
       <button class="btn primary" onclick="saveCampaignInfo()">💾 Save Changes</button>
     </div>
@@ -7299,17 +7313,28 @@ const CLIENT_DISABLED_SELECTORS = [
 ];
 
 // Operators: can fully use Section B + Overview/Calendar/Export, but NOT
-// token management, new campaigns, Connect Drive, Backup, Data Hub, Handoff.
+// token management, new campaigns, Connect Drive (changes infrastructure
+// links — Section A territory), Backup, Data Hub, Handoff, Edit Info
+// (campaign-wide metadata is admin/editor surface, not Section-B).
 const OPERATOR_DISABLED_SELECTORS = [
-  '.add-btn',                            // sidebar campaign +
-  '.nav-item[onclick*="forceSave"]',     // Backup to Cloud
-  '.hero-actions .btn.gold',             // Prepare Handoff
+  '.add-btn',                                   // sidebar campaign +
+  '.nav-item[onclick*="forceSave"]',            // Backup to Cloud
+  '.hero-actions .btn.gold',                    // Prepare Handoff
+  '.hero-actions .btn:not(.gold):not(.client-allow)', // Edit Info
+  '.section-actions [onclick*="openConnectModal"]',   // Connect Drive (Section A)
+  // NB: Config Fields (openConfigModal) stays enabled — operator needs it
+  // to tune H2/H3 dropdowns for Section B assets.
   '#handoffBanner button',
   '#configWarning'
 ];
 
 function applyRoleRestrictions() {
-  document.body.classList.remove('client-mode', 'operator-mode');
+  // Body classes drive CSS-only gates (e.g. .admin-only hidden via
+  // body:not(.admin-mode)). One source of truth — keep these in sync
+  // with userRoleControl, not the legacy userRole bucket.
+  document.body.classList.remove('client-mode', 'operator-mode', 'admin-mode', 'editor-mode');
+  if (userRoleControl === 'admin') document.body.classList.add('admin-mode');
+  else if (userRoleControl === 'editor') document.body.classList.add('editor-mode');
   // Hide the production audit-log for non-team roles (customer / viewer).
   document.body.classList.toggle('hide-audit-log', !isTeamRole());
   const navAccess = document.getElementById('nav-access');
@@ -9273,6 +9298,40 @@ window.__runTests = async function() {
     ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
        'preview MUST NOT mutate the schema');
+  });
+  t('Hero text (eyebrow / title / desc) hidden via style on parent div', () => {
+    const heroTitle = document.getElementById('hero-title');
+    ok(heroTitle, 'hero-title element still in DOM (updateCampaignUI writes to it)');
+    const wrap = heroTitle ? heroTitle.parentElement : null;
+    ok(wrap && /display\s*:\s*none/i.test(wrap.getAttribute('style') || ''),
+       'parent div carries inline display:none — eyebrow/title/desc hidden in overview');
+  });
+  t('Role gating: applyRoleRestrictions toggles body.admin-mode / editor-mode', () => {
+    const svC = userRoleControl, svR = userRole;
+    userRoleControl = 'admin'; userRole = 'internal'; applyRoleRestrictions();
+    ok(document.body.classList.contains('admin-mode'), 'admin body class set');
+    ok(!document.body.classList.contains('editor-mode'));
+    userRoleControl = 'editor'; userRole = 'internal'; applyRoleRestrictions();
+    ok(!document.body.classList.contains('admin-mode'), 'admin body class cleared when editor');
+    ok(document.body.classList.contains('editor-mode'), 'editor body class set');
+    userRoleControl = 'operation'; userRole = 'operator'; applyRoleRestrictions();
+    ok(document.body.classList.contains('operator-mode'));
+    ok(!document.body.classList.contains('admin-mode') && !document.body.classList.contains('editor-mode'));
+    userRoleControl = svC; userRole = svR; applyRoleRestrictions();
+  });
+  t('Role gating: Edit Info button + Delete/Reset Campaign carry .admin-only', () => {
+    const editInfoBtn = document.querySelector('.hero-actions .btn.admin-only');
+    ok(editInfoBtn && /Edit Info/i.test(editInfoBtn.textContent || ''),
+       'Edit Info button must have .admin-only so editor/operation lose it via CSS');
+    const adminOnlyBtns = Array.from(document.querySelectorAll('.simple-modal-footer .btn.admin-only')).map(b => b.textContent.trim());
+    ok(adminOnlyBtns.some(t => /Reset Campaign/i.test(t)), 'Reset Campaign is admin-only');
+    ok(adminOnlyBtns.some(t => /Delete Campaign/i.test(t)), 'Delete Campaign is admin-only');
+  });
+  t('Role gating: Operator-disabled list covers Edit Info + Connect Drive (Section A), leaves Config Fields', () => {
+    const sels = OPERATOR_DISABLED_SELECTORS.join(' | ');
+    ok(/openConnectModal/.test(sels), 'Connect Drive disabled for operator');
+    ok(/hero-actions .btn:not\(\.gold\)/.test(sels), 'Edit Info disabled for operator');
+    ok(!/openConfigModal/.test(sels), 'Config Fields stays enabled for operator (Section B tool)');
   });
   t('Edit Campaign modal: Company Name + Brand + Period new layout', () => {
     ok(document.getElementById('editClient'), '#editClient (Company Name) input exists');
