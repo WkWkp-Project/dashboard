@@ -152,11 +152,18 @@
   .assign-search { flex:1; padding:7px 10px; font-size:12px; border:1px solid var(--line); border-radius:6px; background:var(--paper); }
   .assign-count { font-size:10px; font-family:'Geist Mono',monospace; color:var(--gold); white-space:nowrap; }
   .assign-empty { font-size:12px; color:var(--muted-2); padding:10px; text-align:center; }
-  .assign-rows { display:flex; flex-direction:column; gap:4px; max-height:240px; overflow:auto; }
-  .assign-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; transition:all .12s; }
+  .assign-rows { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:8px; max-height:420px; overflow:auto; padding:4px; }
+  @media (max-width: 640px) { .assign-rows { grid-template-columns:1fr; max-height:320px; } }
+  .assign-row { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:6px; cursor:pointer; transition:all .12s; background:var(--paper); min-width:0; }
   .assign-row:hover { border-color:var(--gold); background:var(--paper-2); }
   .assign-row.on { border-color:var(--gold); background:linear-gradient(0deg, rgba(184,146,72,0.08), rgba(184,146,72,0.08)); }
   .assign-row input[type=checkbox] { display:none; }
+  .assign-row .assign-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .assign-row .assign-name { font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .assign-row .assign-sub { font-size:10px; color:var(--muted); font-family:'Geist Mono',monospace; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .assign-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .assign-search { flex:1; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font-size:12px; background:var(--paper); }
+  .assign-count { font-size:11px; color:var(--muted); font-family:'Geist Mono',monospace; }
   .assign-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
   .assign-name { font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .assign-sub { font-size:10px; color:var(--muted-2); font-family:'Geist Mono',monospace; }
@@ -203,6 +210,11 @@
   .hero { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 32px; padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
   .hero-eyebrow { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
   .hero-eyebrow::before { content: ''; width: 24px; height: 1px; background: var(--accent); }
+  .hero-text { min-width: 0; flex: 1; }
+  .hero-brand { font-family: 'Fraunces', serif; font-weight: 500; font-size: 22px; line-height: 1.2; color: var(--ink); margin-top: 6px; letter-spacing: 0.2px; }
+  .hero-brand:empty { display: none; }
+  .hero-company { font-family: 'Geist Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+  .hero-company:empty { display: none; }
   /* Role gating — applied by applyRoleRestrictions():
        .admin-only     hides for everyone whose userRoleControl !== 'admin'
                        (Editor / Operation / Customer / Viewer all lose
@@ -225,7 +237,8 @@
   .btn.sm { padding: 6px 10px; font-size: 12px; }
   .btn .icon { width: 14px; height: 14px; }
 
-  .meta-strip { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--line); background: var(--paper-2); border-radius: var(--radius); margin-bottom: 32px; overflow: hidden; }
+  .meta-strip { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); background: var(--paper-2); border-radius: var(--radius); margin-bottom: 32px; overflow: hidden; }
+  @media (max-width: 900px) { .meta-strip { grid-template-columns: repeat(3, 1fr); } }
   .meta-cell { padding: 16px 20px; border-right: 1px solid var(--line); }
   .meta-cell:last-child { border-right: none; }
   .meta-label { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
@@ -791,16 +804,13 @@
       </div>
 
       <div class="hero">
-        <!-- Hero text intentionally hidden — admin requested the
-             "CONTENT CREATION SUITE · CAMPAIGN OVERVIEW" eyebrow, the
-             campaign-name title, and the assets/schedule/links subtitle
-             all be dropped from the overview view. Elements remain in
-             DOM (display:none) so updateCampaignUI's hero-title write
-             stays safe and rollback is a single class flip. -->
-        <div style="display:none;">
-          <div class="hero-eyebrow">Content Creation Suite · Campaign Overview</div>
+        <!-- Campaign Name is H1 (largest). Brand drops to H2 (smaller).
+             Company drops to H3 (smallest). The legacy eyebrow and
+             generic subtitle are gone — they were noise. -->
+        <div class="hero-text">
           <h1 id="hero-title">Campaign <em>Name</em></h1>
-          <p id="hero-desc">รวบรวม assets, schedule, links — ทั้งหมดเชื่อมโยงกันในที่เดียว</p>
+          <h2 id="hero-brand" class="hero-brand"></h2>
+          <h3 id="hero-company" class="hero-company"></h3>
         </div>
         <div class="hero-actions" style="margin-left:auto;">
           <button class="btn admin-only" onclick="openEditModal()">
@@ -816,10 +826,14 @@
 
       <div class="meta-strip">
         <div class="meta-cell"><div class="meta-label">Campaign</div><div class="meta-value" id="meta-campaign">-</div></div>
-        <div class="meta-cell"><div class="meta-label">Client</div><div class="meta-value" id="meta-client">-</div></div>
+        <div class="meta-cell"><div class="meta-label">Brand</div><div class="meta-value" id="meta-brand">-</div></div>
+        <div class="meta-cell"><div class="meta-label">Company</div><div class="meta-value" id="meta-company">-</div></div>
         <div class="meta-cell"><div class="meta-label">Period</div><div class="meta-value mono" id="meta-period">-</div></div>
         <div class="meta-cell"><div class="meta-label">Status</div><div class="meta-value" id="meta-status"><span class="status-pill active">Active</span></div></div>
         <div class="meta-cell"><div class="meta-label">Last Saved</div><div class="meta-value mono" id="meta-saved">—</div></div>
+        <!-- Legacy meta-client kept hidden — updateCampaignUI still writes
+             to it for any tests / code paths that bind to the old id. -->
+        <div id="meta-client" style="display:none;"></div>
       </div>
 
       <!-- DESCRIPTION CARD -->
@@ -1286,7 +1300,7 @@
 
 <!-- Add Member Modal -->
 <div class="simple-overlay" id="addMemberModal">
-  <div class="simple-modal">
+  <div class="simple-modal lg">
     <div class="simple-modal-head"><h3 id="addMemberTitle">+ Add Member</h3><button class="close-btn" onclick="closeAddMemberModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
     <div class="simple-modal-body">
       <div class="input-group">
@@ -1309,7 +1323,7 @@
       </div>
       <div class="input-group" id="newMemberCampaignsGroup">
         <label>Assigned Campaigns <small class="hint-label">(เลือกแคมเปญที่ member นี้เห็นได้ · admin เห็นทุกแคมอยู่แล้วไม่ต้องเลือก)</small></label>
-        <div id="newMemberCampaigns" style="max-height:160px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;"></div>
+        <div id="newMemberCampaigns" style="border:1px solid var(--line); border-radius:6px; padding:10px; background:var(--paper-2);"></div>
       </div>
     </div>
     <div class="simple-modal-footer">
@@ -1408,17 +1422,20 @@
         <div class="input-group"><label>Brand</label><input type="text" id="editBrand" placeholder="e.g. Ocean Bites · Tipco · KFC" /></div>
       </div>
 
-      <div class="grid-2">
-        <div class="input-group"><label>Campaign Name <span class="req">*</span></label><input type="text" id="editCampaign" placeholder="e.g. Songkran 2026" /></div>
-        <div class="input-group">
-          <label>📅 Campaign Period · ช่วงเวลา</label>
-          <div style="display:grid; grid-template-rows:auto auto; gap:6px;">
-            <div><small class="hint-label">Start</small><input type="text" id="editStart" placeholder="e.g. May 2026" /></div>
-            <div><small class="hint-label">End</small><input type="text" id="editEnd" placeholder="e.g. Aug 2026" /></div>
-          </div>
-          <input type="hidden" id="editStartISO" />
-          <input type="hidden" id="editEndISO" />
+      <div class="input-group">
+        <label>Campaign Name <span class="req">*</span></label>
+        <input type="text" id="editCampaign" placeholder="e.g. Songkran 2026" />
+      </div>
+
+      <div class="input-group">
+        <label>📅 Campaign Period · ช่วงเวลาแคมเปญ</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <div><small class="hint-label">Start</small><input type="text" id="editStart" placeholder="e.g. May 2026" /></div>
+          <div><small class="hint-label">End</small><input type="text" id="editEnd" placeholder="e.g. Aug 2026" /></div>
         </div>
+        <input type="hidden" id="editStartISO" />
+        <input type="hidden" id="editEndISO" />
+        <small class="hint">พิมพ์ข้อความได้ตามต้องการ เช่น "May 2026", "Q2 2026", "Mid-May → End of Aug"</small>
       </div>
 
       <div class="grid-2">
@@ -5704,7 +5721,22 @@ function updateCampaignUI() {
   const splitCamp = (camp.campaign || 'Campaign Name').split(' ');
   const last = splitCamp.pop() || '';
   document.getElementById('hero-title').innerHTML = `${escapeHtml(splitCamp.join(' '))} <em>${escapeHtml(last)}</em>`;
-  document.getElementById('meta-client').textContent = camp.client || '—';
+  // Hero hierarchy: H1 Campaign Name (above), H2 Brand, H3 Company.
+  // Empty values hidden via CSS :empty rule so missing brand/company
+  // doesn't leave dead whitespace.
+  const heroBrand = document.getElementById('hero-brand');
+  if (heroBrand) heroBrand.textContent = camp.brand || '';
+  const heroCompany = document.getElementById('hero-company');
+  if (heroCompany) heroCompany.textContent = camp.client || '';
+  // Meta strip mirrors the same hierarchy so the data shown above the
+  // strip and inside the strip stay consistent: Brand front-and-centre,
+  // Company as supporting detail.
+  const metaBrand = document.getElementById('meta-brand');
+  if (metaBrand) metaBrand.textContent = camp.brand || '—';
+  const metaCompany = document.getElementById('meta-company');
+  if (metaCompany) metaCompany.textContent = camp.client || '—';
+  const metaClientLegacy = document.getElementById('meta-client');
+  if (metaClientLegacy) metaClientLegacy.textContent = camp.client || '—';
   document.getElementById('meta-campaign').textContent = camp.campaign || '—';
   let periodText = `${camp.startPeriod || '—'} → ${camp.endPeriod || '—'}`;
   if (camp.startDate && camp.endDate) {
@@ -9299,12 +9331,36 @@ window.__runTests = async function() {
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
        'preview MUST NOT mutate the schema');
   });
-  t('Hero text (eyebrow / title / desc) hidden via style on parent div', () => {
-    const heroTitle = document.getElementById('hero-title');
-    ok(heroTitle, 'hero-title element still in DOM (updateCampaignUI writes to it)');
-    const wrap = heroTitle ? heroTitle.parentElement : null;
-    ok(wrap && /display\s*:\s*none/i.test(wrap.getAttribute('style') || ''),
-       'parent div carries inline display:none — eyebrow/title/desc hidden in overview');
+  t('Hero hierarchy: Campaign Name (H1) + Brand (H2) + Company (H3)', () => {
+    ok(document.getElementById('hero-title'), 'H1 hero-title (Campaign Name) present');
+    ok(document.getElementById('hero-brand'), 'H2 hero-brand present');
+    ok(document.getElementById('hero-company'), 'H3 hero-company present');
+    ok(!document.querySelector('#view-overview .hero-eyebrow'), 'old eyebrow gone');
+    ok(!document.getElementById('hero-desc'), 'old subtitle gone');
+  });
+  t('Meta strip mirrors hero hierarchy: Campaign · Brand · Company · Period · Status · Last Saved', () => {
+    ok(document.getElementById('meta-campaign'), 'meta-campaign');
+    ok(document.getElementById('meta-brand'), 'meta-brand (new)');
+    ok(document.getElementById('meta-company'), 'meta-company (new)');
+    ok(document.getElementById('meta-period'), 'meta-period');
+    ok(document.getElementById('meta-status'), 'meta-status');
+    ok(document.getElementById('meta-saved'), 'meta-saved');
+    // updateCampaignUI must populate the new fields from camp.brand / camp.client
+    const src = updateCampaignUI.toString();
+    ok(/meta-brand/.test(src) && /meta-company/.test(src),
+       'updateCampaignUI writes both new ids');
+  });
+  t('Assigned campaigns picker: 2-column responsive grid + larger area', () => {
+    const css = Array.from(document.styleSheets).flatMap(s => {
+      try { return Array.from(s.cssRules); } catch(e) { return []; }
+    });
+    const rule = css.find(r => r.selectorText === '.assign-rows');
+    ok(rule, 'rule found');
+    if (rule) {
+      ok(/grid/.test(rule.style.display || ''), 'must use grid');
+      ok(/minmax\(220px/.test(rule.style.gridTemplateColumns || ''), 'min 220px column');
+      ok(parseInt(rule.style.maxHeight) >= 360, `max-height ≥360px · got ${rule.style.maxHeight}`);
+    }
   });
   t('Role gating: applyRoleRestrictions toggles body.admin-mode / editor-mode', () => {
     const svC = userRoleControl, svR = userRole;
