@@ -1390,19 +1390,21 @@
     <div class="simple-modal-head"><h3>✏️ Edit Campaign Info</h3><button class="close-btn" onclick="closeEditModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
     <div class="simple-modal-body">
       <div class="grid-2">
-        <div class="input-group"><label>Client Name <span class="req">*</span></label><input type="text" id="editClient" placeholder="e.g. Ocean Bites Co., Ltd." /></div>
-        <div class="input-group"><label>Campaign Name <span class="req">*</span></label><input type="text" id="editCampaign" placeholder="e.g. Songkran 2026" /></div>
+        <div class="input-group"><label>Company Name <span class="req">*</span></label><input type="text" id="editClient" placeholder="e.g. Ocean Bites Co., Ltd." /></div>
+        <div class="input-group"><label>Brand</label><input type="text" id="editBrand" placeholder="e.g. Ocean Bites · Tipco · KFC" /></div>
       </div>
 
-      <div class="input-group">
-        <label>📅 Campaign Period · ช่วงเวลาแคมเปญ</label>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-          <div><small class="hint-label">Start</small><input type="text" id="editStart" placeholder="e.g. May 2026" /></div>
-          <div><small class="hint-label">End</small><input type="text" id="editEnd" placeholder="e.g. Aug 2026" /></div>
+      <div class="grid-2">
+        <div class="input-group"><label>Campaign Name <span class="req">*</span></label><input type="text" id="editCampaign" placeholder="e.g. Songkran 2026" /></div>
+        <div class="input-group">
+          <label>📅 Campaign Period · ช่วงเวลา</label>
+          <div style="display:grid; grid-template-rows:auto auto; gap:6px;">
+            <div><small class="hint-label">Start</small><input type="text" id="editStart" placeholder="e.g. May 2026" /></div>
+            <div><small class="hint-label">End</small><input type="text" id="editEnd" placeholder="e.g. Aug 2026" /></div>
+          </div>
+          <input type="hidden" id="editStartISO" />
+          <input type="hidden" id="editEndISO" />
         </div>
-        <input type="hidden" id="editStartISO" />
-        <input type="hidden" id="editEndISO" />
-        <small class="hint">พิมพ์ข้อความได้ตามต้องการ เช่น "May 2026", "Q2 2026", "Mid-May → End of Aug"</small>
       </div>
 
       <div class="grid-2">
@@ -1416,26 +1418,21 @@
           </select>
         </div>
         <div class="input-group">
-          <label>Tags / Keywords <small class="hint-label">(comma-separated)</small></label>
-          <input type="text" id="editTags" placeholder="e.g. food, launch, q2" />
+          <label>👤 Client (Member)</label>
+          <div id="editClientEmailDisplay" style="padding:10px 12px; background:var(--paper-2); border-radius:4px; font-family:'Geist Mono',monospace; font-size:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-height:38px; box-sizing:border-box;">—</div>
+          <small class="hint">ต้องการเปลี่ยน member → ลบแคมเปญ แล้วสร้างใหม่ใต้ member ที่ตรง role (กัน data leak ข้ามลูกค้า)</small>
         </div>
       </div>
 
       <div class="input-group">
         <label>📝 Description / Brief · คำอธิบายแคมเปญ</label>
-        <textarea id="editDescription" rows="6" placeholder="วัตถุประสงค์, target audience, key messages, deliverables, หรือบริบทอื่น ๆ ที่ทีมและลูกค้าควรรู้..."></textarea>
+        <textarea id="editDescription" rows="5" placeholder="วัตถุประสงค์, target audience, key messages, deliverables, หรือบริบทอื่น ๆ ที่ทีมและลูกค้าควรรู้..."></textarea>
         <small class="hint" id="editDescCount">0 ตัวอักษร</small>
       </div>
 
       <div class="input-group">
         <label>👥 Stakeholders / Contacts <small class="hint-label">(optional)</small></label>
         <textarea id="editStakeholders" rows="2" placeholder="Account Director: ...&#10;Creative Lead: ...&#10;Client contact: ..."></textarea>
-      </div>
-
-      <div class="input-group">
-        <label>👤 Client (Member)</label>
-        <div id="editClientEmailDisplay" style="padding:10px 12px; background:var(--paper-2); border-radius:4px; font-family:'Geist Mono',monospace; font-size:12px;">—</div>
-        <small class="hint">แคมเปญนี้อยู่ภายใต้ member นี้ · ต้องการเปลี่ยน member ให้ลบแคมเปญ แล้วสร้างใหม่ใต้ member อื่น (วิธีนี้ป้องกันการ leak ข้อมูลข้ามลูกค้า)</small>
       </div>
 
       <div class="input-group">
@@ -1446,6 +1443,9 @@
         </div>
         <small class="hint">วาง URL โฟลเดอร์ใน Drive <strong>ของลูกค้า</strong> (ลูกค้าหรือ admin สร้างใน Drive ของอีเมลลูกค้า แล้วแชร์เป็น Editor ให้ admin) · ระบบจะสร้าง subfolder <code>wakuwaku-media-&lt;campaign-id&gt;/</code> ในนั้นให้อัตโนมัติเมื่ออัปไฟล์ · ใช้ folder เดียวข้ามหลายแคมเปญของลูกค้าคนเดียวกันได้ · เปลี่ยน URL ภายหลังได้ ไฟล์เก่ายังอยู่ที่ folder เดิม</small>
       </div>
+      <!-- Legacy tags field kept hidden so any code/tests still binding to it
+           do not throw; new UI no longer exposes it but stored tags persist. -->
+      <input type="hidden" id="editTags" />
     </div>
     <div class="simple-modal-footer">
       <button class="btn" onclick="clearCurrentCampaign()" style="margin-right:8px; color:var(--warn); border-color:var(--warn);">🔄 Reset Campaign</button>
@@ -4768,7 +4768,7 @@ function normalizeCampaign(c) {
   return {
     schemaVersion: SCHEMA_VERSION,
     id: c.id || ('camp-' + Date.now() + Math.random().toString(36).slice(2,7)),
-    client: c.client || '', campaign: c.campaign || '',
+    client: c.client || '', brand: c.brand || '', campaign: c.campaign || '',
     startPeriod: c.startPeriod || '', endPeriod: c.endPeriod || '',
     startDate: c.startDate || '', endDate: c.endDate || '',
     description: c.description || '',
@@ -8156,6 +8156,8 @@ function openEditModal() {
   if (!alreadyLocked) _enterEditModal();
   _broadcastEditingStart(camp.id, 'edit-info');
   document.getElementById('editClient').value = camp.client || '';
+  const brandInput = document.getElementById('editBrand');
+  if (brandInput) brandInput.value = camp.brand || '';
   document.getElementById('editCampaign').value = camp.campaign || '';
   document.getElementById('editStart').value = camp.startPeriod || '';
   document.getElementById('editEnd').value = camp.endPeriod || '';
@@ -8163,14 +8165,25 @@ function openEditModal() {
   document.getElementById('editEndISO').value = camp.endDate || '';
   document.getElementById('editDescription').value = camp.description || '';
   document.getElementById('editStakeholders').value = camp.stakeholders || '';
+  // Member display now surfaces the role inline. Admin can verify the
+  // campaign was assigned to the right kind of member (customer expects
+  // read-only product info; operation can edit Section B; admin = full).
   const ed = document.getElementById('editClientEmailDisplay');
   if (ed) {
-    const m = findMember(camp.clientEmail);
-    ed.textContent = camp.clientEmail
-      ? ((m && m.name) ? `${m.name} · ${camp.clientEmail}` : camp.clientEmail)
-      : '— (no member assigned)';
+    const email = camp.clientEmail || '';
+    const m = email ? findMember(email) : null;
+    const role = (m && m.role) || '';
+    const roleLabel = role
+      ? ({ admin:'ADMIN', editor:'EDITOR', operation:'OPERATION', customer:'CUSTOMER', viewer:'VIEWER' }[role] || role.toUpperCase())
+      : '';
+    const roleColor = ({ admin:'#1E4FA8', editor:'#7A5BB5', operation:'#3A7A3E', customer:'#B89248', viewer:'#6B6F76' }[role] || 'var(--muted)');
+    ed.innerHTML = email
+      ? `<span style="font-weight:600; color:var(--ink);">${escapeHtml(m && m.name ? m.name : email.split('@')[0])}</span>
+         <span style="color:var(--muted-2);">·</span>
+         <span style="color:var(--muted); font-size:11px;">${escapeHtml(email)}</span>
+         ${roleLabel ? `<span style="margin-left:auto; background:${roleColor}; color:white; padding:2px 8px; border-radius:3px; font-size:9px; letter-spacing:1px;">${roleLabel}</span>` : '<span style="margin-left:auto; color:var(--err); font-size:10px;">⚠ NO ROLE</span>'}`
+      : '<em style="color:var(--muted-2);">— (no member assigned)</em>';
   }
-  document.getElementById('editTags').value = (camp.tags || []).join(', ');
   document.getElementById('editStatus').value = camp.status === 'handed-off' ? 'completed' : camp.status;
   document.getElementById('editDriveFolderUrl').value = camp.driveFolderUrl || '';
   updateEditDescCount();
@@ -8227,6 +8240,8 @@ function saveCampaignInfo() {
   const newCampaign = document.getElementById('editCampaign').value.trim();
   if (!newClient || !newCampaign) { showToast('กรอก Client + Campaign name', 'warn'); return; }
   camp.client = newClient;
+  const brandInput = document.getElementById('editBrand');
+  if (brandInput) camp.brand = brandInput.value.trim();
   camp.campaign = newCampaign;
   camp.startPeriod = document.getElementById('editStart').value.trim();
   camp.endPeriod = document.getElementById('editEnd').value.trim();
@@ -8234,7 +8249,15 @@ function saveCampaignInfo() {
   camp.endDate = document.getElementById('editEndISO').value;
   camp.description = document.getElementById('editDescription').value.trim();
   camp.stakeholders = document.getElementById('editStakeholders').value.trim();
-  camp.tags = document.getElementById('editTags').value.split(',').map(s=>s.trim()).filter(Boolean);
+  // Tags UI removed — preserve existing camp.tags as-is so old data
+  // survives. Legacy hidden #editTags input still parses if present so
+  // any external automation that wrote to it keeps working.
+  const tagsInput = document.getElementById('editTags');
+  if (tagsInput && tagsInput.value) {
+    camp.tags = tagsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+  } else if (!Array.isArray(camp.tags)) {
+    camp.tags = [];
+  }
   camp.status = document.getElementById('editStatus').value;
   // Per-campaign Drive folder. Parse the URL, store both URL and folder id.
   // CRITICAL: when the URL changes we only invalidate the cached
@@ -9250,6 +9273,58 @@ window.__runTests = async function() {
     ok(preview.matched && preview.totalValues === 4, 'preview must aggregate');
     ok(JSON.stringify(fakeCamp.schema.catch.h2.values) === beforeCatchH2,
        'preview MUST NOT mutate the schema');
+  });
+  t('Edit Campaign modal: Company Name + Brand + Period new layout', () => {
+    ok(document.getElementById('editClient'), '#editClient (Company Name) input exists');
+    ok(document.getElementById('editBrand'), '#editBrand input exists (new column)');
+    ok(document.getElementById('editCampaign'), '#editCampaign input exists');
+    ok(document.getElementById('editStart') && document.getElementById('editEnd'),
+       'Period start/end inputs still present');
+    ok(document.getElementById('editClientEmailDisplay'),
+       'Member display container present (with role badge)');
+    const tags = document.getElementById('editTags');
+    ok(tags && tags.type === 'hidden', 'tags input hidden, not exposed in UI');
+  });
+  t('normalizeCampaign carries brand through round-trip', () => {
+    const c = normalizeCampaign({ id:'b1', client:'Acme', brand:'NaughtyByNature', campaign:'X' });
+    ok(c.brand === 'NaughtyByNature', `expected brand kept, got ${c.brand}`);
+    const empty = normalizeCampaign({ id:'b2', client:'Acme', campaign:'Y' });
+    ok(empty.brand === '', 'missing brand defaults to empty string');
+  });
+  t('Edit modal: openEditModal populates Brand + role badge; save persists Brand', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, members: members.slice(), currentMemberEmail, locked: _editInfoModalCampaignId };
+    members = [{ email:'cust@x.y', name:'Cust', role:'customer' }];
+    const c = normalizeCampaign({ id:'cBrand', client:'Acme', campaign:'X', brand:'BrandA', clientEmail:'cust@x.y' });
+    campaigns = [c]; currentCampaignId = 'cBrand'; currentMemberEmail = 'cust@x.y';
+    openEditModal();
+    ok(document.getElementById('editBrand').value === 'BrandA', 'brand pre-populated');
+    const memberHtml = document.getElementById('editClientEmailDisplay').innerHTML;
+    ok(/CUSTOMER/.test(memberHtml), 'role badge shows CUSTOMER for customer member');
+    ok(/Cust/.test(memberHtml), 'member name shown');
+    // Mutate brand + save
+    document.getElementById('editBrand').value = 'BrandB';
+    document.getElementById('editClient').value = 'Acme';
+    document.getElementById('editCampaign').value = 'X';
+    saveCampaignInfo();
+    ok(c.brand === 'BrandB', `brand saved · got "${c.brand}"`);
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+    members = save.members; currentMemberEmail = save.currentMemberEmail;
+    _editInfoModalCampaignId = save.locked;
+  });
+  t('Edit modal: saveCampaignInfo no longer mutates camp.tags unless hidden input has value', () => {
+    const save = { campaigns: campaigns.slice(), currentCampaignId, locked: _editInfoModalCampaignId };
+    const c = normalizeCampaign({ id:'cTagPreserve', client:'A', campaign:'B', clientEmail:'a@b.c' });
+    c.tags = ['legacy','keeper'];
+    campaigns = [c]; currentCampaignId = 'cTagPreserve'; currentMemberEmail = 'a@b.c';
+    openEditModal();
+    document.getElementById('editClient').value = 'A';
+    document.getElementById('editCampaign').value = 'B';
+    document.getElementById('editTags').value = ''; // hidden, untouched by admin
+    saveCampaignInfo();
+    ok(Array.isArray(c.tags) && c.tags.includes('legacy') && c.tags.includes('keeper'),
+       `existing tags must persist · got ${JSON.stringify(c.tags)}`);
+    campaigns = save.campaigns; currentCampaignId = save.currentCampaignId;
+    _editInfoModalCampaignId = save.locked;
   });
   t('Delete-zombie guard A: pingCampaignChanged must NOT write `deleted` field', () => {
     // Tombstone protection: a save on a zombie campaign would otherwise
