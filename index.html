@@ -327,7 +327,25 @@
   .topic-cell strong { display: block; font-weight: 600; margin-bottom: 4px; line-height:1.35; }
   .topic-cell small { color: var(--muted); font-size: 11px; display:block; line-height:1.4; }
   .topic-cell .h-tag { display:inline-block; font-family:'Geist Mono',monospace; font-size:9px; padding:1px 5px; border-radius:2px; margin-right:4px; background:var(--paper-3); color:var(--ink);}
-  .topic-cell .img-prompt { margin-top:6px; padding:6px 8px; background:var(--paper-2); border-left:2px solid var(--gold); font-size:11px; color:var(--muted); border-radius:0 3px 3px 0; font-style:italic;}
+  .topic-cell .img-prompt { margin-top:6px; padding:6px 8px; background:var(--paper-2); border-left:2px solid var(--gold); font-size:11px; color:var(--muted); border-radius:0 3px 3px 0; font-style:italic; line-height:1.55; white-space:pre-wrap; word-wrap:break-word;}
+  /* Collapsed prompt — show ~7 lines then a fade + show-more toggle. JS
+     decides to keep the toggle after measuring scrollHeight: short
+     prompts that fit fully drop both the collapsed class and the
+     toggle, so the row stays compact. */
+  .topic-cell .img-prompt.collapsed { max-height: 10.85em; overflow: hidden; position: relative; }
+  .topic-cell .img-prompt.collapsed::after { content:''; position:absolute; left:0; right:0; bottom:0; height:2.2em; background:linear-gradient(rgba(242,241,235,0), var(--paper-2)); pointer-events:none; }
+  .img-prompt-toggle { display:inline-block; cursor:pointer; font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:0.5px; color:var(--accent); margin-top:6px; background:none; border:none; padding:2px 0; text-transform:uppercase; }
+  .img-prompt-toggle:hover { text-decoration:underline; }
+  /* Pagination strip between asset table + audit log */
+  .asset-pagination { display:flex; align-items:center; justify-content:space-between; padding:12px 18px; background:var(--paper-2); border:1px solid var(--line); border-radius:var(--radius); margin:12px 0 16px; gap:14px; flex-wrap:wrap; }
+  .asset-pagination-info { color:var(--muted); font-family:'Geist Mono',monospace; font-size:11px; letter-spacing:0.5px; }
+  .asset-pagination-controls { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .asset-pagination-controls button { padding:6px 11px; border:1px solid var(--line); border-radius:4px; background:var(--paper); cursor:pointer; font-size:11px; font-family:'Geist Mono',monospace; color:var(--ink); transition:all .12s; }
+  .asset-pagination-controls button:hover:not(:disabled) { border-color:var(--gold); background:var(--paper); color:var(--gold); }
+  .asset-pagination-controls button:disabled { opacity:0.35; cursor:not-allowed; }
+  .asset-pagination-page { font-family:'Geist Mono',monospace; font-size:11px; padding:0 10px; color:var(--ink); }
+  .asset-pagination-jump { display:inline-flex; align-items:center; gap:4px; }
+  .asset-pagination-jump input { width:50px; padding:5px 8px; border:1px solid var(--line); border-radius:4px; font-family:'Geist Mono',monospace; font-size:11px; text-align:center; background:var(--paper); }
   .asset-type { display:inline-block; padding:3px 8px; border-radius:3px; font-family:'Geist Mono',monospace; font-size:10px; font-weight:600; background:var(--ink); color:var(--paper);}
   .asset-type.video { background:var(--accent);}
   .asset-type.image { background:var(--catch);}
@@ -908,6 +926,11 @@
           <tbody id="asset-tbody"></tbody>
         </table>
       </div>
+
+      <!-- Pagination strip — sits in the gap between the asset table and the
+           audit-log panel. Rendered by renderAssetPagination(); hidden when
+           total <= ASSETS_PER_PAGE. -->
+      <div id="asset-pagination" class="asset-pagination" style="display:none;"></div>
 
       <!-- HISTORY -->
       <div class="history-panel" id="overview-audit-log">
@@ -5768,27 +5791,86 @@ function updateCampaignUI() {
 // ============================================================================
 // ASSETS RENDER
 // ============================================================================
+// Pagination state — module-level. Reset to page 1 whenever the
+// displayed campaign changes (a different camp's asset count makes the
+// previous page index meaningless). Per-page default 8 is comfortably
+// inside the "5-10" the admin asked for.
+const ASSETS_PER_PAGE = 8;
+let _assetPage = 1;
+let _lastRenderedCampId = null;
+function setAssetPage(p) {
+  _assetPage = Math.max(1, p | 0);
+  renderAssets();
+  // Scroll to top of Section B so the new page is in view, not under
+  // the just-clicked pagination bar.
+  const head = document.getElementById('section-b');
+  if (head) head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function renderAssetPagination(total) {
+  const wrap = document.getElementById('asset-pagination');
+  if (!wrap) return;
+  if (total <= ASSETS_PER_PAGE) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+  const pages = Math.ceil(total / ASSETS_PER_PAGE);
+  if (_assetPage > pages) _assetPage = pages;
+  const start = (_assetPage - 1) * ASSETS_PER_PAGE + 1;
+  const end = Math.min(_assetPage * ASSETS_PER_PAGE, total);
+  wrap.style.display = '';
+  wrap.innerHTML = `
+    <div class="asset-pagination-info">${start}–${end} of ${total} assets · ${ASSETS_PER_PAGE} per page</div>
+    <div class="asset-pagination-controls">
+      <button onclick="setAssetPage(1)" ${_assetPage <= 1 ? 'disabled' : ''} title="First page">« First</button>
+      <button onclick="setAssetPage(${_assetPage - 1})" ${_assetPage <= 1 ? 'disabled' : ''} title="Previous page">‹ Prev</button>
+      <span class="asset-pagination-page">Page ${_assetPage} / ${pages}</span>
+      <button onclick="setAssetPage(${_assetPage + 1})" ${_assetPage >= pages ? 'disabled' : ''} title="Next page">Next ›</button>
+      <button onclick="setAssetPage(${pages})" ${_assetPage >= pages ? 'disabled' : ''} title="Last page">Last »</button>
+      <span class="asset-pagination-jump">go to <input type="number" min="1" max="${pages}" value="${_assetPage}" onchange="setAssetPage(this.value)" onkeydown="if(event.key==='Enter')setAssetPage(this.value)"/></span>
+    </div>
+  `;
+}
+function togglePromptExpand(assetId, btn) {
+  const el = document.getElementById('prompt-' + assetId);
+  if (!el) return;
+  const collapsed = el.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '▾ Show full prompt' : '▴ Show less';
+}
 function renderAssets() {
   const camp = getCurrentCampaign();
   const tbody = document.getElementById('asset-tbody');
   tbody.innerHTML = '';
   if (!camp || camp.assets.length === 0) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--muted); font-size:12px;">No assets yet · คลิก "Add New Asset" เพื่อเริ่ม</td></tr>';
+    renderAssetPagination(0);
     return;
+  }
+  // Reset to page 1 whenever the displayed campaign changes — the
+  // previous page index is meaningless for a different asset set.
+  if (_lastRenderedCampId !== camp.id) {
+    _assetPage = 1;
+    _lastRenderedCampId = camp.id;
   }
   const isLocked = (camp.status === 'handed-off') || (userRole === 'client');
   // Stamp each asset with a unique short reference id (e.g. #A-X9K3M).
   // Derivation is deterministic from asset.id so the label never changes,
   // even after siblings are deleted or reordered. Stored only on the
-  // in-memory copy via _displayId — never persisted to Drive.
+  // in-memory copy via _displayId — never persisted to Drive. Stamp ALL
+  // assets (not just the current page slice) so labels stay stable as
+  // the admin pages through.
   uniqueShortIds(camp.assets, a => a.id, 'A');
   const campLabel = shortId(camp.id, 'C');
-  camp.assets.forEach(a => {
+  const total = camp.assets.length;
+  const pages = Math.max(1, Math.ceil(total / ASSETS_PER_PAGE));
+  if (_assetPage > pages) _assetPage = pages;
+  const start = (_assetPage - 1) * ASSETS_PER_PAGE;
+  const pageAssets = camp.assets.slice(start, start + ASSETS_PER_PAGE);
+  pageAssets.forEach(a => {
     const tr = document.createElement('tr');
     const d = new Date(a.createdAt || a.date);
     const dateStr = d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
     const sched = a.scheduledDate ? `<small style="color:var(--gold);">📅 ${a.scheduledDate}</small>` : '';
-    const promptHTML = a.imagePrompt ? `<div class="img-prompt">${escapeHtml(a.imagePrompt)}</div>` : '';
+    const promptHTML = a.imagePrompt
+      ? `<div class="img-prompt collapsed" id="prompt-${a.id}">${escapeHtml(a.imagePrompt)}</div>
+         <button class="img-prompt-toggle" data-asset="${a.id}" onclick="togglePromptExpand('${a.id}', this)">▾ Show full prompt</button>`
+      : '';
     const fileCount = (a.files && a.files.length) || (a.fileData ? 1 : 0);
     const imgCount = (a.files || []).filter(f => isImageType(f.type)).length;
     const vidCount = (a.files || []).filter(f => isVideoType(f.type)).length;
@@ -5858,6 +5940,19 @@ function renderAssets() {
       } catch(e) { /* leave ☁ */ }
     });
   }, 50);
+  // Hide expand toggle when the prompt fits without clipping (short prompts
+  // don't need the affordance — measure post-layout, then strip the collapsed
+  // class + hide the button).
+  setTimeout(() => {
+    document.querySelectorAll('#asset-tbody .img-prompt.collapsed').forEach(el => {
+      if (el.scrollHeight - el.clientHeight < 4) {
+        el.classList.remove('collapsed');
+        const btn = el.nextElementSibling;
+        if (btn && btn.classList.contains('img-prompt-toggle')) btn.style.display = 'none';
+      }
+    });
+  }, 60);
+  renderAssetPagination(total);
 }
 
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
