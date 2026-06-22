@@ -313,17 +313,24 @@
   .input-card-actions button { padding: 10px; border: none; background: var(--paper); font-family: 'Geist', sans-serif; font-size: 12px; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); transition: background 0.15s, color 0.15s; position: relative; }
   .input-card-actions button:last-child { border-right: none; }
   .input-card-actions button:hover { background: var(--paper-2); }
-  /* First action (View File) is a navigation/link — surface that with a warm red hover
-     so it reads as "this opens something" instead of an ambiguous neutral button. */
-  .input-card-actions button.view-file-btn:hover { background: #FFF0F0; color: #B42828; }
+  /* First action (View File) is a navigation/link — surface that with a solid
+     red fill on hover so it reads unambiguously as a real, clickable button
+     ("this opens something") rather than ambiguous chrome. */
+  .input-card-actions button.view-file-btn { font-weight: 500; }
+  .input-card-actions button.view-file-btn:hover { background: #B42828; color: #fff; font-weight: 600; }
+  .input-card-actions button.view-file-btn:active { background: #9A2020; }
   .input-card-actions button.view-file-btn:hover::after { content: ' ↗'; font-family: 'Geist Mono', monospace; }
 
   /* Brief tip — small (!) badge in the card header. Hover/click → bubble with
      the curated "what to put in this file" checklist. Card 3 (Cat Map) has no
      brief; it stays without the badge. Layout: sits flush-right of the header,
      never crowds the title/meta on narrow widths. */
-  .brief-tip-btn { width: 22px; height: 22px; border-radius: 50%; background: transparent; border: 1.5px solid var(--gold); color: var(--gold); font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px; line-height: 1; cursor: help; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0; margin-left: auto; }
-  .brief-tip-btn:hover, .brief-tip-btn.open { background: var(--gold); color: #fff; transform: scale(1.06); box-shadow: 0 2px 6px rgba(184,146,72,0.35); }
+  /* NOTE: no transform/scale on hover — a growing badge under the cursor
+     oscillates between hover/un-hover states and makes the pointer flicker.
+     We animate colour + shadow only (no geometry change) so the hover target
+     stays rock-steady. */
+  .brief-tip-btn { width: 22px; height: 22px; border-radius: 50%; background: transparent; border: 1.5px solid var(--gold); color: var(--gold); font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s, box-shadow 0.15s; flex-shrink: 0; margin-left: auto; }
+  .brief-tip-btn:hover, .brief-tip-btn.open { background: var(--gold); color: #fff; box-shadow: 0 2px 6px rgba(184,146,72,0.35); }
   .brief-tip-bubble { position: fixed; z-index: 9000; max-width: 560px; width: calc(100vw - 32px); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 48px -12px rgba(0,0,0,0.28); padding: 20px 22px 18px; font-size: 12px; line-height: 1.55; color: var(--ink); max-height: 78vh; overflow-y: auto; }
   .brief-tip-bubble h4.brief-title { font-family: 'Fraunces', serif; font-size: 14px; font-weight: 600; margin: 0 0 4px; color: var(--ink); text-align: center; }
   .brief-tip-bubble h4.brief-section { font-family: 'Fraunces', serif; font-style: italic; font-size: 12.5px; font-weight: 600; margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); color: var(--ink); text-align: center; }
@@ -338,11 +345,21 @@
   .brief-tip-bubble-close:hover { color: var(--ink); }
 
   /* Thumbnail expand → lightbox. The .input-preview wrapper becomes clickable
-     only when a thumb actually exists (set in renderInputPreview). The soft
-     banner reminds the viewer that this is a curated summary, not the full
-     resource. */
+     only when a thumb actually exists (set in renderInputPreview). The expand
+     affordance is ALWAYS visible (a corner badge + a bottom "Click to expand"
+     pill) — not hover-only — so it's discoverable at a glance. On hover the
+     whole frame dims slightly and the badge brightens to confirm it's live. */
   .input-preview.expandable { cursor: zoom-in; }
-  .input-preview.expandable:hover::before { content: '⤢ expand'; position: absolute; top: 8px; left: 8px; background: rgba(14,17,22,0.78); color: #fff; font-family: 'Geist Mono', monospace; font-size: 9.5px; letter-spacing: 0.4px; padding: 3px 7px; border-radius: 3px; pointer-events: none; z-index: 2; }
+  .input-preview.expandable .expand-badge { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 4px; background: rgba(14,17,22,0.82); color: #fff; font-family: 'Geist Mono', monospace; font-size: 11px; padding: 4px 8px; border-radius: 4px; pointer-events: none; z-index: 3; box-shadow: 0 2px 6px rgba(0,0,0,0.3); transition: background 0.15s, transform 0.15s; }
+  .input-preview.expandable .expand-badge svg { width: 13px; height: 13px; display: block; }
+  .input-preview.expandable .expand-cta { position: absolute; left: 0; right: 0; bottom: 0; padding: 7px 10px; background: linear-gradient(transparent, rgba(14,17,22,0.82)); color: #fff; font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.4px; text-align: center; pointer-events: none; z-index: 2; transition: padding 0.15s; }
+  .input-preview.expandable::after { content: ''; position: absolute; inset: 0; background: rgba(14,17,22,0); transition: background 0.15s; pointer-events: none; z-index: 1; }
+  .input-preview.expandable:hover::after { background: rgba(14,17,22,0.18); }
+  .input-preview.expandable:hover .expand-badge { background: #B42828; transform: scale(1.04); }
+  /* On hover the upload/delete buttons (bottom corners) fade in — drop the
+     bottom CTA pill then so the two don't fight for the same strip. */
+  .input-preview.expandable:hover .expand-cta { opacity: 0; }
+  .input-preview.expandable .expand-cta { opacity: 1; transition: opacity 0.15s; }
   #thumbLightbox .simple-modal { max-width: 880px; width: 92vw; padding: 0; overflow: hidden; }
   #thumbLightbox .simple-modal-head { padding: 12px 18px; border-bottom: 1px solid var(--line); }
   .thumb-light-banner { padding: 10px 16px; background: #FFF7E0; border-bottom: 1px solid #E8D8A8; color: #7A5B14; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.3px; text-align: center; line-height: 1.5; }
@@ -8640,9 +8657,16 @@ const BRIEF_TIP_DATA = {
 
 // Track the currently-shown bubble so hover-enter while one is open doesn't
 // stack a duplicate, and an outside-click only registers one teardown.
-let _briefTipState = { bubble: null, btn: null, offHandler: null, hoverOpened: false };
+let _briefTipState = { bubble: null, btn: null, offHandler: null, btnLeaveHandler: null, hoverOpened: false };
 
 function _closeBriefTip() {
+  // Remove the per-open button mouseleave handler first so it doesn't pile up
+  // across repeated open/close cycles (the bubble's own handler is discarded
+  // with the element when it's removed).
+  if (_briefTipState.btn && _briefTipState.btnLeaveHandler) {
+    _briefTipState.btn.removeEventListener('mouseleave', _briefTipState.btnLeaveHandler);
+  }
+  _briefTipState.btnLeaveHandler = null;
   if (_briefTipState.bubble) { _briefTipState.bubble.remove(); _briefTipState.bubble = null; }
   if (_briefTipState.btn) { _briefTipState.btn.classList.remove('open'); _briefTipState.btn = null; }
   if (_briefTipState.offHandler) {
@@ -8701,10 +8725,11 @@ function showBriefTip(i, btn, fromHover) {
         if (!_briefTipState.bubble) return;
         if (btn.matches(':hover') || bubble.matches(':hover')) return;
         _closeBriefTip();
-      }, 120);
+      }, 160);
     };
-    btn.addEventListener('mouseleave', maybeClose, { once: false });
-    bubble.addEventListener('mouseleave', maybeClose, { once: false });
+    btn.addEventListener('mouseleave', maybeClose);
+    bubble.addEventListener('mouseleave', maybeClose);
+    _briefTipState.btnLeaveHandler = maybeClose;
   }
 }
 
@@ -8799,7 +8824,9 @@ function renderInputPreview(i) {
       if (e.target.closest('.thumb-upload-btn, .thumb-delete-btn, input[type=file]')) return;
       openInputThumbLightbox(i);
     };
-    prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${deleteBtn}${uploadBtn}`;
+    const expandBadge = `<span class="expand-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>Expand</span>`;
+    const expandCta = `<span class="expand-cta">🔍 Click to expand · กดเพื่อขยาย</span>`;
+    prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${expandBadge}${expandCta}${deleteBtn}${uploadBtn}`;
     getFileDataUrl({ driveFileId: link.thumbFileId }).then(url => {
       const img = prev.querySelector(`img[data-thumb="${i}"]`); if (img) img.src = url;
     }).catch(e => console.warn('thumb load failed', i, e));
