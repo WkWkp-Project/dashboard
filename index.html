@@ -317,8 +317,8 @@
      red fill on hover so it reads unambiguously as a real, clickable button
      ("this opens something") rather than ambiguous chrome. */
   .input-card-actions button.view-file-btn { font-weight: 500; }
-  .input-card-actions button.view-file-btn:hover { background: #B42828; color: #fff; font-weight: 600; }
-  .input-card-actions button.view-file-btn:active { background: #9A2020; }
+  .input-card-actions button.view-file-btn:hover { background: #dd3a2c; color: #fff; font-weight: 600; }
+  .input-card-actions button.view-file-btn:active { background: #b82e22; }
   .input-card-actions button.view-file-btn:hover::after { content: ' ↗'; font-family: 'Geist Mono', monospace; }
 
   /* Brief tip — small (!) badge in the card header. Hover/click → bubble with
@@ -355,7 +355,7 @@
   .input-preview.expandable .expand-cta { position: absolute; left: 0; right: 0; bottom: 0; padding: 7px 10px; background: linear-gradient(transparent, rgba(14,17,22,0.82)); color: #fff; font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.4px; text-align: center; pointer-events: none; z-index: 2; transition: padding 0.15s; }
   .input-preview.expandable::after { content: ''; position: absolute; inset: 0; background: rgba(14,17,22,0); transition: background 0.15s; pointer-events: none; z-index: 1; }
   .input-preview.expandable:hover::after { background: rgba(14,17,22,0.18); }
-  .input-preview.expandable:hover .expand-badge { background: #B42828; transform: scale(1.04); }
+  .input-preview.expandable:hover .expand-badge { background: #dd3a2c; transform: scale(1.04); }
   /* On hover the upload/delete buttons (bottom corners) fade in — drop the
      bottom CTA pill then so the two don't fight for the same strip. */
   .input-preview.expandable:hover .expand-cta { opacity: 0; }
