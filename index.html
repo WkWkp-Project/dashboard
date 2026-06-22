@@ -310,9 +310,47 @@
   /* Size hint shown inside the empty placeholder (no thumb yet) */
   .thumb-size-hint { font-size: 9px; color: var(--muted-2); font-family: 'Geist Mono', monospace; letter-spacing: 0.3px; }
   .input-card-actions { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
-  .input-card-actions button { padding: 10px; border: none; background: var(--paper); font-family: 'Geist', sans-serif; font-size: 12px; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); transition: background 0.15s; }
+  .input-card-actions button { padding: 10px; border: none; background: var(--paper); font-family: 'Geist', sans-serif; font-size: 12px; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); transition: background 0.15s, color 0.15s; position: relative; }
   .input-card-actions button:last-child { border-right: none; }
   .input-card-actions button:hover { background: var(--paper-2); }
+  /* First action (View File) is a navigation/link — surface that with a warm red hover
+     so it reads as "this opens something" instead of an ambiguous neutral button. */
+  .input-card-actions button.view-file-btn:hover { background: #FFF0F0; color: #B42828; }
+  .input-card-actions button.view-file-btn:hover::after { content: ' ↗'; font-family: 'Geist Mono', monospace; }
+
+  /* Brief tip — small (!) badge in the card header. Hover/click → bubble with
+     the curated "what to put in this file" checklist. Card 3 (Cat Map) has no
+     brief; it stays without the badge. Layout: sits flush-right of the header,
+     never crowds the title/meta on narrow widths. */
+  .brief-tip-btn { width: 22px; height: 22px; border-radius: 50%; background: transparent; border: 1.5px solid var(--gold); color: var(--gold); font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px; line-height: 1; cursor: help; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0; margin-left: auto; }
+  .brief-tip-btn:hover, .brief-tip-btn.open { background: var(--gold); color: #fff; transform: scale(1.06); box-shadow: 0 2px 6px rgba(184,146,72,0.35); }
+  .brief-tip-bubble { position: fixed; z-index: 9000; max-width: 560px; width: calc(100vw - 32px); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 48px -12px rgba(0,0,0,0.28); padding: 20px 22px 18px; font-size: 12px; line-height: 1.55; color: var(--ink); max-height: 78vh; overflow-y: auto; }
+  .brief-tip-bubble h4.brief-title { font-family: 'Fraunces', serif; font-size: 14px; font-weight: 600; margin: 0 0 4px; color: var(--ink); text-align: center; }
+  .brief-tip-bubble h4.brief-section { font-family: 'Fraunces', serif; font-style: italic; font-size: 12.5px; font-weight: 600; margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); color: var(--ink); text-align: center; }
+  .brief-tip-bubble h4.brief-section:first-of-type { margin-top: 10px; }
+  .brief-tip-bubble dl { margin: 0; display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 8px 14px; }
+  .brief-tip-bubble dt { font-weight: 600; font-size: 11px; color: var(--ink); white-space: normal; line-height: 1.4; padding-top: 1px; }
+  .brief-tip-bubble dt.req::before { content: '*'; color: var(--err); font-weight: 700; margin-right: 2px; }
+  .brief-tip-bubble dd { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+  .brief-tip-bubble .brief-note { margin-top: 12px; padding: 9px 11px; background: var(--paper-2); border-left: 2px solid var(--gold); font-size: 10.5px; color: var(--muted); line-height: 1.55; }
+  .brief-tip-bubble .brief-note .acc { color: var(--err); }
+  .brief-tip-bubble-close { position: absolute; top: 8px; right: 10px; background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 20px; line-height: 1; padding: 2px 8px; transition: color 0.15s; }
+  .brief-tip-bubble-close:hover { color: var(--ink); }
+
+  /* Thumbnail expand → lightbox. The .input-preview wrapper becomes clickable
+     only when a thumb actually exists (set in renderInputPreview). The soft
+     banner reminds the viewer that this is a curated summary, not the full
+     resource. */
+  .input-preview.expandable { cursor: zoom-in; }
+  .input-preview.expandable:hover::before { content: '⤢ expand'; position: absolute; top: 8px; left: 8px; background: rgba(14,17,22,0.78); color: #fff; font-family: 'Geist Mono', monospace; font-size: 9.5px; letter-spacing: 0.4px; padding: 3px 7px; border-radius: 3px; pointer-events: none; z-index: 2; }
+  #thumbLightbox .simple-modal { max-width: 880px; width: 92vw; padding: 0; overflow: hidden; }
+  #thumbLightbox .simple-modal-head { padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .thumb-light-banner { padding: 10px 16px; background: #FFF7E0; border-bottom: 1px solid #E8D8A8; color: #7A5B14; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.3px; text-align: center; line-height: 1.5; }
+  .thumb-light-banner strong { color: #5A4310; font-weight: 600; }
+  .thumb-light-body { padding: 0; background: #0E1116; display: grid; place-items: center; min-height: 360px; max-height: 72vh; overflow: hidden; }
+  .thumb-light-body img { max-width: 100%; max-height: 72vh; object-fit: contain; display: block; }
+  .thumb-light-meta { padding: 10px 18px; border-top: 1px solid var(--line); background: var(--paper-2); display: flex; justify-content: space-between; align-items: center; gap: 12px; font-family: 'Geist Mono', monospace; font-size: 10.5px; color: var(--muted); letter-spacing: 0.3px; }
+  .thumb-light-meta .btn { font-size: 11px; padding: 6px 12px; }
 
   /* Asset table - new SECTION B */
   .content-table { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow-x: auto; margin-bottom: 32px; }
@@ -874,24 +912,24 @@
 
       <div class="input-grid">
         <div class="input-card" id="input-card-0">
-          <div class="input-card-header"><div class="input-num n1">01</div><div class="input-info"><div class="input-title">Product Information</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag drive">Google Drive</div></div></div>
+          <div class="input-card-header"><div class="input-num n1">01</div><div class="input-info"><div class="input-title">Product Information</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag drive">Google Drive</div></div><button type="button" class="brief-tip-btn" data-brief="0" aria-label="What to include in Product Information" title="What to include in this file" onclick="showBriefTip(0, this); event.stopPropagation();" onmouseenter="showBriefTip(0, this, true)">!</button></div>
           <div class="input-preview" style="background: linear-gradient(135deg, #1a3a5c 0%, #2c5d8a 100%); display:grid; place-items:center; color:white;"><div style="text-align:center; padding:16px; font-family:'Fraunces', serif; font-size:13px;">Product Information</div></div>
-          <div class="input-card-actions"><button onclick="openDriveLink(0)">View File</button><button onclick="linkDriveFolder(0)">Use as Ref</button></div>
+          <div class="input-card-actions"><button class="view-file-btn" onclick="openDriveLink(0)">View File</button><button onclick="linkDriveFolder(0)">Use as Ref</button></div>
         </div>
         <div class="input-card" id="input-card-1">
-          <div class="input-card-header"><div class="input-num n2">02</div><div class="input-info"><div class="input-title">Content Direction</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag drive">Google Drive</div></div></div>
+          <div class="input-card-header"><div class="input-num n2">02</div><div class="input-info"><div class="input-title">Content Direction</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag drive">Google Drive</div></div><button type="button" class="brief-tip-btn" data-brief="1" aria-label="What to include in Content Direction" title="What to include in this file" onclick="showBriefTip(1, this); event.stopPropagation();" onmouseenter="showBriefTip(1, this, true)">!</button></div>
           <div class="input-preview" style="background: linear-gradient(135deg, #4a90b8 0%, #6cb5d6 100%); display:grid; place-items:center; color:white;"><div style="text-align:center; padding:16px; font-family:'Fraunces', serif; font-size:14px; font-style:italic;">"Content Direction"</div></div>
-          <div class="input-card-actions"><button onclick="openDriveLink(1)">View File</button><button onclick="linkDriveFolder(1)">Use as Ref</button></div>
+          <div class="input-card-actions"><button class="view-file-btn" onclick="openDriveLink(1)">View File</button><button onclick="linkDriveFolder(1)">Use as Ref</button></div>
         </div>
         <div class="input-card" id="input-card-2">
-          <div class="input-card-header"><div class="input-num n3">03</div><div class="input-info"><div class="input-title">CI Design Guidelines</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag local">Uploaded</div></div></div>
+          <div class="input-card-header"><div class="input-num n3">03</div><div class="input-info"><div class="input-title">CI Design Guidelines</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag local">Uploaded</div></div><button type="button" class="brief-tip-btn" data-brief="2" aria-label="What to include in Brand CI / Visual Guideline" title="What to include in this file" onclick="showBriefTip(2, this); event.stopPropagation();" onmouseenter="showBriefTip(2, this, true)">!</button></div>
           <div class="input-preview" style="background: var(--paper); display:grid; place-items:center;"><div style="font-family:'Fraunces',serif; font-size:11px; letter-spacing:1px;">BRAND IDENTITY</div></div>
-          <div class="input-card-actions"><button onclick="openDriveLink(2)">View File</button><button onclick="linkDriveFolder(2)">Use as Ref</button></div>
+          <div class="input-card-actions"><button class="view-file-btn" onclick="openDriveLink(2)">View File</button><button onclick="linkDriveFolder(2)">Use as Ref</button></div>
         </div>
         <div class="input-card" id="input-card-3">
           <div class="input-card-header"><div class="input-num n4">04</div><div class="input-info"><div class="input-title">Content Category Map</div><div class="input-meta">WAITING FOR LINK</div><div class="source-tag notion">Notion</div></div></div>
           <div class="input-preview" style="padding:12px; background:var(--paper-2); display:grid; place-items:center;"><div style="font-family:'Geist Mono', monospace; font-size:10px; color:var(--muted);">CATCH · CONNECT · CONVERT</div></div>
-          <div class="input-card-actions"><button onclick="openDriveLink(3)">View File</button><button onclick="linkDriveFolder(3)">Use as Ref</button></div>
+          <div class="input-card-actions"><button class="view-file-btn" onclick="openDriveLink(3)">View File</button><button onclick="linkDriveFolder(3)">Use as Ref</button></div>
         </div>
       </div>
 
@@ -1507,6 +1545,18 @@
       <button class="btn" onclick="closeEditModal()">Cancel</button>
       <button class="btn primary" onclick="saveCampaignInfo()">💾 Save Changes</button>
     </div>
+  </div>
+</div>
+
+<!-- Section A thumbnail lightbox — opens when the admin clicks an uploaded
+     thumbnail. The banner reminds the viewer that this is a curated summary
+     and points them to View File for the full resource. -->
+<div class="simple-overlay" id="thumbLightbox">
+  <div class="simple-modal lg">
+    <div class="simple-modal-head" style="padding:12px 18px;"><h3 id="thumbLightTitle" style="font-size:13px; letter-spacing:0.5px;">Preview</h3><button class="close-btn" onclick="closeThumbLightbox()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+    <div class="thumb-light-banner">ℹ︎ <strong>Summary only</strong> · นี่เป็นเพียงข้อสรุปจาก Resource ทั้งหมด — ดูไฟล์เต็มได้ที่ปุ่ม <strong>View File</strong></div>
+    <div class="thumb-light-body"><img id="thumbLightImg" alt="" /></div>
+    <div class="thumb-light-meta"><span id="thumbLightSub">—</span><button class="btn" id="thumbLightOpenBtn" onclick="openThumbLightFile()">View File ↗</button></div>
   </div>
 </div>
 
@@ -8499,6 +8549,228 @@ const THUMB_MAX_SIZE_BYTES = 5 * 1024 * 1024;  // 5MB cap — enough for high-re
 function _thumbHintText() {
   return `📐 ${THUMB_RECOMMENDED_W}×${THUMB_RECOMMENDED_H}px · 4:3 · ≤ ${(THUMB_MAX_SIZE_BYTES / 1024 / 1024)}MB`;
 }
+
+// Curated "what to include in this file" reference content for the three
+// Section-A input cards that map to a brief (cards 0/1/2). Keyed by card
+// index. `req:true` items render with a red asterisk to flag must-have
+// fields; `note` strings render as a soft caption under the section
+// heading. The Cat Map card (3) has no brief — kept intentionally absent.
+const BRIEF_TIP_DATA = {
+  0: {
+    title: 'Product Information — สิ่งที่ควรเก็บลงไฟล์',
+    sections: [
+      {
+        heading: 'Must Have (by SKU)',
+        items: [
+          { name: 'Product Image', req: true, desc: 'Product images from multiple angles are required.' },
+          { name: 'Product Name', desc: 'Name of each product required. (per SKU)' },
+          { name: 'Product Feature', desc: 'Specific characteristic, capability, or attribute of a product (or service) that delivers value to the user. (per SKU)' },
+          { name: 'Usage Method', desc: 'Defines the specific, structured procedure for utilizing a product, service, or system. (per SKU)' },
+          { name: 'Unique Selling Points', desc: 'The distinct, measurable benefit or characteristic that makes your product, service, or brand fundamentally better than your competitors in the eyes of your target audience. (per SKU)' },
+          { name: 'Price / Promotion', desc: 'Price with or without Promotion. (per SKU)' },
+          { name: 'Ingredients / Materials', desc: 'Terms used to describe the building blocks of a product. (per SKU)' }
+        ],
+        note: 'ในกรณีลูกค้าไม่มีรูปครบ หรือมีเพียงรูปมุมเดียว ทีมเราจัด photoshoot ให้ได้ (มี additional cost)'
+      },
+      {
+        heading: 'If Any',
+        items: [
+          { name: 'Problem & Solution-Fit', desc: 'The specific problem your target audience faces is significant enough to solve, and your proposed product genuinely addresses their pain points in a way they find valuable. (per SKU)' },
+          { name: 'Certificated / Reward', desc: 'Certificated / Rewards to make trustworthy. (per SKU)' },
+          { name: 'Sales Channel', desc: 'Sales channel Online & Offline. (Overall / per SKU)' }
+        ]
+      }
+    ]
+  },
+  1: {
+    title: 'Content Direction — สิ่งที่ควรเก็บลงไฟล์',
+    sections: [
+      {
+        heading: 'Plan Include (Overall)',
+        items: [
+          { name: 'Content Objective', req: true, desc: 'Define the measurable goals and intentions behind every piece of published material.' },
+          { name: 'Brand Message', req: true, desc: "It communicates your company's values, purpose, and the ultimate feeling you want people to associate with your name. It doesn't focus on what you sell, but rather why you exist." },
+          { name: 'Product Message', req: true, desc: 'It translates the features of a product into tangible benefits for the consumer. It is pragmatic, solution-oriented, and designed to drive action.' },
+          { name: 'Digital Target / Audience', req: true, desc: 'Primary target & segment.' },
+          { name: 'RTB / Selling Angle', req: true, desc: "The tangible proof, compelling argument, or functional benefit that makes a consumer trust a brand's promise." },
+          { name: 'Product Highlight Ratio', req: true, desc: 'Its associated ratios can mean a few different things depending on your product focus.' },
+          { name: 'Content Tone / Tone of voice', desc: 'The emotional attitude, feeling, or mood conveyed in written or spoken messaging.' },
+          { name: 'Catch / Connect / Convert priority', desc: 'Specific brand / product objective for communication.' },
+          { name: 'Content pillars', desc: "The 3 to 5 core themes or topics that form the foundation of a brand's content strategy." }
+        ],
+        note: '* = Must required from client'
+      },
+      {
+        heading: 'Additional',
+        items: [
+          { name: 'Communication Plan', desc: 'Content position focused on planning, creating, managing, and optimizing digital media.' },
+          { name: 'Marketing Strategy', desc: 'Brand / Product overarching long-term plan for reaching prospective consumers and turning them into loyal customers.' }
+        ]
+      }
+    ]
+  },
+  2: {
+    title: 'Brand CI / Visual Guideline — สิ่งที่ควรเก็บลงไฟล์',
+    sections: [
+      {
+        heading: 'Plan Must Include (Basic Package)',
+        items: [
+          { name: 'Logo & Beam', req: true, desc: 'Logo & Beam materials.' },
+          { name: 'Font', req: true, desc: 'Brand / Product font for artwork design.' },
+          { name: 'Color', req: true, desc: 'Brand / Product primary & secondary colors. (If have, avoid color can be provided.)' },
+          { name: 'Visual Reference', req: true, desc: 'An object, image, or landmark used to guide your perspective, aid in navigation, or ensure accuracy.' },
+          { name: 'Direction Mood board', req: true, desc: 'A curated visual collage that establishes the creative north star for a project.' },
+          { name: 'Product placement rule', req: true, desc: 'Guidelines and necessary product positioning in communication.' }
+        ],
+        note: 'ในกรณีลูกค้าไม่มี Brand CI หรือ Visual Guidelines สำหรับ print media ทีมเราพัฒนา basic Brand CI ให้ได้ (มี additional cost)'
+      },
+      {
+        heading: 'If Any (Not Include in Basic Package)',
+        items: [
+          { name: 'Brand / Graphic Element', desc: 'Any visual component—such as an icon, pattern, texture, or geometric shape—that supports your logo and establishes a cohesive brand identity.' },
+          { name: 'In-image text mood', desc: 'The mood of text within an image depends on the font, color, layout, and style used.' },
+          { name: 'Past / reference materials', desc: 'Authoritative / Past sources consulted for factual information or background context on a specific subject.' },
+          { name: 'Competitor look to avoid', desc: 'It helps to define exactly who you are competing against.' },
+          { name: 'Brand-like appearance / Brand Personality', desc: 'The set of human-like characteristics and traits attributed to a company or product.' }
+        ]
+      }
+    ]
+  }
+};
+
+// Track the currently-shown bubble so hover-enter while one is open doesn't
+// stack a duplicate, and an outside-click only registers one teardown.
+let _briefTipState = { bubble: null, btn: null, offHandler: null, hoverOpened: false };
+
+function _closeBriefTip() {
+  if (_briefTipState.bubble) { _briefTipState.bubble.remove(); _briefTipState.bubble = null; }
+  if (_briefTipState.btn) { _briefTipState.btn.classList.remove('open'); _briefTipState.btn = null; }
+  if (_briefTipState.offHandler) {
+    document.removeEventListener('mousedown', _briefTipState.offHandler);
+    _briefTipState.offHandler = null;
+  }
+  _briefTipState.hoverOpened = false;
+}
+
+function showBriefTip(i, btn, fromHover) {
+  const data = BRIEF_TIP_DATA[i];
+  if (!data || !btn) return;
+  // Same button already open → click = close (a real click should toggle even
+  // if it was opened by hover); hover re-trigger is a no-op.
+  if (_briefTipState.btn === btn) {
+    if (!fromHover) _closeBriefTip();
+    return;
+  }
+  _closeBriefTip();
+  const bubble = document.createElement('div');
+  bubble.className = 'brief-tip-bubble';
+  bubble.innerHTML =
+    `<button class="brief-tip-bubble-close" type="button" aria-label="Close" onclick="_closeBriefTip()">×</button>` +
+    `<h4 class="brief-title">${escapeHtml(data.title)}</h4>` +
+    data.sections.map(s => {
+      const rows = s.items.map(it =>
+        `<dt class="${it.req ? 'req' : ''}">${escapeHtml(it.name)}</dt><dd>${escapeHtml(it.desc || '')}</dd>`
+      ).join('');
+      const noteHtml = s.note
+        ? `<div class="brief-note"><span class="acc">⚠</span> ${escapeHtml(s.note)}</div>`
+        : '';
+      return `<h4 class="brief-section">${escapeHtml(s.heading)}</h4><dl>${rows}</dl>${noteHtml}`;
+    }).join('');
+  document.body.appendChild(bubble);
+  _positionBriefTip(bubble, btn);
+  btn.classList.add('open');
+  _briefTipState.bubble = bubble;
+  _briefTipState.btn = btn;
+  _briefTipState.hoverOpened = !!fromHover;
+  // Outside-click closes. Defer registration past the current event so the
+  // opening click itself doesn't immediately trigger it.
+  setTimeout(() => {
+    const off = (e) => {
+      if (bubble.contains(e.target) || btn.contains(e.target)) return;
+      _closeBriefTip();
+    };
+    document.addEventListener('mousedown', off);
+    _briefTipState.offHandler = off;
+  }, 0);
+  // When the bubble was opened on hover, close it once the cursor leaves
+  // BOTH the button AND the bubble — keeps the read flow uninterrupted while
+  // the user moves between them, but disposes cleanly when they wander off.
+  if (fromHover) {
+    const maybeClose = () => {
+      setTimeout(() => {
+        if (!_briefTipState.bubble) return;
+        if (btn.matches(':hover') || bubble.matches(':hover')) return;
+        _closeBriefTip();
+      }, 120);
+    };
+    btn.addEventListener('mouseleave', maybeClose, { once: false });
+    bubble.addEventListener('mouseleave', maybeClose, { once: false });
+  }
+}
+
+function _positionBriefTip(bubble, btn) {
+  const r = btn.getBoundingClientRect();
+  const bw = bubble.offsetWidth;
+  const bh = bubble.offsetHeight;
+  const margin = 12;
+  let left = r.left + r.width / 2 - bw / 2;
+  if (left < margin) left = margin;
+  if (left + bw > window.innerWidth - margin) left = window.innerWidth - bw - margin;
+  let top = r.bottom + 10;
+  if (top + bh > window.innerHeight - margin) {
+    // Not enough room below — anchor above the button instead.
+    top = Math.max(margin, r.top - bh - 10);
+  }
+  bubble.style.top = top + 'px';
+  bubble.style.left = left + 'px';
+}
+
+// Reposition open bubble on scroll/resize so it stays anchored to its button.
+window.addEventListener('scroll', () => {
+  if (_briefTipState.bubble && _briefTipState.btn) _positionBriefTip(_briefTipState.bubble, _briefTipState.btn);
+}, true);
+window.addEventListener('resize', () => {
+  if (_briefTipState.bubble && _briefTipState.btn) _positionBriefTip(_briefTipState.bubble, _briefTipState.btn);
+});
+
+// ----- Thumbnail lightbox (Section A) ---------------------------------------
+// Opens a larger preview of an uploaded Section-A thumbnail, with a soft
+// banner that frames the image as a curated summary (not the canonical
+// resource). The "View File ↗" button bridges to openDriveLink so a viewer
+// who wants the full file is one click away.
+let _thumbLightIdx = -1;
+function openInputThumbLightbox(i) {
+  const camp = getCurrentCampaign();
+  if (!camp) return;
+  const link = (camp.driveLinks && camp.driveLinks[i]) || null;
+  if (!link || !link.thumbFileId) return;
+  _thumbLightIdx = i;
+  const titles = ['Product Information', 'Content Direction', 'CI Design Guidelines', 'Content Category Map'];
+  const titleEl = document.getElementById('thumbLightTitle');
+  if (titleEl) titleEl.textContent = `📎 ${titles[i] || ('0' + (i + 1))}`;
+  const sub = document.getElementById('thumbLightSub');
+  if (sub) sub.textContent = link.name ? `Ref · ${link.name}` : '—';
+  const openBtn = document.getElementById('thumbLightOpenBtn');
+  if (openBtn) openBtn.style.display = link.url ? '' : 'none';
+  const img = document.getElementById('thumbLightImg');
+  if (img) { img.src = ''; img.alt = titles[i] || ''; }
+  document.getElementById('thumbLightbox').classList.add('show');
+  getFileDataUrl({ driveFileId: link.thumbFileId }).then(url => {
+    if (_thumbLightIdx !== i) return; // user closed/switched mid-load
+    if (img) img.src = url;
+  }).catch(e => console.warn('lightbox thumb load failed', i, e));
+}
+function closeThumbLightbox() {
+  _thumbLightIdx = -1;
+  document.getElementById('thumbLightbox').classList.remove('show');
+  const img = document.getElementById('thumbLightImg');
+  if (img) img.src = '';
+}
+function openThumbLightFile() {
+  if (_thumbLightIdx < 0) return;
+  openDriveLink(_thumbLightIdx);
+}
+
 function renderInputPreview(i) {
   const camp = getCurrentCampaign();
   const card = document.getElementById(`input-card-${i}`);
@@ -8520,12 +8792,21 @@ function renderInputPreview(i) {
   const hint = `<div class="thumb-size-hint">${_thumbHintText()}</div>`;
   if (link.thumbFileId) {
     prev.style.cssText = 'aspect-ratio:4/3; position:relative; overflow:hidden; background:var(--paper-2);';
+    prev.classList.add('expandable');
+    prev.onclick = (e) => {
+      // Don't intercept clicks on the upload / delete buttons sitting on top —
+      // they have their own stopPropagation but a defensive check costs nothing.
+      if (e.target.closest('.thumb-upload-btn, .thumb-delete-btn, input[type=file]')) return;
+      openInputThumbLightbox(i);
+    };
     prev.innerHTML = `<img data-thumb="${i}" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" />${deleteBtn}${uploadBtn}`;
     getFileDataUrl({ driveFileId: link.thumbFileId }).then(url => {
       const img = prev.querySelector(`img[data-thumb="${i}"]`); if (img) img.src = url;
     }).catch(e => console.warn('thumb load failed', i, e));
   } else {
     prev.style.cssText = 'aspect-ratio:4/3; position:relative; display:grid; place-items:center; background:var(--paper-2);';
+    prev.classList.remove('expandable');
+    prev.onclick = null;
     prev.innerHTML = `<div style="text-align:center; padding:12px;"><div style="font-size:11px; color:var(--muted-2); font-family:'Fraunces',serif; margin-bottom:6px;">${escapeHtml(link.name || ('0'+(i+1)))}</div><div style="font-size:9px; color:var(--muted-2); font-family:'Geist Mono',monospace; letter-spacing:0.3px;">${_thumbHintText()}</div></div>${uploadBtn}`;
   }
 }
@@ -8701,7 +8982,8 @@ const _MODAL_CLOSE_FNS = {
   connectModal: () => (typeof closeConnectModal === 'function' ? closeConnectModal() : null),
   configModal: () => (typeof closeConfigModal === 'function' ? closeConfigModal() : null),
   addCampaignModal: () => (typeof closeAddCampaignModal === 'function' ? closeAddCampaignModal() : null),
-  addMemberModal: () => (typeof closeAddMemberModal === 'function' ? closeAddMemberModal() : null)
+  addMemberModal: () => (typeof closeAddMemberModal === 'function' ? closeAddMemberModal() : null),
+  thumbLightbox: () => (typeof closeThumbLightbox === 'function' ? closeThumbLightbox() : null)
 };
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
