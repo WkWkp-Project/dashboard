@@ -224,9 +224,14 @@
   .hero-eyebrow { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
   .hero-eyebrow::before { content: ''; width: 24px; height: 1px; background: var(--accent); }
   .hero-text { min-width: 0; flex: 1; }
-  .hero-brand { font-family: 'Fraunces', serif; font-weight: 500; font-size: 22px; line-height: 1.2; color: var(--ink); margin-top: 6px; letter-spacing: 0.2px; }
+  /* Hero H2 (Brand) + H3 (Company) — moved off Fraunces / Geist Mono to the
+     Poppins/Prompt program stack so the whole hero block reads as one
+     typographic family. Sizes nudged slightly (24/13) so the hierarchy
+     H1>H2>H3 stays visually obvious without the serif/mono contrast doing
+     that job. */
+  .hero-brand { font-family: 'Poppins', 'Prompt', sans-serif; font-weight: 500; font-size: 24px; line-height: 1.2; color: var(--ink); margin-top: 8px; letter-spacing: 0.1px; }
   .hero-brand:empty { display: none; }
-  .hero-company { font-family: 'Geist Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+  .hero-company { font-family: 'Poppins', 'Prompt', sans-serif; font-weight: 500; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
   .hero-company:empty { display: none; }
   /* Role gating — applied by applyRoleRestrictions():
        .admin-only     hides for everyone whose userRoleControl !== 'admin'
@@ -297,7 +302,7 @@
 
   .section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .section-num { font-family: 'Fraunces', serif; font-style: italic; font-size: 32px; font-weight: 300; color: var(--accent); line-height: 1; }
-  .section-title { font-family: 'Fraunces', serif; font-size: 24px; font-weight: 500; letter-spacing: -0.01em; flex: 1; }
+  .section-title { font-family: 'Poppins', 'Prompt', sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
   .section-meta { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--muted); letter-spacing: 0.5px; }
   .section-actions { display: flex; gap: 6px; }
 
@@ -433,7 +438,7 @@
   /* Calendar */
   .calendar-wrap { border:1px solid var(--line); border-radius:var(--radius); background:var(--paper); overflow:hidden; margin-bottom:32px;}
   .cal-header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--paper-2); border-bottom:1px solid var(--line);}
-  .cal-header h3 { font-family:'Fraunces',serif; font-size:18px; font-weight:500;}
+  .cal-header h3 { font-family:'Poppins','Prompt',sans-serif; font-size:18px; font-weight:600;}
   .cal-nav { display:flex; gap:6px; }
   .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); }
   .cal-dow { padding:8px; text-align:center; font-family:'Geist Mono',monospace; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--line); background:var(--paper-2);}
@@ -474,7 +479,7 @@
   .cal-day-bubble-bg { position:fixed; inset:0; background:rgba(14,17,22,0.42); z-index:9000; display:flex; align-items:center; justify-content:center; padding:20px; }
   .cal-day-bubble { background:var(--paper); border-radius:8px; border:1px solid var(--line); box-shadow:0 24px 48px -12px rgba(0,0,0,0.28); width:100%; max-width:480px; max-height:78vh; display:flex; flex-direction:column; overflow:hidden; }
   .cal-day-bubble-head { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:baseline; gap:12px; background:var(--paper-2); }
-  .cal-day-bubble-head h4 { margin:0; font-family:'Fraunces',serif; font-size:16px; font-weight:500; }
+  .cal-day-bubble-head h4 { margin:0; font-family:'Poppins','Prompt',sans-serif; font-size:16px; font-weight:600; }
   .cal-day-bubble-head .cal-day-bubble-meta { font-family:'Geist Mono',monospace; font-size:10.5px; letter-spacing:0.5px; color:var(--muted); }
   .cal-day-bubble-body { padding:10px 14px 16px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
   .cal-day-bubble-row { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; background:var(--paper); cursor:pointer; text-align:left; transition:all 0.12s; font-family:inherit; }
@@ -533,7 +538,7 @@
   .simple-modal.lg { max-width: 720px; }
   .simple-modal.xl { max-width: 920px; }
   .simple-modal-head { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
-  .simple-modal-head h3 { font-family: 'Fraunces', serif; font-size: 18px; font-weight: 500; }
+  .simple-modal-head h3 { font-family: 'Poppins', 'Prompt', sans-serif; font-size: 18px; font-weight: 600; }
   .simple-modal-body { padding: 24px; overflow-y: auto; flex: 1; }
   .simple-modal-footer { padding: 16px 24px; border-top: 1px solid var(--line); background: var(--paper-2); display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
   .close-btn { width: 32px; height: 32px; border: 1px solid var(--line); background: var(--paper); border-radius: 4px; cursor: pointer; display: grid; place-items: center; }
