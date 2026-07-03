@@ -306,6 +306,29 @@
   .save-failure-btn:hover { filter: brightness(0.95); }
   .save-failure-x { background: transparent; border: none; color: #8A2F2F; font-size: 14px; cursor: pointer; padding: 4px 8px; }
 
+  /* Campaigns landing grid (Creator-Hub list→detail pattern). Master list of
+     campaign cards; click a card to drill into its detail (overview). Warm
+     palette + Playfair/Space Mono to match the editorial theme. */
+  .camp-grid-toolbar { display: flex; gap: 10px; align-items: center; margin: 22px 0 24px; flex-wrap: wrap; }
+  .camp-grid-toolbar input, .camp-grid-toolbar select { padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-family: 'Poppins','Prompt',sans-serif; font-size: 13px; color: var(--ink); outline: none; }
+  .camp-grid-toolbar input { min-width: 240px; flex: 1; max-width: 340px; }
+  .camp-grid-toolbar input:focus, .camp-grid-toolbar select:focus { border-color: var(--gold); }
+  .camp-grid-toolbar select { cursor: pointer; min-width: 160px; }
+  .camp-grid-count { margin-left: auto; font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
+  .camp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+  .camp-card { border: 1px solid var(--line); border-radius: 8px; background: var(--paper); overflow: hidden; cursor: pointer; transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s; display: flex; flex-direction: column; }
+  .camp-card:hover { box-shadow: 0 12px 22px -8px rgba(0,0,0,0.14); transform: translateY(-2px); border-color: var(--gold); }
+  .camp-card-top { padding: 16px 16px 14px; flex: 1; }
+  .camp-card-brand { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); margin-bottom: 7px; min-height: 12px; }
+  .camp-card-name { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 21px; line-height: 1.15; color: var(--ink); letter-spacing: -0.01em; }
+  .camp-card-client { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .camp-card-foot { padding: 11px 16px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); background: var(--paper-2); }
+  .camp-card-count { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.06em; color: var(--muted); }
+  .camp-grid-empty { padding: 60px 20px; text-align: center; color: var(--muted); }
+  .camp-grid-empty .cge-title { font-family: 'Playfair Display', serif; font-size: 24px; margin-bottom: 10px; color: var(--muted); }
+  .back-to-campaigns { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 4px 0; margin-bottom: 10px; cursor: pointer; font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); transition: color 0.15s; }
+  .back-to-campaigns:hover { color: var(--accent); }
+
   .section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .section-num { font-family: 'Playfair Display', serif; font-style: italic; font-size: 30px; font-weight: 700; color: var(--accent); line-height: 1; }
   .section-title { font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; flex: 1; }
@@ -812,20 +835,6 @@
       </div>
     </div>
 
-    <!-- Campaign-first picker (Creator-Hub style). Lists every campaign the
-         user may see (role-filtered), with a Brand dropdown + search. Clicking
-         a campaign sets both the campaign AND its member context so the rest of
-         the engine (getCurrentCampaign / save flow) keeps working unchanged. -->
-    <div class="nav-section" id="campaigns-nav-section">
-      <div class="nav-label">
-        <span>Campaigns</span>
-        <button class="add-btn" onclick="openAddCampaignModal()" title="เพิ่มแคมเปญใหม่">+</button>
-      </div>
-      <input type="text" id="camp-search" class="member-search" placeholder="🔍 ค้นหาแคมเปญ / brand / client..." oninput="onCampaignNavSearch(this.value)" />
-      <select id="camp-brand-filter" class="camp-brand-filter" onchange="onCampaignNavBrand(this.value)" style="display:none;"><option value="">All brands</option></select>
-      <div id="campaign-list-nav"></div>
-    </div>
-
     <div class="nav-section">
       <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member (ครอบทุกกลุ่ม)..." oninput="onMemberSearch(this.value)" />
 
@@ -855,9 +864,13 @@
 
     <div class="nav-section">
       <div class="nav-label"><span>Views</span></div>
-      <div class="nav-item active" data-view="overview" onclick="switchView('overview')">
+      <div class="nav-item active" data-view="campaigns" onclick="switchView('campaigns')">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-        Campaign Overview
+        Campaigns
+      </div>
+      <div class="nav-item" data-view="overview" onclick="switchView('overview')" id="nav-overview" style="display:none;">
+        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+        Campaign Detail
       </div>
       <div class="nav-item" data-view="calendar" onclick="switchView('calendar')">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -939,8 +952,29 @@
       <span class="save-success-popup-text">✓ บันทึกแล้ว</span>
     </div>
 
-    <!-- ============ OVERVIEW VIEW ============ -->
-    <div class="page view-container active" id="view-overview">
+    <!-- ============ CAMPAIGNS LANDING (master list → detail) ============ -->
+    <div class="page view-container active" id="view-campaigns">
+      <div class="hero">
+        <div>
+          <div class="hero-eyebrow">Workspace · Campaigns</div>
+          <h1>All <em>Campaigns</em></h1>
+          <p>เลือกแคมเปญเพื่อเข้าดูรายละเอียด · กรองตามแบรนด์หรือค้นหาชื่อ</p>
+        </div>
+        <div class="hero-actions">
+          <button class="btn admin-only" onclick="openAddCampaignModal()">+ New Campaign</button>
+        </div>
+      </div>
+      <div class="camp-grid-toolbar">
+        <input type="text" id="camp-grid-search" placeholder="🔍 ค้นหาแคมเปญ / brand / client..." oninput="onCampaignNavSearch(this.value)" />
+        <select id="camp-grid-brand" onchange="onCampaignNavBrand(this.value)"><option value="">All brands</option></select>
+        <span class="camp-grid-count" id="camp-grid-count"></span>
+      </div>
+      <div class="camp-grid" id="camp-grid"></div>
+    </div>
+
+    <!-- ============ OVERVIEW VIEW (campaign detail) ============ -->
+    <div class="page view-container" id="view-overview">
+      <button class="back-to-campaigns" onclick="switchView('campaigns')">← All Campaigns</button>
       <div id="editing-indicator" style="display:none; margin:8px 0 12px; padding:10px 14px; background:#FAEBDF; border:1px solid #F0C7A8; border-left:4px solid var(--err); border-radius:6px; font-size:13px; color:var(--ink); display:flex; align-items:center; gap:8px;"></div>
       <div class="handoff-banner hidden" id="handoffBanner">
         <div class="handoff-banner-icon">📦</div>
@@ -5242,9 +5276,14 @@ function switchView(name) {
   if (v) v.classList.add('active');
   const navItem = document.querySelector(`.nav-item[data-view="${name}"]`);
   if (navItem) navItem.classList.add('active');
+  if (name === 'campaigns') renderCampaignsGrid();
   if (name === 'calendar') renderCalendar();
   if (name === 'access') renderAccessTable();
   if (name === 'hub') renderDataHub();
+  // The "Campaign Detail" nav item only makes sense once a campaign is open —
+  // reveal it when viewing/opening a campaign, hide it on the landing grid.
+  const navOverview = document.getElementById('nav-overview');
+  if (navOverview) navOverview.style.display = (name === 'overview' && getCurrentCampaign()) ? '' : 'none';
 }
 
 // ============================================================================
@@ -5499,7 +5538,11 @@ function updateMainEmptyState() {
   if (!main) return;
   let overlay = document.getElementById('memberEmptyState');
   const camp = getCurrentCampaign();
-  const shouldShow = !camp;
+  // The Campaigns landing grid is now the real empty-state — never cover it
+  // (or Calendar / Access / Hub) with the legacy "no member" overlay. Only
+  // show it when the detail (overview) view is active but no campaign is open.
+  const overviewActive = document.getElementById('view-overview')?.classList.contains('active');
+  const shouldShow = !camp && overviewActive;
   if (shouldShow) {
     if (!overlay) {
       overlay = document.createElement('div');
@@ -5678,23 +5721,36 @@ function renderMemberNav() {
   if (!renderMemberNav._inited) { renderMemberNav._inited = true; initMembersDrawer(); }
 }
 
-// Campaign-first sidebar picker state. Brand + free-text filters narrow the
-// list; clicking an item pins the campaign AND its owning member so the
-// member-context machinery (getCurrentCampaign / save flow) is satisfied.
+// Campaigns landing grid (Creator-Hub master→detail). Brand + free-text
+// filters narrow the grid; clicking a card pins the campaign AND its owning
+// member so the member-context machinery (getCurrentCampaign / save flow) is
+// satisfied, then drills into the detail (overview) view.
 let _campNavBrand = '';
 let _campNavSearch = '';
-function onCampaignNavBrand(v) { _campNavBrand = (v || '').toLowerCase(); renderCampaignNav(); }
-function onCampaignNavSearch(v) { _campNavSearch = (v || '').toLowerCase().trim(); renderCampaignNav(); }
+function onCampaignNavBrand(v) { _campNavBrand = (v || '').toLowerCase(); renderCampaignsGrid(); }
+function onCampaignNavSearch(v) { _campNavSearch = (v || '').toLowerCase().trim(); renderCampaignsGrid(); }
 
-function renderCampaignNav() {
-  const nav = document.getElementById('campaign-list-nav');
-  if (!nav) return;
+// Open a campaign into its detail view. Pins both the campaign id and the
+// owning member email (getCurrentCampaign requires a member context) then
+// switches to the overview/detail view.
+function openCampaignDetail(id) {
+  const c = (campaigns || []).find(x => x.id === id);
+  if (!c) return;
+  currentCampaignId = c.id;
+  currentMemberEmail = (c.clientEmail || '').toLowerCase();
+  renderEverything();
+  switchView('overview');
+}
+
+function renderCampaignsGrid() {
+  const grid = document.getElementById('camp-grid');
+  if (!grid) return;
   // Role-scoped: admin sees all, others see own + assigned (filterVisibleCampaigns).
   const visible = filterVisibleCampaigns(campaigns || []);
 
   // Populate the Brand dropdown from the visible set. Hidden when there are no
-  // brands to filter by (keeps the sidebar clean for single-brand rosters).
-  const brandSel = document.getElementById('camp-brand-filter');
+  // brands to filter by.
+  const brandSel = document.getElementById('camp-grid-brand');
   if (brandSel) {
     const brandMap = new Map(); // lowerkey -> display label (first-seen casing)
     visible.forEach(c => {
@@ -5717,30 +5773,39 @@ function renderCampaignNav() {
     (c.client || '').toLowerCase().includes(_campNavSearch));
   list.sort((a, b) => (a.campaign || '').localeCompare(b.campaign || ''));
 
-  nav.innerHTML = '';
+  const countEl = document.getElementById('camp-grid-count');
+  if (countEl) countEl.textContent = `${list.length} campaign${list.length === 1 ? '' : 's'}${(_campNavBrand || _campNavSearch) ? ' (filtered)' : ''}`;
+
+  grid.innerHTML = '';
   if (!list.length) {
     const msg = (_campNavBrand || _campNavSearch)
       ? 'ไม่พบแคมเปญตามตัวกรอง'
-      : (isAdmin ? 'ยังไม่มีแคมเปญ — กด + เพิ่ม' : 'ยังไม่มีแคมเปญที่มอบหมาย');
-    nav.innerHTML = `<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">${msg}</div>`;
+      : (isAdmin ? 'ยังไม่มีแคมเปญ — กด + New Campaign เพื่อเริ่ม' : 'ยังไม่มีแคมเปญที่มอบหมายให้คุณ');
+    grid.innerHTML = `<div class="camp-grid-empty" style="grid-column:1/-1;"><div class="cge-title">— No campaigns —</div><p style="font-size:13px;">${msg}</p></div>`;
     return;
   }
   list.forEach(c => {
-    const div = document.createElement('div');
-    div.className = 'camp-list-item' + (c.id === currentCampaignId ? ' active' : '');
-    div.onclick = () => {
-      currentCampaignId = c.id;
-      // Keep member context in sync so getCurrentCampaign() resolves and the
-      // save/dirty machinery attributes to the right owner.
-      currentMemberEmail = (c.clientEmail || '').toLowerCase();
-      renderEverything();
-      switchView('overview');
-    };
-    const brandTag = c.brand ? `<span class="camp-brand-tag">${escapeHtml(c.brand)}</span> · ` : '';
-    div.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${brandTag}${escapeHtml(c.client || '—')} · ${(c.assets || []).length} ASSETS</small>`;
-    nav.appendChild(div);
+    const card = document.createElement('div');
+    card.className = 'camp-card';
+    card.onclick = () => openCampaignDetail(c.id);
+    const status = c.status === 'handed-off' ? 'completed' : (c.status || 'draft');
+    const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+    const brandLine = c.brand ? escapeHtml(c.brand) : '&nbsp;';
+    card.innerHTML =
+      `<div class="camp-card-top">
+         <div class="camp-card-brand">${brandLine}</div>
+         <div class="camp-card-name">${escapeHtml(c.campaign || 'Untitled')}</div>
+         <div class="camp-card-client">${escapeHtml(c.client || '—')}</div>
+       </div>
+       <div class="camp-card-foot">
+         <span class="camp-card-count">${(c.assets || []).length} assets</span>
+         <span class="status-pill ${status}">${escapeHtml(statusLabel)}</span>
+       </div>`;
+    grid.appendChild(card);
   });
 }
+// Back-compat: renderEverything + legacy callers still call renderCampaignNav.
+function renderCampaignNav() { renderCampaignsGrid(); }
 
 function selectMember(email) {
   currentMemberEmail = (email || '').toLowerCase();
@@ -10094,7 +10159,7 @@ window.__runTests = async function() {
     userRoleControl = svC; userRole = svR; applyRoleRestrictions();
   });
   t('Role gating: Edit Info button + Delete/Reset Campaign carry .admin-only', () => {
-    const editInfoBtn = document.querySelector('.hero-actions .btn.admin-only');
+    const editInfoBtn = document.querySelector('#view-overview .hero-actions .btn.admin-only');
     ok(editInfoBtn && /Edit Info/i.test(editInfoBtn.textContent || ''),
        'Edit Info button must have .admin-only so editor/operation lose it via CSS');
     const adminOnlyBtns = Array.from(document.querySelectorAll('.simple-modal-footer .btn.admin-only')).map(b => b.textContent.trim());
@@ -11039,12 +11104,14 @@ window.__runTests = async function() {
   t('topbar user-chip hidden / sb-email present', () => ok(document.getElementById('sb-email')));
   t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
-  t('Campaigns-first sidebar picker present (brand filter + search + list)', () => {
-    ok(document.getElementById('campaigns-nav-section'), 'campaigns-nav-section exists');
-    ok(document.getElementById('camp-brand-filter'), 'brand filter dropdown exists');
-    ok(document.getElementById('camp-search'), 'campaign search input exists');
-    ok(document.getElementById('campaign-list-nav'), 'campaign list container exists');
+  t('Campaigns landing grid present (master→detail, brand filter + search)', () => {
+    ok(document.getElementById('view-campaigns'), 'view-campaigns container exists');
+    ok(document.getElementById('camp-grid'), 'campaign grid container exists');
+    ok(document.getElementById('camp-grid-brand'), 'grid brand filter exists');
+    ok(document.getElementById('camp-grid-search'), 'grid search input exists');
+    ok(typeof renderCampaignsGrid === 'function' && typeof openCampaignDetail === 'function', 'grid render + open-detail defined');
     ok(typeof onCampaignNavBrand === 'function' && typeof onCampaignNavSearch === 'function', 'filter handlers defined');
+    ok(document.querySelector('.nav-item[data-view="campaigns"]'), 'Campaigns nav item exists');
   });
   t('loadCampaignsFromIndex + onControlCampaignsChanged defined', () => ok(typeof loadCampaignsFromIndex === 'function' && typeof onControlCampaignsChanged === 'function'));
   t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
