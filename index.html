@@ -189,7 +189,7 @@
   .assign-tick { width:20px; height:20px; border-radius:50%; border:1.5px solid var(--line); color:transparent; display:grid; place-items:center; font-size:11px; flex-shrink:0; transition:all .12s; }
   .assign-row.on .assign-tick { background:var(--gold); border-color:var(--gold); color:#fff; }
 
-  .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--ink-2); }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--ink-2); }
   .sidebar-footer a { color: var(--gold); text-decoration: none; font-family: 'Geist Mono', monospace; font-size: 10px; }
   .sidebar-footer a:hover { text-decoration: underline; }
   .sb-meta { font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--muted-2); letter-spacing: 1px; padding: 0 8px; }
@@ -1512,8 +1512,8 @@
     <div class="simple-modal-head"><h3>Add New Campaign</h3><button class="close-btn" onclick="closeAddCampaignModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
     <div class="simple-modal-body">
       <div class="input-group">
-        <label>Member <small class="hint-label">(แคมเปญนี้จะอยู่ภายใต้ member คนนี้)</small></label>
-        <div id="newCampaignMemberLabel" style="padding:10px 12px; background:var(--paper-2); border-radius:4px; font-family:'Geist Mono',monospace; font-size:12px;">—</div>
+        <label>Owner <small class="hint-label">(แคมเปญนี้จะอยู่ภายใต้คนที่สร้าง — ทำงานแยกกันได้)</small></label>
+        <div id="newCampaignMemberLabel" style="padding:10px 12px; background:var(--paper-2); border-radius:4px; font-family:'Space Mono',monospace; font-size:12px;">—</div>
       </div>
       <div class="input-group"><label>Client Name <small class="hint-label">(ชื่อบริษัทลูกค้า)</small></label><input type="text" id="newClient" placeholder="e.g. Ocean Bites Co., Ltd." /></div>
       <div class="input-group"><label>Campaign Name</label><input type="text" id="newCampaign" placeholder="e.g. Songkran 2026" /></div>
@@ -6496,14 +6496,23 @@ function performLogout() {
 function openAddCampaignModal() {
   if (blockIfNotInternal('สร้างแคมเปญใหม่ได้เฉพาะทีม Wakuwaku')) return;
   if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
-  if (!currentMemberEmail) { showToast('เลือก Member ใน sidebar ก่อนสร้างแคมเปญ', 'warn'); return; }
+  // Campaign-first model: no member is picked in the sidebar anymore, so a new
+  // campaign is owned by whoever clicked create (the logged-in user). If a
+  // specific member is still pinned (e.g. from Settings), honour that instead.
+  const owner = currentMemberEmail || currentUserEmail;
+  if (!owner) { showToast('ยังไม่ทราบผู้สร้าง — ลอง login ใหม่', 'warn'); return; }
   ['newClient','newCampaign','newStart','newEnd','newCampaignDriveUrl'].forEach(id => document.getElementById(id).value = '');
-  const m = findMember(currentMemberEmail);
-  // Prefill name + Drive folder from the member's defaults to reduce typos.
-  if (m && m.name) document.getElementById('newClient').value = m.name;
-  if (m && m.driveFolderUrl) document.getElementById('newCampaignDriveUrl').value = m.driveFolderUrl;
+  // Prefill from an explicitly-pinned member (a customer) only — never from the
+  // creator's own account, whose name is a person, not a company.
+  const pinned = (currentMemberEmail && currentMemberEmail !== currentUserEmail) ? findMember(currentMemberEmail) : null;
+  if (pinned && pinned.name) document.getElementById('newClient').value = pinned.name;
+  if (pinned && pinned.driveFolderUrl) document.getElementById('newCampaignDriveUrl').value = pinned.driveFolderUrl;
   const label = document.getElementById('newCampaignMemberLabel');
-  if (label) label.textContent = (m && m.name ? `${m.name} · ` : '') + currentMemberEmail;
+  if (label) {
+    label.textContent = pinned
+      ? (pinned.name ? `${pinned.name} · ` : '') + currentMemberEmail
+      : `${owner} · (คุณ · ผู้สร้าง)`;
+  }
   document.getElementById('addCampaignModal').classList.add('show');
 }
 function closeAddCampaignModal() { document.getElementById('addCampaignModal').classList.remove('show'); }
@@ -6520,7 +6529,9 @@ async function saveNewCampaign() {
   finally { if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = ''; } }
 }
 async function _saveNewCampaignInner() {
-  if (!currentMemberEmail) { showToast('เลือก Member ก่อน', 'warn'); return; }
+  // Owner = pinned member if any, else the logged-in creator (campaign-first).
+  const owner = currentMemberEmail || currentUserEmail;
+  if (!owner) { showToast('ยังไม่ทราบผู้สร้าง — ลอง login ใหม่', 'warn'); return; }
   const client = document.getElementById('newClient').value.trim();
   const campaign = document.getElementById('newCampaign').value.trim();
   const driveUrl = document.getElementById('newCampaignDriveUrl').value.trim();
@@ -6549,7 +6560,7 @@ async function _saveNewCampaignInner() {
   } catch(e) { console.warn('remote clash check failed:', e); /* don't block create on lookup failure */ }
   const c = {
     id: 'camp-' + Date.now() + Math.random().toString(36).slice(2,7),
-    clientEmail: currentMemberEmail,
+    clientEmail: owner,
     client, campaign,
     startPeriod: document.getElementById('newStart').value.trim(),
     endPeriod: document.getElementById('newEnd').value.trim(),
@@ -6564,9 +6575,12 @@ async function _saveNewCampaignInner() {
   };
   campaigns.push(c);
   currentCampaignId = c.id;
+  // Pin the owner as the active member context so getCurrentCampaign() resolves
+  // and the new campaign opens straight into its detail.
+  currentMemberEmail = owner;
   closeAddCampaignModal();
   renderEverything();
-  logAction('CREATE', `New campaign for ${currentMemberEmail}: ${campaign}`);
+  logAction('CREATE', `New campaign for ${owner}: ${campaign}`);
   // Persist immediately to Drive + register in the shared index so other admins
   // see it right away (don't wait for a debounced save).
   if (accessToken && !isOfflineMode) {
