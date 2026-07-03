@@ -141,8 +141,14 @@
   .member-edit { position:absolute; top:6px; right:6px; opacity:0; background:none; border:none; color:var(--muted-2); cursor:pointer; font-size:11px; padding:2px 4px; }
   .member-edit:hover { color:var(--paper); }
 
+  /* Campaign picker filter — brand dropdown + search on the sidebar campaign
+     list (mirrors the Calendar brand filter; Creator-Hub-style campaign-first
+     navigation). Dark-sidebar variant of the input styling. */
+  .camp-brand-filter { width:100%; box-sizing:border-box; margin:0 0 6px; padding:6px 8px; font-size:11px; border-radius:4px; border:1px solid var(--ink-3); background:var(--ink-2); color:var(--paper); font-family:'Space Mono',monospace; cursor:pointer; }
+  .camp-brand-filter:focus { outline:none; border-color:var(--gold); }
+  .camp-list-item small .camp-brand-tag { color:var(--gold); }
   /* Member accordion (collapsible cards) */
-  .member-search { width:100%; box-sizing:border-box; margin:0 0 6px; padding:6px 8px; font-size:11px; border-radius:4px; border:1px solid var(--ink-3); background:var(--ink-2); color:var(--paper); font-family:'Geist Mono',monospace; }
+  .member-search { width:100%; box-sizing:border-box; margin:0 0 6px; padding:6px 8px; font-size:11px; border-radius:4px; border:1px solid var(--ink-3); background:var(--ink-2); color:var(--paper); font-family:'Space Mono',monospace; }
   .member-search::placeholder { color:var(--muted-2); }
   .member-card { border-radius:5px; margin-bottom:3px; background:rgba(255,255,255,0.02); overflow:hidden; }
   .member-card.expanded { background:var(--ink-2); }
@@ -806,6 +812,20 @@
       </div>
     </div>
 
+    <!-- Campaign-first picker (Creator-Hub style). Lists every campaign the
+         user may see (role-filtered), with a Brand dropdown + search. Clicking
+         a campaign sets both the campaign AND its member context so the rest of
+         the engine (getCurrentCampaign / save flow) keeps working unchanged. -->
+    <div class="nav-section" id="campaigns-nav-section">
+      <div class="nav-label">
+        <span>Campaigns</span>
+        <button class="add-btn" onclick="openAddCampaignModal()" title="เพิ่มแคมเปญใหม่">+</button>
+      </div>
+      <input type="text" id="camp-search" class="member-search" placeholder="🔍 ค้นหาแคมเปญ / brand / client..." oninput="onCampaignNavSearch(this.value)" />
+      <select id="camp-brand-filter" class="camp-brand-filter" onchange="onCampaignNavBrand(this.value)" style="display:none;"><option value="">All brands</option></select>
+      <div id="campaign-list-nav"></div>
+    </div>
+
     <div class="nav-section">
       <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member (ครอบทุกกลุ่ม)..." oninput="onMemberSearch(this.value)" />
 
@@ -831,16 +851,6 @@
       <div class="nav-drawer collapsed" id="customer-drawer">
         <div id="customer-list-nav"></div>
       </div>
-    </div>
-
-    <!-- Campaigns live inside each member card now; this section is kept for
-         back-compat (renderCampaignNav) but hidden. -->
-    <div class="nav-section" id="campaigns-nav-section" style="display:none;">
-      <div class="nav-label">
-        <span>Campaigns</span>
-        <button class="add-btn" onclick="openAddCampaignModal()" title="เพิ่มแคมเปญใหม่ภายใต้ member ที่เลือก">+</button>
-      </div>
-      <div id="campaign-list-nav"></div>
     </div>
 
     <div class="nav-section">
@@ -5668,23 +5678,68 @@ function renderMemberNav() {
   if (!renderMemberNav._inited) { renderMemberNav._inited = true; initMembersDrawer(); }
 }
 
+// Campaign-first sidebar picker state. Brand + free-text filters narrow the
+// list; clicking an item pins the campaign AND its owning member so the
+// member-context machinery (getCurrentCampaign / save flow) is satisfied.
+let _campNavBrand = '';
+let _campNavSearch = '';
+function onCampaignNavBrand(v) { _campNavBrand = (v || '').toLowerCase(); renderCampaignNav(); }
+function onCampaignNavSearch(v) { _campNavSearch = (v || '').toLowerCase().trim(); renderCampaignNav(); }
+
 function renderCampaignNav() {
   const nav = document.getElementById('campaign-list-nav');
   if (!nav) return;
+  // Role-scoped: admin sees all, others see own + assigned (filterVisibleCampaigns).
+  const visible = filterVisibleCampaigns(campaigns || []);
+
+  // Populate the Brand dropdown from the visible set. Hidden when there are no
+  // brands to filter by (keeps the sidebar clean for single-brand rosters).
+  const brandSel = document.getElementById('camp-brand-filter');
+  if (brandSel) {
+    const brandMap = new Map(); // lowerkey -> display label (first-seen casing)
+    visible.forEach(c => {
+      const b = (c.brand || '').trim();
+      if (b && !brandMap.has(b.toLowerCase())) brandMap.set(b.toLowerCase(), b);
+    });
+    const brands = Array.from(brandMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+    if (_campNavBrand && !brandMap.has(_campNavBrand)) _campNavBrand = ''; // stale selection cleared
+    brandSel.innerHTML = '<option value="">All brands</option>' +
+      brands.map(([key, label]) => `<option value="${escapeHtml(key)}"${key === _campNavBrand ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    brandSel.style.display = brands.length ? '' : 'none';
+  }
+
+  // Apply brand + search filters.
+  let list = visible.slice();
+  if (_campNavBrand) list = list.filter(c => (c.brand || '').toLowerCase() === _campNavBrand);
+  if (_campNavSearch) list = list.filter(c =>
+    (c.campaign || '').toLowerCase().includes(_campNavSearch) ||
+    (c.brand || '').toLowerCase().includes(_campNavSearch) ||
+    (c.client || '').toLowerCase().includes(_campNavSearch));
+  list.sort((a, b) => (a.campaign || '').localeCompare(b.campaign || ''));
+
   nav.innerHTML = '';
-  if (!currentMemberEmail) {
-    nav.innerHTML = '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">เลือก member ก่อน ↑</div>';
+  if (!list.length) {
+    const msg = (_campNavBrand || _campNavSearch)
+      ? 'ไม่พบแคมเปญตามตัวกรอง'
+      : (isAdmin ? 'ยังไม่มีแคมเปญ — กด + เพิ่ม' : 'ยังไม่มีแคมเปญที่มอบหมาย');
+    nav.innerHTML = `<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">${msg}</div>`;
     return;
   }
-  const filtered = campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail);
-  filtered.forEach(c => {
+  list.forEach(c => {
     const div = document.createElement('div');
     div.className = 'camp-list-item' + (c.id === currentCampaignId ? ' active' : '');
-    div.onclick = () => { currentCampaignId = c.id; renderEverything(); switchView('overview'); };
-    div.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${escapeHtml(c.client || '—')} · ${c.assets.length} ASSETS</small>`;
+    div.onclick = () => {
+      currentCampaignId = c.id;
+      // Keep member context in sync so getCurrentCampaign() resolves and the
+      // save/dirty machinery attributes to the right owner.
+      currentMemberEmail = (c.clientEmail || '').toLowerCase();
+      renderEverything();
+      switchView('overview');
+    };
+    const brandTag = c.brand ? `<span class="camp-brand-tag">${escapeHtml(c.brand)}</span> · ` : '';
+    div.innerHTML = `<strong>${escapeHtml(c.campaign || 'Untitled')}</strong><small>${brandTag}${escapeHtml(c.client || '—')} · ${(c.assets || []).length} ASSETS</small>`;
     nav.appendChild(div);
   });
-  if (filtered.length === 0) nav.innerHTML = '<div style="font-size:11px; color:var(--muted-2); padding:8px 10px;">ยังไม่มีแคมเปญใต้ member นี้ — กด + ที่ Campaigns</div>';
 }
 
 function selectMember(email) {
@@ -10984,7 +11039,13 @@ window.__runTests = async function() {
   t('topbar user-chip hidden / sb-email present', () => ok(document.getElementById('sb-email')));
   t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
-  t('Campaigns nav section hidden (campaigns live in member cards)', () => ok(document.getElementById('campaigns-nav-section').style.display === 'none'));
+  t('Campaigns-first sidebar picker present (brand filter + search + list)', () => {
+    ok(document.getElementById('campaigns-nav-section'), 'campaigns-nav-section exists');
+    ok(document.getElementById('camp-brand-filter'), 'brand filter dropdown exists');
+    ok(document.getElementById('camp-search'), 'campaign search input exists');
+    ok(document.getElementById('campaign-list-nav'), 'campaign list container exists');
+    ok(typeof onCampaignNavBrand === 'function' && typeof onCampaignNavSearch === 'function', 'filter handlers defined');
+  });
   t('loadCampaignsFromIndex + onControlCampaignsChanged defined', () => ok(typeof loadCampaignsFromIndex === 'function' && typeof onControlCampaignsChanged === 'function'));
   t('toggleMemberCard + onMemberSearch defined', () => ok(typeof toggleMemberCard === 'function' && typeof onMemberSearch === 'function'));
   t('auto-resync API defined', () => ok(typeof maybeResync === 'function' && typeof startAutoResync === 'function' && typeof stopAutoResync === 'function'));
