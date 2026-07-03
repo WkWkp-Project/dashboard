@@ -198,6 +198,12 @@
   .main { overflow-x: hidden; }
   .topbar { height: 64px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 32px; gap: 24px; background: rgba(250,250,247,0.85); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  /* Brand moved into the topbar (top-left). Dark logo + ink wordmark for the
+     light bar (overrides the sidebar .brand-name light colour). */
+  .topbar-brand { display: flex; align-items: center; gap: 9px; }
+  .topbar-logo.brand-logo-img { height: 26px; width: auto; max-width: 140px; }
+  .topbar-brand-name.brand-name { font-family: 'Poppins','Prompt',sans-serif; font-weight: 800; font-size: 18px; color: var(--ink); letter-spacing: 0.2px; line-height: 1; }
+  .topbar-brand-tag.brand-db-tag { font-family: 'Space Mono',monospace; font-size: 11px; letter-spacing: 0.1em; color: var(--gold); border: 1px solid var(--gold); border-radius: 3px; padding: 2px 6px; }
   /* Data-source badge — shows whether the in-memory state came from Drive
      (canonical) or from a localStorage restore that still needs to sync. */
   .data-source-badge { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 12px; border: 1px solid transparent; cursor: default; }
@@ -864,16 +870,6 @@
 
 <div class="app" id="mainApp" style="display:none;">
   <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-mark">
-        <img src="assets/wakuwaku-logo-white.png" alt="WakuWaku" class="brand-logo-img" />
-      </div>
-      <div class="brand-sub">
-        <span class="brand-name">Content Asset</span>
-        <span class="brand-db-tag">DB</span>
-      </div>
-    </div>
-
     <div class="sidebar-user">
       <div class="sb-avatar" id="sb-avatar">W</div>
       <div style="overflow:hidden; min-width:0;">
@@ -943,6 +939,11 @@
 
   <main class="main">
     <div class="topbar">
+      <div class="topbar-brand">
+        <img src="assets/wakuwaku-logo.png" alt="WakuWaku" class="topbar-logo brand-logo-img" />
+        <span class="topbar-brand-name brand-name">Content Asset</span>
+        <span class="topbar-brand-tag brand-db-tag">DB</span>
+      </div>
       <div class="topbar-actions">
         <!-- Data-source badge: tells the user whether the in-memory state
              came from Drive (canonical) or from a localStorage restore
@@ -953,8 +954,8 @@
           <span id="saveStatusText">All changes saved</span>
         </div>
         <div class="user-chip">
-          <div class="avatar" id="tb-avatar">WP</div>
-          <span id="tb-name">Wakuwaku</span>
+          <div class="avatar" id="tb-avatar">·</div>
+          <span id="tb-name">—</span>
         </div>
       </div>
     </div>
@@ -3009,6 +3010,10 @@ async function tryRestoreSession() {
       document.getElementById('sb-name').textContent = name;
       const sbEmail2 = document.getElementById('sb-email'); if (sbEmail2) sbEmail2.textContent = currentUserEmail || '';
       document.getElementById('sb-avatar').textContent = initial;
+      // Mirror into the visible topbar chip.
+      document.getElementById('tb-name').textContent = name;
+      document.getElementById('tb-avatar').textContent = initial;
+      const uc2 = document.querySelector('.user-chip'); if (uc2) uc2.title = currentUserEmail || '';
       document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
@@ -3073,8 +3078,14 @@ async function tryRestoreSession() {
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainApp').style.display = 'grid';
       setSaveStatus('offline', 'Offline preview · changes won\'t persist');
-      document.getElementById('sb-name').textContent = s.profileName || (userRole === 'client' ? 'Client / Guest' : 'Internal (Offline)');
-      document.getElementById('sb-avatar').textContent = s.profileAvatar || (userRole === 'client' ? '👁' : '📦');
+      {
+        const rn = s.profileName || (userRole === 'client' ? 'Client / Guest' : 'Internal (Offline)');
+        const ra = s.profileAvatar || (userRole === 'client' ? '👁' : '📦');
+        document.getElementById('sb-name').textContent = rn;
+        document.getElementById('sb-avatar').textContent = ra;
+        document.getElementById('tb-name').textContent = rn;
+        document.getElementById('tb-avatar').textContent = ra;
+      }
       document.getElementById('sb-mode-tag').textContent = userRole === 'client' ? 'Client View · Read Only' : 'Offline Preview';
       document.getElementById('sb-mode-tag').style.color = "var(--gold)";
       renderEverything();
@@ -8886,6 +8897,8 @@ function loadDataOffline(data, providedToken) {
 
   document.getElementById('sb-name').textContent = userRole === 'client' ? 'Client / Guest' : 'Internal (Offline)';
   document.getElementById('sb-avatar').textContent = userRole === 'client' ? '👁' : '📦';
+  document.getElementById('tb-name').textContent = userRole === 'client' ? 'Client / Guest' : 'Internal (Offline)';
+  document.getElementById('tb-avatar').textContent = userRole === 'client' ? '👁' : '📦';
   document.getElementById('sb-mode-tag').textContent = userRole === 'client' ? 'Client View · Read Only' : 'Offline Preview';
   document.getElementById('sb-mode-tag').style.color = "var(--gold)";
 
