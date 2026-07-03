@@ -88,7 +88,7 @@
   .auth-meta { font-size:10px; color:var(--muted-2); margin-top:14px; line-height:1.5; text-align:center; }
 
   /* Layout */
-  .app { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; position: relative; z-index: 2; }
+  .app { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; position: relative; z-index: 2; }
 
   /* Sidebar */
   .sidebar { background: var(--ink); color: var(--paper); border-right: 1px solid var(--ink-2); padding: 24px 0; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
@@ -309,12 +309,18 @@
   .camp-grid-toolbar input:focus, .camp-grid-toolbar select:focus { border-color: var(--gold); }
   .camp-grid-toolbar select { cursor: pointer; min-width: 160px; }
   .camp-grid-count { margin-left: auto; font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
-  .camp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+  /* Campaigns are grouped by brand (Creator-Hub style): a brand header, then a
+     card grid of that brand's campaigns. The wrap stacks the brand sections. */
+  .camp-grid-wrap { display: flex; flex-direction: column; gap: 32px; }
+  .camp-brand-header { display: flex; align-items: baseline; gap: 12px; padding-bottom: 10px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+  .camp-brand-header .cbh-name { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 21px; color: var(--ink); letter-spacing: -0.01em; }
+  .camp-brand-header .cbh-name::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); margin-right: 11px; vertical-align: middle; }
+  .camp-brand-header .cbh-count { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .camp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
   .camp-card { border: 1px solid var(--line); border-radius: 8px; background: var(--paper); overflow: hidden; cursor: pointer; transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s; display: flex; flex-direction: column; }
   .camp-card:hover { box-shadow: 0 12px 22px -8px rgba(0,0,0,0.14); transform: translateY(-2px); border-color: var(--gold); }
-  .camp-card-top { padding: 16px 16px 14px; flex: 1; }
-  .camp-card-brand { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); margin-bottom: 7px; min-height: 12px; }
-  .camp-card-name { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 21px; line-height: 1.15; color: var(--ink); letter-spacing: -0.01em; }
+  .camp-card-top { padding: 18px 16px 14px; flex: 1; }
+  .camp-card-name { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 20px; line-height: 1.18; color: var(--ink); letter-spacing: -0.01em; }
   .camp-card-client { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .camp-card-foot { padding: 11px 16px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); background: var(--paper-2); }
   .camp-card-count { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.06em; color: var(--muted); }
@@ -963,7 +969,7 @@
         <select id="camp-grid-brand" onchange="onCampaignNavBrand(this.value)"><option value="">All brands</option></select>
         <span class="camp-grid-count" id="camp-grid-count"></span>
       </div>
-      <div class="camp-grid" id="camp-grid"></div>
+      <div class="camp-grid-wrap" id="camp-grid"></div>
     </div>
 
     <!-- ============ OVERVIEW VIEW (campaign detail) ============ -->
@@ -5775,28 +5781,54 @@ function renderCampaignsGrid() {
     const msg = (_campNavBrand || _campNavSearch)
       ? 'ไม่พบแคมเปญตามตัวกรอง'
       : (isAdmin ? 'ยังไม่มีแคมเปญ — กด + New Campaign เพื่อเริ่ม' : 'ยังไม่มีแคมเปญที่มอบหมายให้คุณ');
-    grid.innerHTML = `<div class="camp-grid-empty" style="grid-column:1/-1;"><div class="cge-title">— No campaigns —</div><p style="font-size:13px;">${msg}</p></div>`;
+    grid.innerHTML = `<div class="camp-grid-empty"><div class="cge-title">— No campaigns —</div><p style="font-size:13px;">${msg}</p></div>`;
     return;
   }
+  // Group by brand (Creator-Hub style): one section per brand, each with a
+  // header + its own card grid. Un-branded campaigns fall into a trailing
+  // "no brand" group so nothing is dropped.
+  const NO_BRAND = ' nobrand';
+  const groups = new Map(); // key -> { label, items }
   list.forEach(c => {
-    const card = document.createElement('div');
-    card.className = 'camp-card';
-    card.onclick = () => openCampaignDetail(c.id);
-    const status = c.status === 'handed-off' ? 'completed' : (c.status || 'draft');
-    const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
-    const brandLine = c.brand ? escapeHtml(c.brand) : '&nbsp;';
-    card.innerHTML =
-      `<div class="camp-card-top">
-         <div class="camp-card-brand">${brandLine}</div>
-         <div class="camp-card-name">${escapeHtml(c.campaign || 'Untitled')}</div>
-         <div class="camp-card-client">${escapeHtml(c.client || '—')}</div>
-       </div>
-       <div class="camp-card-foot">
-         <span class="camp-card-count">${(c.assets || []).length} assets</span>
-         <span class="status-pill ${status}">${escapeHtml(statusLabel)}</span>
-       </div>`;
-    grid.appendChild(card);
+    const b = (c.brand || '').trim();
+    const key = b ? b.toLowerCase() : NO_BRAND;
+    if (!groups.has(key)) groups.set(key, { label: b || 'ไม่ระบุแบรนด์', items: [] });
+    groups.get(key).items.push(c);
   });
+  const ordered = Array.from(groups.entries()).sort((a, b) => {
+    if (a[0] === NO_BRAND) return 1;
+    if (b[0] === NO_BRAND) return -1;
+    return a[1].label.localeCompare(b[1].label);
+  });
+  ordered.forEach(([, g]) => {
+    const section = document.createElement('div');
+    section.className = 'camp-brand-group';
+    section.innerHTML = `<div class="camp-brand-header"><span class="cbh-name">${escapeHtml(g.label)}</span><span class="cbh-count">${g.items.length} campaign${g.items.length === 1 ? '' : 's'}</span></div>`;
+    const cards = document.createElement('div');
+    cards.className = 'camp-grid';
+    g.items.forEach(c => cards.appendChild(_makeCampaignCard(c)));
+    section.appendChild(cards);
+    grid.appendChild(section);
+  });
+}
+// Build one campaign card element. Brand is intentionally NOT repeated on the
+// card since the brand section header above already carries it.
+function _makeCampaignCard(c) {
+  const card = document.createElement('div');
+  card.className = 'camp-card';
+  card.onclick = () => openCampaignDetail(c.id);
+  const status = c.status === 'handed-off' ? 'completed' : (c.status || 'draft');
+  const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+  card.innerHTML =
+    `<div class="camp-card-top">
+       <div class="camp-card-name">${escapeHtml(c.campaign || 'Untitled')}</div>
+       <div class="camp-card-client">${escapeHtml(c.client || '—')}</div>
+     </div>
+     <div class="camp-card-foot">
+       <span class="camp-card-count">${(c.assets || []).length} assets</span>
+       <span class="status-pill ${status}">${escapeHtml(statusLabel)}</span>
+     </div>`;
+  return card;
 }
 // Back-compat: renderEverything + legacy callers still call renderCampaignNav.
 function renderCampaignNav() { renderCampaignsGrid(); }
