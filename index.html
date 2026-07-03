@@ -98,7 +98,10 @@
   .brand-logo-img { height: 30px; width: auto; max-width: 150px; object-fit: contain; display: block; }
   .brand-db-tag { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.1em; color: var(--gold); border: 1px solid var(--gold); border-radius: 3px; padding: 2px 6px; align-self: center; }
   .sb-email { display: block; font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
-  .user-chip { display: none !important; }
+  /* Identity lives in the topbar user-chip now (Creator-Hub style). The old
+     sidebar-user block is hidden but kept in the DOM as a data holder (session
+     save + role code still read sb-name / sb-email / sb-avatar). */
+  .sidebar-user { display: none !important; }
   body.hide-audit-log #overview-audit-log { display: none !important; }
   .brand-sub { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 14px; }
   .brand-name { font-family: 'Poppins', 'Prompt', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: 0.2px; line-height: 1.1; }
@@ -328,6 +331,12 @@
   .camp-grid-empty .cge-title { font-family: 'Playfair Display', serif; font-size: 24px; margin-bottom: 10px; color: var(--muted); }
   .back-to-campaigns { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 4px 0; margin-bottom: 10px; cursor: pointer; font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); transition: color 0.15s; }
   .back-to-campaigns:hover { color: var(--accent); }
+
+  /* Settings roster console — a dark panel on the light Settings page that
+     hosts the member drawers/cards (which are styled for the dark sidebar).
+     Keeps their existing styling working without a full light re-theme. */
+  .settings-roster { background: var(--ink); border: 1px solid var(--ink-2); border-radius: 10px; padding: 20px 22px 22px; max-width: 760px; color: var(--paper); }
+  .settings-roster .member-search { margin-bottom: 14px; }
 
   .section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .section-num { font-family: 'Playfair Display', serif; font-style: italic; font-size: 30px; font-weight: 700; color: var(--accent); line-height: 1; }
@@ -835,32 +844,8 @@
       </div>
     </div>
 
-    <div class="nav-section">
-      <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member (ครอบทุกกลุ่ม)..." oninput="onMemberSearch(this.value)" />
-
-      <div class="nav-label collapsible" id="team-drawer-label" onclick="toggleMembersDrawer(event, 'team')">
-        <span class="nav-label-left">
-          <span class="nav-chevron">▾</span>
-          <span>🛠 Team</span>
-          <span class="nav-count" id="team-count">0</span>
-        </span>
-        <button class="add-btn" onclick="event.stopPropagation(); openAddMemberModal()" title="เพิ่ม member (admin/editor/operation/customer)">+</button>
-      </div>
-      <div class="nav-drawer" id="team-drawer">
-        <div id="team-list-nav"></div>
-      </div>
-
-      <div class="nav-label collapsible collapsed" id="customer-drawer-label" onclick="toggleMembersDrawer(event, 'customer')" style="margin-top:8px;">
-        <span class="nav-label-left">
-          <span class="nav-chevron">▾</span>
-          <span>👁 Customers</span>
-          <span class="nav-count" id="customer-count">0</span>
-        </span>
-      </div>
-      <div class="nav-drawer collapsed" id="customer-drawer">
-        <div id="customer-list-nav"></div>
-      </div>
-    </div>
+    <!-- Members moved to the Settings view (Creator-Hub style) — sidebar is
+         nav-links only now. -->
 
     <div class="nav-section">
       <div class="nav-label"><span>Views</span></div>
@@ -883,6 +868,10 @@
       <div class="nav-item" data-view="hub" onclick="switchView('hub')" id="nav-hub" style="display:none;">
         <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
         Data Hub
+      </div>
+      <div class="nav-item admin-only" data-view="settings" onclick="switchView('settings')">
+        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Members
       </div>
     </div>
 
@@ -1107,6 +1096,46 @@
           </span>
         </div>
         <div class="history-body" id="historyBody"></div>
+      </div>
+    </div>
+
+    <!-- ============ SETTINGS / MEMBERS VIEW ============ -->
+    <div class="page view-container" id="view-settings">
+      <div class="hero">
+        <div>
+          <div class="hero-eyebrow">Settings · Team</div>
+          <h1>Team &amp; <em>Members</em></h1>
+          <p>จัดการทีมงานและลูกค้า · เพิ่ม / แก้บทบาท / มอบหมายแคมเปญ · role กำหนดสิทธิ์การเห็นและแก้ไข</p>
+        </div>
+        <div class="hero-actions">
+          <button class="btn admin-only" onclick="openAddMemberModal()">+ Add Member</button>
+        </div>
+      </div>
+      <!-- Dark roster console — reuses the member-card / drawer components
+           (styled for the dark sidebar) inside the light Settings page. -->
+      <div class="settings-roster">
+        <input type="text" id="member-search" class="member-search" placeholder="🔍 ค้นหา member (ครอบทุกกลุ่ม)..." oninput="onMemberSearch(this.value)" />
+        <div class="nav-label collapsible" id="team-drawer-label" onclick="toggleMembersDrawer(event, 'team')">
+          <span class="nav-label-left">
+            <span class="nav-chevron">▾</span>
+            <span>🛠 Team</span>
+            <span class="nav-count" id="team-count">0</span>
+          </span>
+          <button class="add-btn" onclick="event.stopPropagation(); openAddMemberModal()" title="เพิ่ม member (admin/editor/operation/customer)">+</button>
+        </div>
+        <div class="nav-drawer" id="team-drawer">
+          <div id="team-list-nav"></div>
+        </div>
+        <div class="nav-label collapsible" id="customer-drawer-label" onclick="toggleMembersDrawer(event, 'customer')" style="margin-top:14px;">
+          <span class="nav-label-left">
+            <span class="nav-chevron">▾</span>
+            <span>👁 Customers</span>
+            <span class="nav-count" id="customer-count">0</span>
+          </span>
+        </div>
+        <div class="nav-drawer" id="customer-drawer">
+          <div id="customer-list-nav"></div>
+        </div>
       </div>
     </div>
 
@@ -2631,6 +2660,10 @@ async function onLoginSuccess() {
       document.getElementById('sb-name').textContent = name;
       const sbEmail = document.getElementById('sb-email'); if (sbEmail) sbEmail.textContent = userEmail || currentUserEmail || '';
       document.getElementById('sb-avatar').textContent = initial;
+      // Mirror into the topbar user-chip (now the visible identity slot).
+      document.getElementById('tb-name').textContent = name;
+      document.getElementById('tb-avatar').textContent = initial;
+      const uc = document.querySelector('.user-chip'); if (uc) uc.title = userEmail || currentUserEmail || '';
     } else { throw new Error('userinfo HTTP ' + userResp.status); }
   } catch(e) {
     console.warn('Profile load failed:', e);
@@ -5277,6 +5310,7 @@ function switchView(name) {
   const navItem = document.querySelector(`.nav-item[data-view="${name}"]`);
   if (navItem) navItem.classList.add('active');
   if (name === 'campaigns') renderCampaignsGrid();
+  if (name === 'settings') renderMemberNav();
   if (name === 'calendar') renderCalendar();
   if (name === 'access') renderAccessTable();
   if (name === 'hub') renderDataHub();
@@ -11127,7 +11161,11 @@ window.__runTests = async function() {
     ok(r.length === 2 && r.some(c => c.id === 1) && r.some(c => c.id === 2));
   });
   t('brand shows logo image + program name + DB tag', () => ok(document.querySelector('.brand-logo-img') && /Content Asset/.test(document.querySelector('.brand-name')?.textContent || '') && /DB/.test(document.querySelector('.brand-db-tag')?.textContent || '')));
-  t('topbar user-chip hidden / sb-email present', () => ok(document.getElementById('sb-email')));
+  t('topbar user-chip is the visible identity slot (sidebar-user hidden data-holder)', () => {
+    ok(document.querySelector('.user-chip') && getComputedStyle(document.querySelector('.user-chip')).display !== 'none', 'topbar user-chip shown');
+    ok(document.getElementById('tb-name') && document.getElementById('tb-avatar'), 'tb-name + tb-avatar present');
+    ok(document.getElementById('sb-name') && document.getElementById('sb-email'), 'sb-name / sb-email kept as data holders');
+  });
   t('syncDatabaseFromDrive reacquires token on refresh (source guard)', () => { const src = syncDatabaseFromDrive.toString(); ok(/waitForFreshToken/.test(src) && /fbAuth\.currentUser/.test(src)); });
   t('member search box exists', () => ok(document.getElementById('member-search')));
   t('Campaigns landing grid present (master→detail, brand filter + search)', () => {
