@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Content Asset DB</title>
-<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+<link rel="icon" type="image/png" href="assets/favicon-c.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,700;0,800;1,500;1,700&family=Poppins:wght@300;400;500;600;700&family=Prompt:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -199,11 +199,10 @@
   .main { overflow-x: hidden; }
   .topbar { height: 64px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 32px; gap: 24px; background: rgba(250,250,247,0.85); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-  /* CONTENT logo in the topbar top-left: gold square-C mark + "CONTENT"
-     wordmark (the WakuWaku logo stays in the sidebar). */
-  .topbar-brand { display: flex; align-items: center; gap: 10px; color: #7A5A12; }
-  .topbar-mark { width: 27px; height: 27px; flex-shrink: 0; }
-  .topbar-brand-name.brand-name { font-family: 'Poppins','Prompt',sans-serif; font-weight: 800; font-size: 20px; color: #7A5A12; letter-spacing: 0.06em; line-height: 1; }
+  /* CONTENT logo (real brand asset) in the topbar top-left — icon + wordmark
+     as one image. The WakuWaku logo stays in the sidebar. */
+  .topbar-brand { display: flex; align-items: center; }
+  .topbar-logo-img { height: 30px; width: auto; max-width: 220px; object-fit: contain; display: block; }
   /* Data-source badge — shows whether the in-memory state came from Drive
      (canonical) or from a localStorage restore that still needs to sync. */
   .data-source-badge { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 12px; border: 1px solid transparent; cursor: default; }
@@ -946,9 +945,8 @@
   <main class="main">
     <div class="topbar">
       <div class="topbar-brand">
-        <svg class="topbar-mark" viewBox="0 0 100 100" aria-hidden="true"><rect x="4" y="4" width="92" height="92" rx="4" fill="none" stroke="currentColor" stroke-width="9"/><path d="M58.5 34 A15 15 0 1 0 58.5 52" fill="none" stroke="currentColor" stroke-width="10"/><rect x="39" y="62" width="22" height="7.5" fill="currentColor"/></svg>
-        <span class="topbar-brand-name brand-name">CONTENT</span>
-        <span class="topbar-brand-tag brand-db-tag" hidden>DB</span>
+        <img class="topbar-logo-img" src="assets/content-logo.png" alt="Content" />
+        <span class="topbar-brand-name brand-name" hidden>CONTENT</span>
       </div>
       <div class="topbar-actions">
         <!-- Data-source badge: tells the user whether the in-memory state
@@ -11277,7 +11275,7 @@ window.__runTests = async function() {
     isAdmin = svA; userRoleControl = svC; assignedCampaignFolderIds = svF; currentUserEmail = svE;
     ok(r.length === 2 && r.some(c => c.id === 1) && r.some(c => c.id === 2));
   });
-  t('brand: sidebar logo image + topbar CONTENT wordmark + mark', () => ok(document.querySelector('.brand-logo-img') && /CONTENT/.test(document.querySelector('.topbar-brand-name')?.textContent || '') && document.querySelector('.topbar-mark')));
+  t('brand: sidebar logo image + topbar CONTENT logo image', () => ok(document.querySelector('.brand-logo-img') && document.querySelector('.topbar-logo-img') && /content-logo/.test(document.querySelector('.topbar-logo-img')?.getAttribute('src') || '')));
   t('topbar user-chip is the visible identity slot (sidebar-user hidden data-holder)', () => {
     ok(document.querySelector('.user-chip') && getComputedStyle(document.querySelector('.user-chip')).display !== 'none', 'topbar user-chip shown');
     ok(document.getElementById('tb-name') && document.getElementById('tb-avatar'), 'tb-name + tb-avatar present');
