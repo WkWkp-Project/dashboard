@@ -46,6 +46,14 @@ service cloud.firestore {
       allow write: if isAdmin() || isBootstrapAdmin();
     }
 
+    // Shared brand registry — { name, company, logoFileId, logoUrl }. The logo
+    // image stays on Drive; only pointers live here. Any signed-in user may
+    // read; admins (or bootstrap-domain admins) may write.
+    match /control_brands/{brandId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin() || isBootstrapAdmin();
+    }
+
     // Lightweight signal channel — { ts, modifiedBy, displayName, deleted? }
     // pinged after a successful Drive write or campaign delete, so other admins
     // see a live "Refresh" banner instead of waiting for the 45s poll. Carries

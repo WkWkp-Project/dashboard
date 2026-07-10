@@ -21,6 +21,7 @@
 
   var COLLECTION = 'control_members';
   var COLLECTION_CAMPAIGNS = 'control_campaigns';
+  var COLLECTION_BRANDS = 'control_brands';
   var COLLECTION_PRESENCE = 'control_presence';
   // Lightweight signal channel — small docs (~100 bytes) that announce
   // "this campaign was changed on Drive at ts by modifiedBy". Data itself
@@ -348,6 +349,87 @@
       if (!id) return Promise.reject(new Error('removeCampaign: id required'));
       if (!this._db) return Promise.reject(new Error('Firestore not available'));
       return this._db.collection(COLLECTION_CAMPAIGNS).doc(id).delete();
+    },
+
+    // --- Brands (shared registry: name + company + logo) ---------------------
+    // Small control-plane docs; the logo image itself stays on Drive (we keep
+    // only a driveFileId / url here). Lets every admin manage the same brands
+    // + logos and see them live. doc id = brand id.
+    _brands: [],
+    _brandsUnsub: null,
+    _onBrandsChange: null,
+    _brandsReady: false,
+
+    brandsReady: function () { return this._brandsReady; },
+    cachedBrands: function () { return this._brands.slice(); },
+
+    _normBrand: function (id, data) {
+      data = data || {};
+      return {
+        id: data.id || id,
+        name: data.name || '',
+        company: data.company || '',
+        logoFileId: data.logoFileId || '',
+        logoUrl: data.logoUrl || '',
+        updatedAt: data.updatedAt || '',
+        updatedBy: data.updatedBy || ''
+      };
+    },
+
+    subscribeBrands: function (onChange) {
+      var self = this;
+      this._onBrandsChange = typeof onChange === 'function' ? onChange : null;
+      if (!this._db) {
+        self._brandsReady = true;
+        if (self._onBrandsChange) self._onBrandsChange(self.cachedBrands());
+        return function () {};
+      }
+      if (this._brandsUnsub) { try { this._brandsUnsub(); } catch (e) {} this._brandsUnsub = null; }
+      this._brandsUnsub = this._db.collection(COLLECTION_BRANDS).onSnapshot(function (snap) {
+        var list = [];
+        snap.forEach(function (doc) { list.push(self._normBrand(doc.id, doc.data())); });
+        self._brands = list;
+        self._brandsReady = true;
+        if (self._onBrandsChange) self._onBrandsChange(self.cachedBrands());
+      }, function (err) {
+        console.error('[Control] brands snapshot error:', err);
+        self._brandsReady = true;
+        if (self._onBrandsChange) self._onBrandsChange(self.cachedBrands());
+      });
+      return this._brandsUnsub;
+    },
+
+    listBrands: function () {
+      var self = this;
+      if (!this._db) return Promise.resolve(this.cachedBrands());
+      return this._db.collection(COLLECTION_BRANDS).get().then(function (snap) {
+        var list = [];
+        snap.forEach(function (doc) { list.push(self._normBrand(doc.id, doc.data())); });
+        self._brands = list;
+        self._brandsReady = true;
+        return self.cachedBrands();
+      });
+    },
+
+    upsertBrand: function (meta) {
+      if (!meta || !meta.id) return Promise.reject(new Error('upsertBrand: id required'));
+      if (!this._db) return Promise.reject(new Error('Firestore not available'));
+      var doc = {
+        id: meta.id,
+        name: meta.name || '',
+        company: meta.company || '',
+        logoFileId: meta.logoFileId || '',
+        logoUrl: meta.logoUrl || '',
+        updatedAt: new Date().toISOString(),
+        updatedBy: meta.updatedBy || ''
+      };
+      return this._db.collection(COLLECTION_BRANDS).doc(meta.id).set(doc, { merge: true });
+    },
+
+    removeBrand: function (id) {
+      if (!id) return Promise.reject(new Error('removeBrand: id required'));
+      if (!this._db) return Promise.reject(new Error('Firestore not available'));
+      return this._db.collection(COLLECTION_BRANDS).doc(id).delete();
     },
 
     // --- Presence (online Wkwk team) -----------------------------------------
