@@ -382,24 +382,11 @@
   .member-row-actions button:hover { border-color: var(--gold); color: var(--gold); background: #F5EEDD; }
   .member-group-empty { padding: 16px 18px; color: var(--muted-2); font-size: 13px; }
 
-  /* Manage Brands modal + brand logo in grid headers */
-  .brand-add-row { display: flex; gap: 10px; margin-bottom: 18px; }
-  .brand-add-row input { flex: 1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-family: 'Poppins','Prompt',sans-serif; font-size: 14px; background: var(--paper); color: var(--ink); outline: none; }
-  .brand-add-row input:focus { border-color: var(--gold); }
-  .btn.brand-add-btn { background: var(--gold); color: #fff; border-color: var(--gold); }
-  .btn.brand-add-btn:hover { filter: brightness(0.93); }
-  #brands-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
-  .brands-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
-  .brand-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
-  .brand-logo-thumb { width: 40px; height: 40px; border-radius: 8px; background: var(--paper-2); flex-shrink: 0; display: grid; place-items: center; overflow: hidden; font-size: 16px; }
-  .brand-logo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .brand-logo-empty { color: var(--muted-2); }
-  .brand-row-name { font-weight: 600; font-size: 14px; min-width: 100px; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .brand-row-company { flex: 1; min-width: 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-family: 'Poppins','Prompt',sans-serif; font-size: 13px; background: var(--paper); color: var(--ink); outline: none; }
-  .brand-row-company:focus { border-color: var(--gold); }
-  .brand-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  .brand-row-actions button { width: 32px; height: 32px; border: 1px solid var(--line); background: var(--paper); border-radius: 6px; cursor: pointer; display: grid; place-items: center; color: var(--muted); transition: all 0.12s; }
-  .brand-row-actions button:hover { border-color: var(--gold); color: var(--gold); background: #F5EEDD; }
+  /* Brand logo — inline in the Edit Info modal + shown in grid brand headers */
+  .brand-edit-logo { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .brand-edit-thumb { width: 38px; height: 38px; border-radius: 8px; background: var(--paper-2); border: 1px solid var(--line); flex-shrink: 0; display: grid; place-items: center; overflow: hidden; font-size: 16px; }
+  .brand-edit-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #editBrandLogoBtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .camp-brand-header.has-logo { align-items: center; }
   .camp-brand-header.has-logo .cbh-name::before { display: none; }
   .cbh-logo { width: 26px; height: 26px; border-radius: 6px; overflow: hidden; background: var(--paper-2); display: inline-grid; place-items: center; flex-shrink: 0; }
@@ -1017,7 +1004,6 @@
           <p>เลือกแคมเปญเพื่อเข้าดูรายละเอียด · กรองตามแบรนด์หรือค้นหาชื่อ</p>
         </div>
         <div class="hero-actions">
-          <button class="btn admin-only" onclick="openManageBrandsModal()">🏷 Brands</button>
           <button class="btn admin-only" onclick="openAddCampaignModal()">+ New Campaign</button>
         </div>
       </div>
@@ -1577,26 +1563,6 @@
   </div>
 </div>
 
-<!-- Manage Brands Modal -->
-<div class="simple-overlay" id="manageBrandsModal">
-  <div class="simple-modal lg">
-    <div class="simple-modal-head">
-      <h3>🏷 Manage Brands</h3>
-      <button class="close-btn" onclick="closeManageBrandsModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="simple-modal-body">
-      <div class="brand-add-row">
-        <input type="text" id="newBrandName" placeholder="ชื่อแบรนด์ใหม่" onkeydown="if(event.key==='Enter')addBrandFromInput()" />
-        <button class="btn brand-add-btn" onclick="addBrandFromInput()">เพิ่ม</button>
-      </div>
-      <div id="brands-list"></div>
-    </div>
-    <div class="simple-modal-footer">
-      <button class="btn" onclick="closeManageBrandsModal()">Close</button>
-    </div>
-  </div>
-</div>
-
 <!-- Add Member Modal -->
 <div class="simple-overlay" id="addMemberModal">
   <div class="simple-modal lg">
@@ -1718,7 +1684,15 @@
     <div class="simple-modal-body">
       <div class="grid-2">
         <div class="input-group"><label>Company Name <span class="req">*</span></label><input type="text" id="editClient" placeholder="e.g. Ocean Bites Co., Ltd." /></div>
-        <div class="input-group"><label>Brand</label><input type="text" id="editBrand" placeholder="e.g. Ocean Bites · Tipco · KFC" /></div>
+        <div class="input-group">
+          <label>Brand <small class="hint-label">(โลโก้ผูกกับชื่อแบรนด์ · ใช้ร่วมทุกแคมเปญของแบรนด์เดียวกัน)</small></label>
+          <input type="text" id="editBrand" placeholder="e.g. Ocean Bites · Tipco · KFC" oninput="onEditBrandInput()" />
+          <div class="brand-edit-logo">
+            <span class="brand-edit-thumb" id="editBrandLogoThumb">🏷</span>
+            <button type="button" class="btn sm" id="editBrandLogoBtn" onclick="document.getElementById('editBrandLogoFile').click()">📷 อัปโหลดโลโก้</button>
+            <input type="file" id="editBrandLogoFile" accept="image/*" style="display:none" onchange="uploadEditBrandLogo(this)" />
+          </div>
+        </div>
       </div>
 
       <div class="input-group">
@@ -2675,7 +2649,8 @@ function onControlCampaignsChanged() {
 function onControlBrandsChanged(list) {
   brands = (list || (window.Control && window.Control.cachedBrands ? window.Control.cachedBrands() : [])).slice();
   if (document.getElementById('view-campaigns')?.classList.contains('active') && typeof renderCampaignsGrid === 'function') renderCampaignsGrid();
-  if (document.getElementById('manageBrandsModal')?.classList.contains('show') && typeof renderBrandsModal === 'function') renderBrandsModal();
+  // Refresh the Edit Info logo preview if the modal is open on this brand.
+  if (document.getElementById('editInfoModal')?.classList.contains('show') && typeof _refreshEditBrandLogo === 'function') _refreshEditBrandLogo();
 }
 // Look up a brand record by (case-insensitive) name — campaigns reference
 // brands by their free-text name, so the logo is resolved by matching.
@@ -6045,21 +6020,8 @@ function renderCampaignNav() { renderCampaignsGrid(); }
 // Campaigns reference a brand by its free-text name; the logo is resolved by
 // matching name → brand record (findBrandByName).
 // ============================================================================
-function openManageBrandsModal() {
-  if (blockUnless('manageMembers', 'จัดการแบรนด์ได้เฉพาะ admin')) return;
-  document.getElementById('newBrandName').value = '';
-  renderBrandsModal();
-  document.getElementById('manageBrandsModal').classList.add('show');
-}
-function closeManageBrandsModal() { document.getElementById('manageBrandsModal').classList.remove('show'); }
-
-function _brandLogoThumbHTML(b) {
-  if (b.logoUrl) return `<img class="brand-logo-thumb" src="${escapeHtml(b.logoUrl)}" alt="" />`;
-  if (b.logoFileId) return `<span class="brand-logo-thumb" data-logo="${escapeHtml(b.logoFileId)}">🏷</span>`;
-  return `<span class="brand-logo-thumb brand-logo-empty">🏷</span>`;
-}
 // Resolve any data-logo placeholders inside a container by loading the Drive
-// image (cached). Shared by the modal + the grid brand headers.
+// image (cached). Used by the grid brand headers + the Edit Info logo preview.
 function _resolveBrandLogos(container) {
   if (!container) return;
   setTimeout(() => {
@@ -6074,82 +6036,49 @@ function _resolveBrandLogos(container) {
   }, 30);
 }
 
-function renderBrandsModal() {
-  const wrap = document.getElementById('brands-list');
-  if (!wrap) return;
-  const list = brands.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  if (!list.length) {
-    wrap.innerHTML = `<div class="brands-empty">ยังไม่มีแบรนด์ — พิมพ์ชื่อด้านบนแล้วกด "เพิ่ม"</div>`;
-    return;
-  }
-  wrap.innerHTML = list.map(b => `
-    <div class="brand-row" data-id="${escapeHtml(b.id)}">
-      ${_brandLogoThumbHTML(b)}
-      <span class="brand-row-name" title="${escapeHtml(b.name)}">${escapeHtml(b.name)}</span>
-      <input class="brand-row-company" value="${escapeHtml(b.company || '')}" placeholder="บริษัทเจ้าของแบรนด์ (Company)" onchange="updateBrandCompany('${escapeHtml(b.id)}', this.value)" />
-      <div class="brand-row-actions">
-        <button title="อัปโหลดโลโก้" onclick="document.getElementById('brandLogoFile_${escapeHtml(b.id)}').click()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
-        <input type="file" id="brandLogoFile_${escapeHtml(b.id)}" accept="image/*" style="display:none" onchange="uploadBrandLogo('${escapeHtml(b.id)}', this)" />
-        <button title="แก้ชื่อ" onclick="renameBrand('${escapeHtml(b.id)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-        <button title="ลบ" onclick="deleteBrandRow('${escapeHtml(b.id)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-      </div>
-    </div>`).join('');
-  _resolveBrandLogos(wrap);
+// ---- Brand logo, managed inline in the Edit Info modal --------------------
+// The brand name typed in the campaign IS the key: uploading a logo upserts
+// the shared registry brand keyed by that name, so every campaign with the
+// same brand shows the same logo (incl. old campaigns that already had the
+// brand typed). No separate registry screen needed.
+function onEditBrandInput() { _refreshEditBrandLogo(); }
+
+function _refreshEditBrandLogo() {
+  const thumb = document.getElementById('editBrandLogoThumb');
+  const btn = document.getElementById('editBrandLogoBtn');
+  if (!thumb) return;
+  const name = (document.getElementById('editBrand')?.value || '').trim();
+  const b = name ? findBrandByName(name) : null;
+  if (btn) { btn.disabled = !name; btn.textContent = (b && (b.logoFileId || b.logoUrl)) ? '🔄 เปลี่ยนโลโก้' : '📷 อัปโหลดโลโก้'; }
+  thumb.innerHTML = '🏷';
+  thumb.removeAttribute('data-logo');
+  if (b && b.logoUrl) thumb.innerHTML = `<img src="${escapeHtml(b.logoUrl)}" alt="">`;
+  else if (b && b.logoFileId) { thumb.setAttribute('data-logo', b.logoFileId); _resolveBrandLogos(thumb.parentElement); }
 }
 
-async function addBrandFromInput() {
-  if (blockUnless('manageMembers', 'จัดการแบรนด์ได้เฉพาะ admin')) return;
-  if (!window.Control || !window.Control.available()) { showToast('Control plane (Firestore) ใช้ไม่ได้', 'err'); return; }
-  const name = document.getElementById('newBrandName').value.trim();
-  if (!name) { showToast('พิมพ์ชื่อแบรนด์ก่อน', 'warn'); return; }
-  if (findBrandByName(name)) { showToast('มีแบรนด์ชื่อนี้แล้ว', 'warn'); return; }
-  const id = 'brand-' + Date.now() + Math.random().toString(36).slice(2, 6);
-  try {
-    await window.Control.upsertBrand({ id, name, updatedBy: currentUserEmail });
-    document.getElementById('newBrandName').value = '';
-    showToast('✓ เพิ่มแบรนด์แล้ว', 'ok');
-  } catch (e) { showToast('เพิ่มไม่สำเร็จ: ' + (e.message || ''), 'err'); }
-}
-
-async function updateBrandCompany(id, company) {
-  const b = brands.find(x => x.id === id); if (!b) return;
-  try { await window.Control.upsertBrand({ id, name: b.name, company: (company || '').trim(), logoFileId: b.logoFileId, logoUrl: b.logoUrl, updatedBy: currentUserEmail }); }
-  catch (e) { showToast('บันทึก company ไม่สำเร็จ', 'err'); }
-}
-
-function renameBrand(id) {
-  const b = brands.find(x => x.id === id); if (!b) return;
-  const nn = (prompt('เปลี่ยนชื่อแบรนด์', b.name) || '').trim();
-  if (!nn || nn === b.name) return;
-  if (findBrandByName(nn)) { showToast('มีแบรนด์ชื่อนี้แล้ว', 'warn'); return; }
-  window.Control.upsertBrand({ id, name: nn, company: b.company, logoFileId: b.logoFileId, logoUrl: b.logoUrl, updatedBy: currentUserEmail })
-    .then(() => showToast('✓ เปลี่ยนชื่อแล้ว', 'ok')).catch(() => showToast('เปลี่ยนชื่อไม่สำเร็จ', 'err'));
-}
-
-function deleteBrandRow(id) {
-  const b = brands.find(x => x.id === id); if (!b) return;
-  showConfirm('ลบแบรนด์?', `ลบ "${b.name}" ออกจาก registry?\n(แคมเปญที่ใช้ชื่อแบรนด์นี้ยังอยู่ปกติ แค่ไม่มีโลโก้/company)`, async () => {
-    try { await window.Control.removeBrand(id); showToast('✓ ลบแบรนด์แล้ว', 'ok'); }
-    catch (e) { showToast('ลบไม่สำเร็จ', 'err'); }
-  });
-}
-
-async function uploadBrandLogo(id, inputEl) {
-  const b = brands.find(x => x.id === id); if (!b) return;
+async function uploadEditBrandLogo(inputEl) {
+  const name = (document.getElementById('editBrand')?.value || '').trim();
+  if (!name) { showToast('กรอกชื่อ Brand ก่อน แล้วค่อยอัปโหลดโลโก้', 'warn'); inputEl.value = ''; return; }
   const file = inputEl.files && inputEl.files[0];
   if (!file) return;
   if (file.size > 5 * 1024 * 1024) { showToast('โลโก้ใหญ่เกิน 5MB — ย่อก่อน', 'err'); inputEl.value = ''; return; }
   if (!accessToken) { showToast('ต้อง login Google Drive ก่อน', 'err'); inputEl.value = ''; return; }
+  if (!window.Control || !window.Control.available()) { showToast('Control plane (Firestore) ใช้ไม่ได้', 'err'); inputEl.value = ''; return; }
   if (!hub.driveFolderId) { showToast('ตั้ง Hub Folder URL ใน Data Hub ก่อน (ใช้เก็บโลโก้แบรนด์)', 'warn'); inputEl.value = ''; return; }
-  showToast('กำลังอัปโหลดโลโก้...', 'ok');
+  showToast('กำลังอัปโหลดโลโก้แบรนด์...', 'ok');
   try {
     const folderId = await ensureMediaFolder();
     const ext = (file.name.split('.').pop() || 'png').replace(/[^\w]/g, '');
-    const res = await uploadFileToDrive(`brandlogo_${id}_${Date.now()}.${ext}`, file, folderId);
+    const res = await uploadFileToDrive(`brandlogo_${Date.now()}.${ext}`, file, folderId);
     if (!res || !res.id) throw new Error('upload returned no id');
     try { const local = await blobToDataUrl(file); if (local) _mediaCache.set(res.id, local); } catch (e) {}
-    await window.Control.upsertBrand({ id, name: b.name, company: b.company, logoFileId: res.id, logoUrl: '', updatedBy: currentUserEmail });
-    showToast('✓ อัปโหลดโลโก้แล้ว', 'ok');
+    // Upsert the registry brand keyed by name — reuse the existing record if the
+    // brand already exists (so old typed brands get the logo), else create one.
+    const existing = findBrandByName(name);
+    const id = existing ? existing.id : ('brand-' + Date.now() + Math.random().toString(36).slice(2, 6));
+    await window.Control.upsertBrand({ id, name, company: existing ? existing.company : '', logoFileId: res.id, logoUrl: '', updatedBy: currentUserEmail });
+    showToast('✓ อัปโหลดโลโก้แบรนด์แล้ว', 'ok');
+    _refreshEditBrandLogo();
   } catch (e) {
     console.error('brand logo upload failed:', e);
     showToast('อัปโหลดไม่สำเร็จ: ' + (e.message || 'unknown'), 'err');
@@ -9150,6 +9079,7 @@ function openEditModal() {
   document.getElementById('editStatus').value = camp.status === 'handed-off' ? 'completed' : camp.status;
   document.getElementById('editDriveFolderUrl').value = camp.driveFolderUrl || '';
   updateEditDescCount();
+  if (typeof _refreshEditBrandLogo === 'function') _refreshEditBrandLogo();
   document.getElementById('editInfoModal').classList.add('show');
 }
 
@@ -9753,7 +9683,6 @@ const _MODAL_CLOSE_FNS = {
   connectModal: () => (typeof closeConnectModal === 'function' ? closeConnectModal() : null),
   configModal: () => (typeof closeConfigModal === 'function' ? closeConfigModal() : null),
   addCampaignModal: () => (typeof closeAddCampaignModal === 'function' ? closeAddCampaignModal() : null),
-  manageBrandsModal: () => (typeof closeManageBrandsModal === 'function' ? closeManageBrandsModal() : null),
   addMemberModal: () => (typeof closeAddMemberModal === 'function' ? closeAddMemberModal() : null),
   thumbLightbox: () => (typeof closeThumbLightbox === 'function' ? closeThumbLightbox() : null)
 };
