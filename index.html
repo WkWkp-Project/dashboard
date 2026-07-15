@@ -197,12 +197,12 @@
 
   /* Main */
   .main { overflow-x: hidden; }
-  .topbar { height: 64px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 32px; gap: 24px; background: rgba(250,250,250,0.85); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
+  .topbar { height: 56px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 20px; gap: 24px; background: rgba(250,250,250,0.85); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
   /* CONTENT logo (real brand asset) in the topbar top-left — icon + wordmark
      as one image. The WakuWaku logo stays in the sidebar. */
-  .topbar-brand { display: flex; align-items: center; }
-  .topbar-logo-img { display: block; width: auto; max-width: 40vw; height: 44px; object-fit: contain; object-position: left center; }
+  .topbar-brand { display: flex; align-items: center; height: 100%; }
+  .topbar-logo-img { display: block; width: auto; max-width: 40vw; height: 30px; object-fit: contain; object-position: left center; }
   /* Data-source badge — shows whether the in-memory state came from Drive
      (canonical) or from a localStorage restore that still needs to sync. */
   .data-source-badge { font-family: 'Poppins', 'Prompt', sans-serif; font-size: 10px; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 12px; border: 1px solid transparent; cursor: default; }
@@ -225,10 +225,13 @@
 
   .icon-btn { width: 36px; height: 36px; border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius); display: grid; place-items: center; cursor: pointer; color: var(--muted); transition: all 0.15s; position: relative; }
   .icon-btn:hover { border-color: var(--ink); color: var(--ink); }
-  .user-chip { display: flex; align-items: center; gap: 10px; padding: 4px 12px 4px 4px; border: 1px solid var(--line); border-radius: 24px; cursor: pointer; }
-  .user-chip:hover { border-color: var(--ink); }
+  .user-chip { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border: none; border-radius: 8px; cursor: pointer; }
+  .user-chip:hover { background: var(--paper-2); }
   .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 600; font-size: 11px; }
-  .user-chip span { font-size: 13px; font-weight: 500; }
+  .user-chip .avatar { width: 34px; height: 34px; font-size: 13px; }
+  .user-chip .chip-id { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+  .user-chip .chip-name { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-chip .chip-role { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .user-chip .chip-chevron { color: var(--muted); transition: transform 0.15s ease; }
   .user-chip.open .chip-chevron { transform: rotate(180deg); }
 
@@ -1006,7 +1009,10 @@
         <div class="user-chip-wrap">
           <div class="user-chip" id="userChip" onclick="toggleUserMenu(event)">
             <div class="avatar" id="tb-avatar">·</div>
-            <span id="tb-name">—</span>
+            <div class="chip-id">
+              <span class="chip-name" id="tb-name">—</span>
+              <span class="chip-role" id="tb-role"></span>
+            </div>
             <svg class="chip-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
           <!-- Dropdown menu (Creator-Hub style): identity header + Settings /
@@ -2614,6 +2620,23 @@ function applyControlRole(resolved) {
   if (userRoleControl === 'admin' || userRoleControl === 'editor') userRole = 'internal';
   else if (userRoleControl === 'operation') userRole = 'operator';
   else userRole = 'client';
+  updateTopbarRole();
+}
+
+// Role label under the name in the topbar user-chip (Creator-Hub style,
+// e.g. "ผู้ดูแล · Admin"). Reads the current resolved role globals.
+const TOPBAR_ROLE_LABELS = {
+  admin: 'ผู้ดูแล · Admin', editor: 'บรรณาธิการ · Editor',
+  operation: 'ทีมงาน · Operation', customer: 'ลูกค้า · Customer',
+  viewer: 'ผู้ชม · Viewer'
+};
+function updateTopbarRole() {
+  const el = document.getElementById('tb-role'); if (!el) return;
+  let label = TOPBAR_ROLE_LABELS[userRoleControl] || '';
+  if (!label) label = userRole === 'operator' ? 'ทีมงาน · Operation'
+                    : userRole === 'internal' ? 'ทีมงาน · Internal'
+                    : 'ผู้ชม · Viewer';
+  el.textContent = label;
 }
 
 // Fine-grained capability check. Falls back to isAdmin if control plane is off.
@@ -2637,6 +2660,7 @@ async function resolveUserRoleFromControl(email, displayName) {
     userRoleControl = isAdmin ? 'admin' : 'viewer';
     userRole = isAdmin ? 'internal' : 'client';
     assignedCampaignFolderIds = [];
+    updateTopbarRole();
     return;
   }
   try {
@@ -2941,6 +2965,8 @@ function applyTokenLogin(token) {
   }
   userRole = (match.role === 'client') ? 'client' : 'operator';
   _currentTokenLogin = token;
+  const _tbRole = document.getElementById('tb-role');
+  if (_tbRole) _tbRole.textContent = userRole === 'operator' ? 'ทีมงาน · Operation' : 'ลูกค้า · Customer';
   document.getElementById('sb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
   document.getElementById('sb-avatar').textContent = userRole === 'operator' ? '🛠' : '👁';
   document.getElementById('tb-name').textContent = match.name || (userRole === 'operator' ? 'Operator' : 'Client');
