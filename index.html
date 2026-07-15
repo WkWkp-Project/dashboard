@@ -99,10 +99,9 @@
   .brand-logo-img { height: 44px; width: auto; max-width: 190px; object-fit: contain; display: block; }
   .brand-db-tag { font-family: 'Poppins', 'Prompt', sans-serif; font-size: 11px; letter-spacing: 0.1em; color: var(--gold); border: 1px solid var(--gold); border-radius: 3px; padding: 2px 6px; align-self: center; }
   .sb-email { display: block; font-family: 'Poppins', 'Prompt', sans-serif; font-size: 9px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
-  /* Identity lives in the topbar user-chip now (Creator-Hub style). The old
-     sidebar-user block is hidden but kept in the DOM as a data holder (session
-     save + role code still read sb-name / sb-email / sb-avatar). */
-  .sidebar-user { display: none !important; }
+  /* Identity is mirrored in the topbar user-chip, and also shown at the bottom
+     of the sidebar (Creator-Hub style) with Logout sitting just above it.
+     sb-name / sb-email / sb-avatar are still read by session save + role code. */
   body.hide-audit-log #overview-audit-log { display: none !important; }
   .brand-sub { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 14px; }
   .brand-name { font-family: 'Poppins', 'Prompt', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: 0.2px; line-height: 1.1; }
@@ -903,17 +902,9 @@
       </div>
     </div>
 
-    <div class="sidebar-user">
-      <div class="sb-avatar" id="sb-avatar">W</div>
-      <div style="overflow:hidden; min-width:0;">
-        <span class="sb-name" id="sb-name">—</span>
-        <span class="sb-email" id="sb-email"></span>
-        <span class="sb-role-tag" id="sb-mode-tag">Cloud Linked</span>
-      </div>
-    </div>
-
     <!-- Members moved to the Settings view (Creator-Hub style) — sidebar is
-         nav-links only now. -->
+         nav-links only now. The user identity block lives at the very bottom
+         of the sidebar (see .sidebar-footer below). -->
 
     <div class="nav-section">
       <div class="nav-label"><span>Views</span></div>
@@ -952,21 +943,36 @@
     </div>
 
 
-    <div class="nav-section" style="margin-top:auto;">
+    <!-- Below-the-line utility nav: Settings + Support (Creator-Hub style).
+         Members now lives inside the Settings view. -->
+    <div class="sidebar-footer" style="margin-top:auto;">
       <div class="nav-item admin-only" data-view="settings" onclick="switchView('settings')">
-        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Members
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
       </div>
+      <div class="nav-item" data-view="support" onclick="switchView('support')">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Support
+      </div>
+    </div>
+
+    <!-- Logout sits just above the user identity block (Creator-Hub style). -->
+    <div class="sidebar-footer">
       <div class="nav-item" onclick="confirmLogout()">
         <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Logout
       </div>
-    </div>
-
-    <div class="sidebar-footer">
-      <div class="sb-meta" id="sb-hub-link" style="display:none; margin-bottom:4px;"></div>
-      <div class="sb-meta" id="sb-db-id" style="display:none; margin-bottom:4px;"></div>
-      <div class="sb-meta" id="sb-version">v4.0 · Multi-Campaign</div>
+      <div class="sidebar-user" style="margin:8px 0 0;">
+        <div class="sb-avatar" id="sb-avatar">W</div>
+        <div style="overflow:hidden; min-width:0;">
+          <span class="sb-name" id="sb-name">—</span>
+          <span class="sb-email" id="sb-email"></span>
+          <span class="sb-role-tag" id="sb-mode-tag">Cloud Linked</span>
+        </div>
+      </div>
+      <!-- Drive hub-folder shortcut — populated by renderHubSidebar() for admins
+           when a hub folder is configured; hidden otherwise. -->
+      <div class="sb-meta" id="sb-hub-link" style="display:none; margin-top:8px;"></div>
     </div>
   </aside>
 
@@ -1192,6 +1198,82 @@
         </div>
       </div>
       <div id="members-page"></div>
+    </div>
+
+    <!-- ============ SUPPORT VIEW ============ -->
+    <!-- System / help reference — mirrors the Creator-Hub Support layout but
+         describes THIS dashboard (Wakuwaku content-production). -->
+    <div class="page view-container" id="view-support">
+      <div class="members-head">
+        <div>
+          <h1 class="members-title">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Support
+          </h1>
+          <p class="members-sub">ข้อมูลระบบและคู่มือการใช้งาน Wakuwaku Content Dashboard</p>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px;">
+
+        <!-- Getting started -->
+        <div class="hub-card">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91 0z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+            <strong style="font-size:14px;">เริ่มต้นใช้งาน</strong>
+          </div>
+          <div style="font-size:13px; line-height:1.9; color:var(--ink);">
+            <div><b>1. Campaigns</b> — เลือกหรือสร้างแคมเปญ · กรองตามแบรนด์ / ค้นหาชื่อ</div>
+            <div><b>2. Campaign Detail</b> — แก้ไขงาน · assets · ประวัติการแก้ไข</div>
+            <div><b>3. Content Calendar</b> — ดูตารางคอนเทนต์ทั้งหมดในมุมมองปฏิทิน</div>
+            <div><b>4. Backup / Export</b> — เซฟขึ้น Cloud (Drive) หรือส่งออกแคมเปญ</div>
+          </div>
+        </div>
+
+        <!-- FAQ -->
+        <div class="hub-card">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <strong style="font-size:14px;">คำถามที่พบบ่อย</strong>
+          </div>
+          <div style="font-size:13px; line-height:1.7; color:var(--ink);">
+            <div style="margin-bottom:8px;"><b>ข้อมูลเก็บที่ไหน?</b> — Google Drive เป็นต้นทางจริงของข้อมูล (source of truth) · Firestore ใช้เป็น control plane เท่านั้น</div>
+            <div style="margin-bottom:8px;"><b>"save แล้วหาย" ทำยังไง?</b> — ข้อมูลถูกสำรองในเครื่องทุกครั้งที่พิมพ์ · ถ้าเซฟ Drive ไม่สำเร็จจะมีแถบให้กู้คืน / ดาวน์โหลด backup</div>
+            <div><b>ใครแก้ไขได้บ้าง?</b> — ขึ้นกับสิทธิ์ (role) ของแต่ละคน ดูการ์ด "บัญชี &amp; สิทธิ์"</div>
+          </div>
+        </div>
+
+        <!-- Account & permissions -->
+        <div class="hub-card">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            <strong style="font-size:14px;">บัญชี &amp; สิทธิ์</strong>
+          </div>
+          <div style="font-size:13px; line-height:1.8; color:var(--ink);">
+            <div><b>Admin</b> — จัดการสมาชิก/แคมเปญได้ทั้งหมด · เห็นทุกแคมเปญ</div>
+            <div><b>Editor</b> — แก้ไขได้ทั้ง Section A และ Section B</div>
+            <div><b>Operation</b> — แก้ไขเฉพาะ Section B</div>
+            <div><b>Viewer</b> — ดูอย่างเดียว</div>
+            <div><b>Customer</b> — ดู + แก้ Section B ของงานตัวเอง</div>
+            <div style="margin-top:8px; color:var(--muted);">เปลี่ยนรหัสผ่าน / จัดการผู้ใช้ได้ที่หน้า <b>Settings</b></div>
+          </div>
+        </div>
+
+        <!-- Contact / system info -->
+        <div class="hub-card">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+            <strong style="font-size:14px;">ติดต่อทีม &amp; ข้อมูลระบบ</strong>
+          </div>
+          <div style="font-size:13px; line-height:1.9; color:var(--ink);">
+            <div><b>Studio</b> — Wakuwaku Studio</div>
+            <div><b>โดเมนทีม</b> — <span style="color:var(--gold);">team.wkwkp.com</span></div>
+            <div><b>แจ้งปัญหา save</b> — เปิด DevTools console แล้วรัน <code>window.__diag()</code> ส่งผลลัพธ์ให้ทีม</div>
+            <div style="margin-top:8px; color:var(--muted); font-family:'Poppins','Prompt',sans-serif; font-size:11px;">Wakuwaku Content Dashboard · เวอร์ชัน <span id="support-version">—</span></div>
+          </div>
+        </div>
+
+      </div>
     </div>
 
     <!-- ============ CALENDAR VIEW ============ -->
@@ -5424,6 +5506,7 @@ function switchView(name) {
   if (navItem) navItem.classList.add('active');
   if (name === 'campaigns') renderCampaignsGrid();
   if (name === 'settings') renderMemberNav();
+  if (name === 'support') { const sv = document.getElementById('support-version'); if (sv) sv.textContent = APP_VERSION + ' · Multi-Campaign'; }
   if (name === 'calendar') renderCalendar();
   if (name === 'access') renderAccessTable();
   if (name === 'hub') renderDataHub();
