@@ -598,6 +598,9 @@
   .perf-asub { font-size:11px; color:var(--muted); margin-top:1px; }
   .perf-period { font-size:12px; font-weight:600; color:var(--ink); }
   .perf-period .alt { display:inline-block; margin-left:5px; font-size:9px; font-weight:700; color:var(--muted-2); background:var(--paper-3); border-radius:10px; padding:1px 6px; }
+  .perf-row-clear { margin-left:6px; border:none; background:transparent; color:var(--muted-2); cursor:pointer; font-size:11px; line-height:1; padding:2px 4px; border-radius:4px; opacity:0; transition:opacity .12s, color .12s, background .12s; }
+  .perf-table tr:hover .perf-row-clear { opacity:.65; }
+  .perf-row-clear:hover { opacity:1; color:var(--accent); background:var(--convert-bg); }
   .perf-derived { color:var(--gold); font-weight:700; }
   .perf-na { color:var(--muted-2); }
   .perf-table tfoot td { font-weight:800; background:var(--paper-2); border-top:2px solid var(--line-2); border-bottom:none; }
@@ -1282,10 +1285,14 @@
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Import ผล FB
           </button>
+          <button class="btn" id="perf-clear-btn" onclick="clearPerfScope()" style="display:none" title="ล้างข้อมูลผลในช่วงที่เลือก — เผื่ออัปผิด">
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <span id="perf-clear-label">ล้างผล</span>
+          </button>
           <input type="file" id="perf-import-file" accept=".csv,text/csv" style="display:none" onchange="onPerfImportFile(this)">
         </div>
       </div>
-      <div class="perf-sub">ผลลัพธ์แอดต่อชิ้นงาน · จับคู่ Artwork ด้วย asset ID · แบ่งตามเดือนจากวันเริ่มรันในไฟล์ export</div>
+      <div class="perf-sub">ผลลัพธ์แอดต่อชิ้นงาน · จับคู่ Artwork ด้วย asset ID · แบ่งตามเดือนจากวันเริ่มรันในไฟล์ export · Import ซ้ำได้ (ระบบเช็คซ้ำ ไม่นับซ้ำ) · ล้างได้ถ้าอัปผิด</div>
       <div class="perf-monthbar" id="perf-monthbar"></div>
       <div class="perf-tiles" id="perf-tiles"></div>
       <div class="perf-chips" id="perf-chips">
@@ -7091,6 +7098,38 @@ function perfSumRaw(rawList) {
   return out;
 }
 
+// Numeric-equality compare of two raw metric bags (canonical keys only).
+// Used to tell a re-import apart: same key + same numbers = duplicate (skip),
+// same key + different numbers = update (overwrite). Never double-counts.
+function perfRawEqual(a, b) {
+  a = a || {}; b = b || {};
+  const keys = new Set(Object.keys(a).concat(Object.keys(b)).filter(k => METRIC_DEFS[k]));
+  for (const k of keys) {
+    const va = (a[k] == null || a[k] === '' || isNaN(+a[k])) ? null : +a[k];
+    const vb = (b[k] == null || b[k] === '' || isNaN(+b[k])) ? null : +b[k];
+    if (va !== vb) return false;
+  }
+  return true;
+}
+
+// Validate one staged import row → array of human-readable warnings (Thai).
+// Warnings only — they never block the import, but every one is surfaced in
+// the preview so a bad paste is caught before it reaches Drive.
+function perfRowIssues(m) {
+  const issues = [];
+  const dRe = /^\d{4}-\d{2}-\d{2}$/;
+  const hasMetric = Object.keys(m.raw || {}).length > 0;
+  if (m.start && !dRe.test(m.start)) issues.push('วันเริ่มรันผิดรูปแบบ (ต้องเป็น YYYY-MM-DD)');
+  if (m.end && !dRe.test(m.end))     issues.push('วันสิ้นสุดผิดรูปแบบ (ต้องเป็น YYYY-MM-DD)');
+  if (dRe.test(m.start) && dRe.test(m.end) && m.end < m.start) issues.push('วันสิ้นสุดมาก่อนวันเริ่มรัน');
+  if (hasMetric && !m.start) issues.push('ไม่มีวันเริ่มรัน — จะกรองตามเดือนไม่เจอ');
+  if (!hasMetric)            issues.push('ไม่มีค่า metric ที่อ่านได้ในแถวนี้');
+  Object.keys(m.raw || {}).forEach(k => {
+    if (+m.raw[k] < 0) issues.push((METRIC_DEFS[k] ? METRIC_DEFS[k].label : k) + ' เป็นค่าติดลบ');
+  });
+  return issues;
+}
+
 // One display row per asset for the active month scope. hasData=false → the
 // asset has no period in scope and renders as em-dashes (never as zeros).
 function perfRowsFor(camp, month) {
@@ -7176,6 +7215,16 @@ function renderPerfTable() {
   const totalRaw = perfSumRaw(withData.map(r => r.raw));
   const totalDer = perfDerived(totalRaw);
 
+  // Clear button: visible only when the current scope holds data and the user
+  // can edit Section B. Label follows the month filter (all vs one month).
+  const clearBtn = document.getElementById('perf-clear-btn');
+  if (clearBtn) {
+    const canClear = withData.length && (typeof controlCan !== 'function' || controlCan('editSectionB'));
+    clearBtn.style.display = canClear ? '' : 'none';
+    const lbl = document.getElementById('perf-clear-label');
+    if (lbl) lbl.textContent = _perfMonth === 'all' ? 'ล้างผลทั้งหมด' : 'ล้างเดือนนี้';
+  }
+
   // summary tiles (rates from totals)
   if (tilesEl) {
     const tile = (k,v,d,hl) => `<div class="perf-tile${hl?' hl':''}"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`;
@@ -7228,8 +7277,11 @@ function renderPerfTable() {
     }
     const obj = PERF_OBJECTIVES[r.objective] || PERF_OBJECTIVES[''];
     const alt = (r.otherMonths && r.otherMonths.size) ? `<span class="alt">+${r.otherMonths.size} เดือน</span>` : '';
+    const canEditPerf = (typeof controlCan !== 'function' || controlCan('editSectionB'));
+    const rowClear = (r.hasData && canEditPerf)
+      ? `<button class="perf-row-clear" title="ล้างผลของชิ้นงานนี้ในช่วงที่เลือก" onclick="clearPerfAsset('${escapeHtml(a.id)}')">✕</button>` : '';
     const period = r.hasData
-      ? `<span class="perf-period">${perfDateLabel(r.periods)}${alt}</span>`
+      ? `<span class="perf-period">${perfDateLabel(r.periods)}${alt}</span>${rowClear}`
       : `<span class="perf-na" style="font-size:11px">ไม่มีข้อมูล${r.otherMonths && r.otherMonths.size ? ' เดือนนี้':''}</span>`;
     const der = r.hasData ? perfDerived(r.raw) : {};
     let cells = '';
@@ -7366,6 +7418,7 @@ function stagePerfImport(text) {
 
   const byId = new Map((camp.assets||[]).map(a => [String(a.id).trim(), a]));
   const matched = [], unmatched = [];
+  const seenInFile = new Map();   // id|start|end → matched-row index (intra-file dup guard)
   for (let r=1; r<table.length; r++) {
     const cells = table[r];
     const id = String(cells[idCol] || '').trim();
@@ -7374,16 +7427,36 @@ function stagePerfImport(text) {
     metricCols.forEach(mc => { const v = perfParseNum(cells[mc.idx]); if (v != null) raw[mc.key] = v; });
     const asset = byId.get(id);
     if (!asset) { unmatched.push({ id, rowNo:r+1 }); continue; }
-    matched.push({
-      asset,
+    const m = {
+      asset, id,
       start: startCol>=0 ? String(cells[startCol]||'').slice(0,10) : '',
       end:   endCol>=0   ? String(cells[endCol]||'').slice(0,10)   : '',
       objective: objCol>=0 ? String(cells[objCol]||'').trim().toLowerCase() : '',
       raw, rowNo:r+1
-    });
+    };
+    // Classify against what already lives on the asset (data + metric compare).
+    const key = (m.start||'') + '|' + (m.end||'');
+    const existing = (asset.metrics && asset.metrics.periods || []).find(p => ((p.start||'')+'|'+(p.end||'')) === key);
+    if (!existing)                             m.status = 'new';
+    else if (perfRawEqual(existing.raw, m.raw)) m.status = 'same';
+    else                                        m.status = 'update';
+    m.issues = perfRowIssues(m);
+    // Intra-file duplicate: two rows in the SAME file for one asset+period.
+    const fileKey = id + '|' + key;
+    if (seenInFile.has(fileKey)) {
+      m.dupInFile = true;
+      m.issues = m.issues.concat('ซ้ำกับอีกแถวในไฟล์เดียวกัน (ใช้แถวหลังสุด)');
+      const prevIdx = seenInFile.get(fileKey);
+      if (matched[prevIdx]) matched[prevIdx].overridden = true;   // earlier one gets dropped
+    }
+    seenInFile.set(fileKey, matched.length);
+    matched.push(m);
   }
 
-  _perfImportCtx = { campId: camp.id, matched, unmatched, metricCols, unknown };
+  const counts = { new:0, update:0, same:0 };
+  matched.forEach(m => { if (!m.overridden) counts[m.status]++; });
+  const issueRows = matched.filter(m => !m.overridden && m.issues.length);
+  _perfImportCtx = { campId: camp.id, matched, unmatched, metricCols, unknown, counts, issueRows };
   showPerfImportPreview();
 }
 
@@ -7407,14 +7480,42 @@ function showPerfImportPreview() {
     const more = ctx.unmatched.length > 8 ? ` …+${ctx.unmatched.length-8}` : '';
     unmatchedBlock = `<div class="perf-warn"><b>⚠ ${ctx.unmatched.length} แถวจับคู่ ID ไม่ได้</b> — ${list}${more}<br>แถวเหล่านี้จะ<b>ไม่ถูกเขียน</b> (id พิมพ์ผิด หรือ asset ถูกลบ)</div>`;
   }
+
+  // NEW / UPDATE / SAME breakdown — makes "add more vs overwrite vs duplicate"
+  // explicit before anything is written. Duplicates are skipped (no double-count).
+  const c = ctx.counts || { new:0, update:0, same:0 };
+  const pill = (n, color, label) => n ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px;background:${color}22;color:${color};"><b>${n}</b> ${label}</span>` : '';
+  const breakdown =
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">` +
+    pill(c.new, '#3A7A3E', 'เพิ่มใหม่') +
+    pill(c.update, '#B89248', 'อัปเดตทับ') +
+    pill(c.same, '#6B6F76', 'ซ้ำ (ข้าม)') +
+    `</div>`;
+
+  // Validation warnings — every flagged row surfaced, never silently dropped.
+  let issueBlock = '';
+  if (ctx.issueRows && ctx.issueRows.length) {
+    const items = ctx.issueRows.slice(0,10).map(m => {
+      const who = escapeHtml((m.asset && m.asset.h2) || m.id);
+      return `<li><b>${who}</b> <span class="perf-na">(แถว ${m.rowNo})</span> — ${m.issues.map(escapeHtml).join('; ')}</li>`;
+    }).join('');
+    const more = ctx.issueRows.length > 10 ? `<li class="perf-na">…อีก ${ctx.issueRows.length-10} แถว</li>` : '';
+    issueBlock = `<div class="perf-warn"><b>⚠ ตรวจพบ ${ctx.issueRows.length} แถวที่ควรตรวจสอบ</b><ul style="margin:6px 0 0 16px;padding:0;font-size:12px;line-height:1.6;">${items}${more}</ul><div style="font-size:11px;margin-top:6px;">ยังเขียนได้ แต่ตรวจให้แน่ใจก่อนยืนยัน</div></div>`;
+  }
+
+  const writable = c.new + c.update;   // 'same' rows are skipped on apply
   body.innerHTML =
-    `<div style="font-size:13px;margin-bottom:12px;">พบ <b class="perf-ok">${ctx.matched.length}</b> แถวที่จับคู่ asset ได้` +
+    `<div style="font-size:13px;margin-bottom:10px;">พบ <b class="perf-ok">${ctx.matched.length}</b> แถวที่จับคู่ asset ได้` +
     (ctx.unmatched.length ? ` · <b style="color:var(--convert)">${ctx.unmatched.length}</b> แถวจับคู่ไม่ได้` : '') + `</div>` +
+    breakdown +
     `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2);font-weight:700;margin-bottom:6px;">การจับคู่คอลัมน์ → metric (ตัวอย่างจากแถวแรก)</div>` +
     `<table class="perf-map"><thead><tr><th>คอลัมน์ในไฟล์</th><th></th><th>เก็บเป็น</th><th>ค่าตัวอย่าง</th></tr></thead><tbody>${mapRows}</tbody></table>` +
-    ignored + unmatchedBlock +
-    (ctx.matched.length ? '' : '<div class="perf-warn" style="margin-top:14px;"><b>ไม่มีแถวที่จับคู่ได้เลย</b> — ตรวจว่าไฟล์มีคอลัมน์ id ที่ตรงกับ asset id ในแคมเปญนี้</div>');
-  if (applyBtn) applyBtn.disabled = !ctx.matched.length;
+    ignored + issueBlock + unmatchedBlock +
+    (writable ? '' : '<div class="perf-warn" style="margin-top:14px;"><b>ไม่มีข้อมูลใหม่ให้เขียน</b> — ทุกแถวซ้ำกับที่มีอยู่แล้ว หรือจับคู่ ID ไม่ได้</div>');
+  if (applyBtn) {
+    applyBtn.disabled = !writable;
+    applyBtn.textContent = writable ? `เขียนลง Drive (${writable})` : 'เขียนลง Drive';
+  }
   document.getElementById('perfImportModal').classList.add('show');
 }
 function closePerfImport() {
@@ -7429,27 +7530,104 @@ function applyPerfImport() {
   if (!camp) { showToast('แคมเปญหาย — ปิดแล้วลองใหม่', 'err'); closePerfImport(); return; }
   const now = new Date().toISOString();
   const by = (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || currentUserEmail || 'Unknown';
-  let periodsWritten = 0; const touched = new Set();
+  let added = 0, updated = 0, skipped = 0; const touched = new Set();
   ctx.matched.forEach(m => {
-    if (!Object.keys(m.raw).length && !m.start) return;   // nothing to write
+    if (m.overridden) return;                                  // superseded by a later row in the file
+    if (m.status === 'same') { skipped++; return; }            // identical → never rewrite (no double-count)
+    if (!Object.keys(m.raw).length && !m.start) return;        // nothing to write
     const a = m.asset;
     if (!a.metrics || typeof a.metrics !== 'object') a.metrics = { updatedAt:'', updatedBy:'', periods:[] };
     if (!Array.isArray(a.metrics.periods)) a.metrics.periods = [];
     const key = (m.start||'') + '|' + (m.end||'');
     const idx = a.metrics.periods.findIndex(p => ((p.start||'') + '|' + (p.end||'')) === key);
     const period = { start:m.start||'', end:m.end||'', objective:m.objective||'', raw:m.raw };
-    if (idx >= 0) a.metrics.periods[idx] = period; else a.metrics.periods.push(period);
+    if (idx >= 0) { a.metrics.periods[idx] = period; updated++; } else { a.metrics.periods.push(period); added++; }
     a.metrics.updatedAt = now; a.metrics.updatedBy = by;
-    periodsWritten++; touched.add(a.id);
+    touched.add(a.id);
   });
   camp.log = camp.log || [];
   camp.log.unshift({ time:now, type:'PERF_IMPORT', user:by,
-    desc:`Import performance · ${periodsWritten} ช่วง · ${touched.size} asset` + (ctx.unmatched.length ? ` · ${ctx.unmatched.length} unmatched` : '') });
+    desc:`Import performance · +${added} ใหม่ · ${updated} อัปเดต · ${touched.size} asset` +
+      (skipped ? ` · ข้ามซ้ำ ${skipped}` : '') + (ctx.unmatched.length ? ` · unmatched ${ctx.unmatched.length}` : '') });
   markCampaignDirty(camp.id);
   scheduleSave(camp.id);
   closePerfImport();
   renderEverything();
-  showToast(`✓ Import performance แล้ว · ${periodsWritten} ช่วง · ${touched.size} asset` + (ctx.unmatched.length ? ` (ข้าม ${ctx.unmatched.length} แถวที่จับคู่ไม่ได้)` : ''), 'ok');
+  showToast(`✓ Import performance · +${added} ใหม่ · ${updated} อัปเดต · ${touched.size} asset` +
+    (skipped ? ` · ข้ามซ้ำ ${skipped}` : '') + (ctx.unmatched.length ? ` · จับคู่ไม่ได้ ${ctx.unmatched.length}` : ''), 'ok');
+}
+
+// ---- clear performance (undo a wrong import) ----
+// Is a period inside the active month scope? 'all' → every period.
+function perfInScope(p, scope) { return scope === 'all' || perfMonthKey(p.start) === scope; }
+// Remove in-scope periods from one asset; drops metrics entirely when empty.
+// Returns how many periods were removed.
+function perfStripScope(asset, scope) {
+  const periods = asset.metrics && asset.metrics.periods;
+  if (!Array.isArray(periods) || !periods.length) return 0;
+  const keep = periods.filter(p => !perfInScope(p, scope));
+  const removed = periods.length - keep.length;
+  if (!removed) return 0;
+  if (keep.length) asset.metrics.periods = keep;
+  else asset.metrics = null;
+  return removed;
+}
+function perfScopeLabel(scope) {
+  if (scope === 'all') return 'ทุกเดือน';
+  const [y,mo] = scope.split('-');
+  const d = new Date(+y, +mo-1, 1);
+  return d.toLocaleDateString('th-TH', { month:'long' }) + ' ' + (+y+543);
+}
+// Header button: clear every asset's performance in the current month scope.
+function clearPerfScope() {
+  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึงล้างผลได้')) return;
+  const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
+  const scope = _perfMonth;
+  let total = 0, assetsHit = 0;
+  (camp.assets||[]).forEach(a => {
+    const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope)).length;
+    if (n) { total += n; assetsHit++; }
+  });
+  if (!total) { showToast('ไม่มีข้อมูลผลในช่วงที่เลือกให้ล้าง', 'warn'); return; }
+  showConfirm('ล้างผล Performance',
+    `จะลบข้อมูลผล ${total} ช่วง จาก ${assetsHit} asset (${perfScopeLabel(scope)}) — กู้คืนไม่ได้ (แต่ import ใหม่ได้)`,
+    () => {
+      const now = new Date().toISOString();
+      const by = (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || currentUserEmail || 'Unknown';
+      let removed = 0; const touched = new Set();
+      (camp.assets||[]).forEach(a => { const n = perfStripScope(a, scope); if (n) { removed += n; touched.add(a.id); } });
+      camp.log = camp.log || [];
+      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล performance · ${removed} ช่วง · ${touched.size} asset · ${perfScopeLabel(scope)}` });
+      markCampaignDirty(camp.id);
+      scheduleSave(camp.id);
+      renderEverything();
+      showToast(`✓ ล้างผลแล้ว · ${removed} ช่วง · ${touched.size} asset`, 'ok');
+    });
+}
+// Per-row button: clear one asset's performance in the current month scope.
+function clearPerfAsset(assetId) {
+  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึงล้างผลได้')) return;
+  const camp = getCurrentCampaign();
+  if (!camp) return;
+  const a = (camp.assets||[]).find(x => x.id === assetId);
+  if (!a) return;
+  const scope = _perfMonth;
+  const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope)).length;
+  if (!n) { showToast('ไม่มีข้อมูลผลให้ล้างในช่วงนี้', 'warn'); return; }
+  showConfirm('ล้างผลของชิ้นงานนี้',
+    `จะลบผล ${n} ช่วง ของ "${a.h2||assetId}" (${perfScopeLabel(scope)}) — กู้คืนไม่ได้`,
+    () => {
+      const now = new Date().toISOString();
+      const by = (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || currentUserEmail || 'Unknown';
+      const removed = perfStripScope(a, scope);
+      camp.log = camp.log || [];
+      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล "${a.h2||assetId}" · ${removed} ช่วง · ${perfScopeLabel(scope)}` });
+      markCampaignDirty(camp.id);
+      scheduleSave(camp.id);
+      renderEverything();
+      showToast(`✓ ล้างผล "${a.h2||assetId}" แล้ว`, 'ok');
+    });
 }
 
 // ============================================================================
@@ -11078,6 +11256,28 @@ window.__runTests = async function() {
     ok(!rows.find(r => r.asset.id === 'a2').hasData);
     ok(!rows.find(r => r.asset.id === 'a3').hasData);
     eq(perfRowsFor(camp, 'all').find(r => r.asset.id === 'a1').raw.spend, 150);
+  });
+  t('perfRawEqual: same numbers equal, different differ, missing≠zero', () => {
+    ok(perfRawEqual({spend:100,reach:50}, {reach:50,spend:100}));
+    ok(!perfRawEqual({spend:100}, {spend:101}));
+    ok(!perfRawEqual({spend:100}, {spend:100,reach:1}));
+    ok(perfRawEqual({spend:100,junk:9}, {spend:100}));   // non-canonical key ignored
+  });
+  t('perfRowIssues flags bad dates, reversed range, negatives, empty', () => {
+    eq(perfRowIssues({ start:'2026-07-01', end:'2026-07-31', raw:{spend:10} }).length, 0);
+    ok(perfRowIssues({ start:'2026/07/01', end:'', raw:{spend:10} }).some(s => s.includes('วันเริ่มรัน')));
+    ok(perfRowIssues({ start:'2026-07-31', end:'2026-07-01', raw:{spend:10} }).some(s => s.includes('มาก่อน')));
+    ok(perfRowIssues({ start:'', end:'', raw:{spend:10} }).some(s => s.includes('ไม่มีวันเริ่มรัน')));
+    ok(perfRowIssues({ start:'2026-07-01', end:'', raw:{spend:-5} }).some(s => s.includes('ติดลบ')));
+    ok(perfRowIssues({ start:'2026-07-01', end:'', raw:{} }).some(s => s.includes('ไม่มีค่า metric')));
+  });
+  t('perfStripScope removes in-scope periods, drops metrics when empty', () => {
+    const a = { id:'x', metrics:{ periods:[ {start:'2026-07-01',raw:{spend:1}}, {start:'2026-06-01',raw:{spend:2}} ] } };
+    eq(perfStripScope(a, '2026-07'), 1);
+    ok(a.metrics && a.metrics.periods.length === 1 && a.metrics.periods[0].start === '2026-06-01');
+    eq(perfStripScope(a, 'all'), 1);
+    eq(a.metrics, null);   // emptied → metrics dropped entirely
+    eq(perfStripScope({ id:'y' }, 'all'), 0);   // no metrics → no-op
   });
 
   // ---- Database payload ----
