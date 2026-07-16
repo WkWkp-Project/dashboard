@@ -846,7 +846,9 @@
   .ref-link-item .rm:hover { background:var(--err); color:white; }
   .ref-link-add-row { display:flex; gap:6px; }
   .ref-link-add-row input { flex:1; }
-  .links-cell .file-chip.link-chip { background:var(--paper-2); color:var(--connect); border:1px solid var(--line); }
+  .links-cell .file-chip.link-chip { background:var(--paper-2); color:var(--connect); border:1px solid var(--line); white-space:nowrap; font-weight:600; }
+  .links-cell .file-chip.link-chip:hover { background:var(--connect-bg); border-color:var(--connect); }
+  .links-cell .file-chip.link-chip .lc-ico { font-size:11px; line-height:1; }
 
   /* Form helpers */
   .req { color:var(--err); font-weight:700; }
@@ -6782,6 +6784,32 @@ function togglePromptExpand(assetId, btn) {
   const collapsed = el.classList.toggle('collapsed');
   btn.textContent = collapsed ? '▾ Show full prompt' : '▴ Show less';
 }
+// Map a link URL to a compact {icon, label} so the Links & Files cell shows a
+// recognisable per-site icon + short platform/domain name instead of a long
+// truncated URL. The full URL stays available via the chip's title tooltip.
+// Pure + offline-safe (no favicon fetch) — extend the table to add a platform.
+function linkMeta(url) {
+  let host = '';
+  try { host = new URL(url).hostname; }
+  catch (e) { host = String(url || '').replace(/^[a-z]+:\/\//i, '').split(/[\/?#]/)[0]; }
+  host = host.replace(/^www\./i, '').toLowerCase();
+  const PLATFORMS = [
+    [/(?:^|\.)(?:drive|docs|sheets|slides|forms)\.google\.com$/, '📁', 'Drive'],
+    [/(?:^|\.)(?:youtube\.com|youtu\.be)$/,                       '▶️', 'YouTube'],
+    [/(?:^|\.)(?:facebook\.com|fb\.com|fb\.me)$/,                 '📘', 'Facebook'],
+    [/(?:^|\.)instagram\.com$/,                                   '📷', 'Instagram'],
+    [/(?:^|\.)tiktok\.com$/,                                      '🎵', 'TikTok'],
+    [/(?:^|\.)figma\.com$/,                                       '🎨', 'Figma'],
+    [/(?:^|\.)canva\.com$/,                                       '🖌️', 'Canva'],
+    [/(?:^|\.)notion\.(?:so|site)$/,                              '📝', 'Notion'],
+    [/(?:^|\.)(?:line\.me|line\.biz)$/,                           '💬', 'LINE'],
+    [/(?:^|\.)dropbox\.com$/,                                     '📦', 'Dropbox'],
+    [/(?:^|\.)(?:twitter\.com|x\.com)$/,                          '𝕏',  'X'],
+  ];
+  for (const [re, icon, label] of PLATFORMS) if (re.test(host)) return { icon, label };
+  return { icon: '🔗', label: host || 'link' };
+}
+
 function renderAssets() {
   const camp = getCurrentCampaign();
   const tbody = document.getElementById('asset-tbody');
@@ -6833,7 +6861,7 @@ function renderAssets() {
       mediaChip = `<button class="media-count-chip" onclick="openMediaViewer('${a.id}')" title="View / Download media">📎 ${parts.join(' · ') || fileCount + ' files'}</button>`;
     }
     const linkArr = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
-    const linksMarkup = linkArr.map((u, i) => `<a href="${escapeHtml(u)}" target="_blank" class="file-chip link-chip" title="${escapeHtml(u)}">🔗 ${linkArr.length > 1 ? (i+1) + '. ' : ''}${escapeHtml(truncate(u, 36))}</a>`).join('');
+    const linksMarkup = linkArr.map(u => { const m = linkMeta(u); return `<a href="${escapeHtml(u)}" target="_blank" class="file-chip link-chip" title="${escapeHtml(u)}"><span class="lc-ico">${m.icon}</span>${escapeHtml(m.label)}</a>`; }).join('');
     const linksHTML = linksMarkup + mediaChip;
     // Inline creative preview (first image, else first video, else first file)
     const allFiles = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
@@ -10992,6 +11020,15 @@ window.__runTests = async function() {
   t('csvEscape escapes inner quotes', () => eq(csvEscape('say "hi"'), '"say ""hi"""'));
   t('csvEscape passes simple', () => eq(csvEscape('abc'), 'abc'));
   t('csvEscape null/undefined safe', () => { eq(csvEscape(null), ''); eq(csvEscape(undefined), ''); });
+
+  // ---- Section B link chips ----
+  t('linkMeta maps known platforms + falls back to domain', () => {
+    eq(linkMeta('https://drive.google.com/file/d/abc').label, 'Drive');
+    eq(linkMeta('https://youtu.be/xyz').label, 'YouTube');
+    eq(linkMeta('https://www.instagram.com/p/1').label, 'Instagram');
+    eq(linkMeta('https://acme.example.com/x/y').label, 'acme.example.com');
+    eq(linkMeta('not a url').label, 'not a url');
+  });
 
   // ---- Section C · Performance ----
   t('perfParseNum strips commas/฿/%', () => { eq(perfParseNum('1,200 ฿'), 1200); eq(perfParseNum('2.9%'), 2.9); eq(perfParseNum(''), null); eq(perfParseNum('n/a'), null); });
