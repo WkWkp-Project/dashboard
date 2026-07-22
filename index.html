@@ -581,10 +581,18 @@
   .perf-chips .lb { font-family:'Poppins','Prompt',sans-serif; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted-2); font-weight:600; }
   .perf-chip { font-family:'Poppins','Prompt',sans-serif; font-size:12px; font-weight:500; padding:5px 11px; border-radius:20px; border:1px solid var(--line); background:var(--paper); color:var(--muted); cursor:pointer; user-select:none; transition:all .12s; }
   .perf-chip.on { background:var(--ink); border-color:var(--ink); color:var(--paper); font-weight:600; }
+  .perf-chip.on.catch   { background:var(--catch);   border-color:var(--catch);   color:#fff; }
+  .perf-chip.on.connect { background:var(--connect); border-color:var(--connect); color:#fff; }
+  .perf-chip.on.convert { background:var(--convert); border-color:var(--convert); color:#fff; }
   .perf-chip.on.cost { background:var(--gold); border-color:var(--gold); color:#fff; }
+  .perf-chan-toggle { display:inline-flex; align-items:center; gap:8px; margin-left:auto; }
+  .perf-chan-toggle .perf-seg button { padding:5px 12px; font-size:12px; }
   .perf-table { border:1px solid var(--line); border-radius:var(--radius); background:var(--paper); overflow-x:auto; margin-bottom:12px; }
   .perf-table table { border-collapse:collapse; width:100%; font-size:13px; }
   .perf-table th.gh { text-align:center; font-family:'Poppins','Prompt',sans-serif; font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted-2); font-weight:700; padding:6px 10px 4px; }
+  .perf-table th.gh.catch   { color:var(--catch); }
+  .perf-table th.gh.connect { color:var(--connect); }
+  .perf-table th.gh.convert { color:var(--convert); }
   .perf-table th.gh.cost { color:var(--gold); }
   .perf-table thead .cols th { text-align:right; white-space:nowrap; font-family:'Poppins','Prompt',sans-serif; font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); }
   .perf-table thead .cols th.l { text-align:left; }
@@ -601,6 +609,20 @@
   .perf-row-clear { margin-left:6px; border:none; background:transparent; color:var(--muted-2); cursor:pointer; font-size:11px; line-height:1; padding:2px 4px; border-radius:4px; opacity:0; transition:opacity .12s, color .12s, background .12s; }
   .perf-table tr:hover .perf-row-clear { opacity:.65; }
   .perf-row-clear:hover { opacity:1; color:var(--accent); background:var(--convert-bg); }
+  .perf-caret { border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:11px; line-height:1; padding:1px 4px; margin-right:2px; border-radius:4px; transition:transform .12s, color .12s; display:inline-block; }
+  .perf-caret.open { transform:rotate(90deg); color:var(--ink); }
+  .perf-caret:hover { color:var(--ink); }
+  .perf-chan { display:inline-block; margin-left:6px; font-family:'Poppins','Prompt',sans-serif; font-size:8.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:1px 6px; border-radius:10px; vertical-align:middle; }
+  .perf-chan.ads { background:#FBE3E0; color:var(--accent); }
+  .perf-chan.organic { background:var(--connect-bg); color:var(--connect); }
+  .perf-chan.mixed { background:var(--paper-3); color:var(--muted); }
+  .perf-period.sm { font-size:11px; font-weight:500; }
+  .cat-pill.sm { font-size:9px; padding:1px 7px; }
+  .perf-table tr.perf-detail td { background:var(--paper-2); padding-top:5px; padding-bottom:5px; }
+  .perf-table tr.perf-detail td.dim { color:var(--muted); font-weight:400; }
+  .perf-detail-lead { font-size:10px; color:var(--muted-2); font-style:italic; }
+  .perf-table tr.perf-subtotal td { background:var(--paper-3); font-weight:700; border-top:1px solid var(--line); border-bottom:2px solid var(--line); }
+  .perf-table tr.perf-subtotal td.l { font-size:11px; color:var(--muted); text-align:right; font-weight:600; }
   .perf-derived { color:var(--gold); font-weight:700; }
   .perf-na { color:var(--muted-2); }
   .perf-table tfoot td { font-weight:800; background:var(--paper-2); border-top:2px solid var(--line-2); border-bottom:none; }
@@ -1285,6 +1307,10 @@
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Import ผล FB
           </button>
+          <button class="btn" id="perf-export-btn" onclick="exportPerfView()" style="display:none" title="Export ตารางที่เห็น (ตามเดือน/ช่อง/คอลัมน์) เป็น CSV">
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+            Export CSV
+          </button>
           <button class="btn" id="perf-clear-btn" onclick="clearPerfScope()" style="display:none" title="ล้างข้อมูลผลในช่วงที่เลือก — เผื่ออัปผิด">
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             <span id="perf-clear-label">ล้างผล</span>
@@ -1292,22 +1318,26 @@
           <input type="file" id="perf-import-file" accept=".csv,text/csv" style="display:none" onchange="onPerfImportFile(this)">
         </div>
       </div>
-      <div class="perf-sub">ผลลัพธ์แอดต่อชิ้นงาน · จับคู่ Artwork ด้วย asset ID · แบ่งตามเดือนจากวันเริ่มรันในไฟล์ export · Import ซ้ำได้ (ระบบเช็คซ้ำ ไม่นับซ้ำ) · ล้างได้ถ้าอัปผิด</div>
+      <div class="perf-sub">ผลลัพธ์ต่อชิ้นงาน · จับคู่ Artwork ด้วย asset ID · แบ่งตามเดือน · จัดกลุ่ม Catch/Connect/Convert · แยกดู Ads / Organic ได้ · Import ซ้ำได้ (เช็คซ้ำ ไม่นับซ้ำ) · ล้างได้ถ้าอัปผิด</div>
       <div class="perf-monthbar" id="perf-monthbar"></div>
       <div class="perf-tiles" id="perf-tiles"></div>
       <div class="perf-chips" id="perf-chips">
         <span class="lb">คอลัมน์</span>
-        <span class="perf-chip on" data-grp="delivery" onclick="togglePerfGroup('delivery')">Delivery</span>
-        <span class="perf-chip on" data-grp="engagement" onclick="togglePerfGroup('engagement')">Engagement</span>
-        <span class="perf-chip" data-grp="traffic" onclick="togglePerfGroup('traffic')">Traffic</span>
-        <span class="perf-chip on" data-grp="outcome" onclick="togglePerfGroup('outcome')">Outcome</span>
-        <span class="perf-chip on cost" data-grp="cost" onclick="togglePerfGroup('cost')">Cost / Derived</span>
+        <span class="perf-chip on catch"   data-grp="catch"   onclick="togglePerfGroup('catch')">Catch</span>
+        <span class="perf-chip on connect" data-grp="connect" onclick="togglePerfGroup('connect')">Connect</span>
+        <span class="perf-chip on convert" data-grp="convert" onclick="togglePerfGroup('convert')">Convert</span>
+        <span class="perf-chip on cost"    data-grp="cost"    onclick="togglePerfGroup('cost')">Cost / Derived</span>
+        <span class="perf-chan-toggle" id="perf-chan-toggle">
+          <span class="lb">ช่อง</span>
+          <span class="perf-seg" id="perf-chanbar"></span>
+        </span>
       </div>
       <div class="perf-table" id="perf-table-wrap"></div>
       <div class="perf-legend">
         <span><span class="dot" style="background:var(--gold)"></span>ค่าคำนวณ (derived) — คิดตอนแสดง ไม่เก็บลง Drive</span>
         <span><span class="dot" style="background:var(--muted-2)"></span>— = ยังไม่มีข้อมูล (ไม่ใช่ 0)</span>
         <span><span class="dot" style="background:var(--catch)"></span>+เดือน = asset นี้มีผลเดือนอื่นด้วย</span>
+        <span><span class="perf-chan mixed" style="margin:0">Ads+Org</span> = แถวรวมทั้งสองช่อง — กด ▸ กางดูราย period · CPM/ROAS แม่นเมื่อเลือก Ads</span>
       </div>
 
       <!-- HISTORY -->
@@ -2238,7 +2268,7 @@ const MEMBER_MARKER_FILENAME = 'wakuwaku_member.json';
 // delete an old migrator because the customer's Drive folder may still hold
 // a JSON written by an older build (we cannot bulk-rewrite customer Drives).
 // See BIBLE.md § 5.2 for the full policy.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 // ----------------------------------------------------------------------------
 // Campaign JSON schema migration pipeline.
@@ -2275,7 +2305,11 @@ function migrateCampaignSchema(raw) {
   // Purely additive — a v4 campaign simply has no metrics on its assets, and
   // normalizeAsset() defaults the field to null. No data reshape is needed, so
   // there is no migrateV4ToV5 step; the version stamp below records the bump.
-  // if (v < 6) c = migrateV5ToV6(c);
+  // v5 → v6: Section C period gained a `channel` field ('ads' | 'organic') to
+  // split paid vs organic. Purely additive — normalizePerfPeriod() defaults an
+  // undefined channel to 'ads', so pre-v6 metrics keep counting as Ads. No
+  // reshape needed; the stamp below records the bump.
+  // if (v < 7) c = migrateV6ToV7(c);
   c.schemaVersion = SCHEMA_VERSION;
   return c;
 }
@@ -6998,23 +7032,26 @@ function truncate(s, n) { s = String(s||''); return s.length > n ? s.slice(0,n)+
 // Canonical metric registry. `raw` only ever holds these keys; the importer
 // maps FB column headers onto them via `aliases` (exact key OR alias match —
 // never a fuzzy guess). Add a metric = add one entry here.
+// Metrics grouped under the app's Catch · Connect · Convert concept (same as
+// Section A/B). Cost / Derived stays its own group. catch=awareness,
+// connect=engagement/interaction, convert=outcome/results.
 const PERF_METRICS = [
-  { key:'spend',       label:'Spend ฿',    group:'cost',       fmt:'money', aliases:['amount spent','amount spent (thb)','amount_spent','spend'] },
-  { key:'reach',       label:'Reach',      group:'delivery',   fmt:'int',   aliases:['reach'] },
-  { key:'impressions', label:'Impr.',      group:'delivery',   fmt:'int',   aliases:['impressions','impr'] },
-  { key:'video_views', label:'Video View', group:'delivery',   fmt:'int',   aliases:['video views','video plays','3-second video plays','thruplays','video_views'] },
-  { key:'likes',       label:'Likes',      group:'engagement', fmt:'int',   aliases:['likes','post reactions','reactions'] },
-  { key:'comments',    label:'Comments',   group:'engagement', fmt:'int',   aliases:['comments','post comments'] },
-  { key:'shares',      label:'Shares',     group:'engagement', fmt:'int',   aliases:['shares','post shares'] },
-  { key:'saves',       label:'Saves',      group:'engagement', fmt:'int',   aliases:['saves','saved'] },
-  { key:'reposts',     label:'Reposts',    group:'engagement', fmt:'int',   aliases:['reposts'] },
-  { key:'engagement',  label:'Engage',     group:'engagement', fmt:'int',   aliases:['post engagements','engagement','engagements'] },
-  { key:'traffic',     label:'Traffic',    group:'traffic',    fmt:'int',   aliases:['link clicks','traffic','clicks'] },
-  { key:'leads',       label:'Leads',      group:'outcome',    fmt:'int',   aliases:['leads','on-facebook leads'] },
-  { key:'sales',       label:'Sales',      group:'outcome',    fmt:'int',   aliases:['sales'] },
-  { key:'purchases',   label:'Purchases',  group:'outcome',    fmt:'int',   aliases:['purchases','website purchases'] },
-  { key:'conversions', label:'Results',    group:'outcome',    fmt:'int',   aliases:['results','conversions'] },
-  { key:'value',       label:'Value ฿',    group:'outcome',    fmt:'money', aliases:['purchase conversion value','conversion value','value'] },
+  { key:'spend',       label:'Spend ฿',    group:'cost',    fmt:'money', aliases:['amount spent','amount spent (thb)','amount_spent','spend'] },
+  { key:'reach',       label:'Reach',      group:'catch',   fmt:'int',   aliases:['reach'] },
+  { key:'impressions', label:'Impr.',      group:'catch',   fmt:'int',   aliases:['impressions','impr'] },
+  { key:'video_views', label:'Video View', group:'catch',   fmt:'int',   aliases:['video views','video plays','3-second video plays','thruplays','video_views'] },
+  { key:'likes',       label:'Likes',      group:'connect', fmt:'int',   aliases:['likes','post reactions','reactions'] },
+  { key:'comments',    label:'Comments',   group:'connect', fmt:'int',   aliases:['comments','post comments'] },
+  { key:'shares',      label:'Shares',     group:'connect', fmt:'int',   aliases:['shares','post shares'] },
+  { key:'saves',       label:'Saves',      group:'connect', fmt:'int',   aliases:['saves','saved'] },
+  { key:'reposts',     label:'Reposts',    group:'connect', fmt:'int',   aliases:['reposts'] },
+  { key:'engagement',  label:'Engage',     group:'connect', fmt:'int',   aliases:['post engagements','engagement','engagements'] },
+  { key:'traffic',     label:'Traffic',    group:'connect', fmt:'int',   aliases:['link clicks','traffic','clicks'] },
+  { key:'leads',       label:'Leads',      group:'convert', fmt:'int',   aliases:['leads','on-facebook leads'] },
+  { key:'sales',       label:'Sales',      group:'convert', fmt:'int',   aliases:['sales'] },
+  { key:'purchases',   label:'Purchases',  group:'convert', fmt:'int',   aliases:['purchases','website purchases'] },
+  { key:'conversions', label:'Results',    group:'convert', fmt:'int',   aliases:['results','conversions'] },
+  { key:'value',       label:'Value ฿',    group:'convert', fmt:'money', aliases:['purchase conversion value','conversion value','value'] },
 ];
 const METRIC_DEFS = PERF_METRICS.reduce((o,m) => { o[m.key] = m; return o; }, {});
 // Derived columns shown at the end of the Cost group (computed, never stored).
@@ -7032,19 +7069,29 @@ const PERF_OBJECTIVES = {
   sales:      { label:'Sales',      cls:'convert' },
   '':         { label:'—',          cls:'connect' }
 };
-const PERF_GROUPS = ['delivery','engagement','traffic','outcome','cost'];
-const PERF_GROUP_LABEL = { delivery:'Delivery', engagement:'Engagement', traffic:'Traffic', outcome:'Outcome', cost:'Cost / Derived' };
+const PERF_GROUPS = ['catch','connect','convert','cost'];
+const PERF_GROUP_LABEL = { catch:'Catch', connect:'Connect', convert:'Convert', cost:'Cost / Derived' };
 
 // header-name candidates for the non-metric columns
-const PERF_ID_HEADERS    = ['id','asset_id','asset id','assetid'];
-const PERF_START_HEADERS = ['period_start','reporting starts','start','date','day','date_start'];
-const PERF_END_HEADERS   = ['period_end','reporting ends','end','date_end'];
-const PERF_OBJ_HEADERS   = ['objective','objectives'];
+const PERF_ID_HEADERS      = ['id','asset_id','asset id','assetid'];
+const PERF_START_HEADERS   = ['period_start','reporting starts','start','date','day','date_start'];
+const PERF_END_HEADERS     = ['period_end','reporting ends','end','date_end'];
+const PERF_OBJ_HEADERS     = ['objective','objectives'];
+const PERF_CHANNEL_HEADERS = ['type','channel','source','organic/ads','ads/organic','paid/organic'];
+// Cell value → channel. Organic keywords win; everything else (incl. blank) = ads,
+// because FB ad exports are ad rows by default.
+function perfChannelOf(v) {
+  const s = String(v||'').trim().toLowerCase();
+  if (/organic|organics|reach เพจ|เพจ|โพสต์ปกติ|โพสปกติ|non-?paid|unpaid/.test(s)) return 'organic';
+  return 'ads';
+}
 
 // --- module state (never persisted) ---
 let _perfMonth = 'all';                                            // 'all' | 'YYYY-MM'
-let _perfGroups = new Set(['delivery','engagement','outcome','cost']); // traffic off by default
+let _perfChannel = 'all';                                          // 'all' | 'ads' | 'organic'
+let _perfGroups = new Set(['catch','connect','convert','cost']);   // all on by default
 let _perfImportCtx = null;                                         // staged import awaiting confirm
+let _perfExpanded = new Set();                                     // asset ids with periods expanded
 
 // Normalize one period from Drive/import. Returns null for junk so a
 // half-written object can never poison the table.
@@ -7059,7 +7106,8 @@ function normalizePerfPeriod(p) {
     if (v != null && v !== '' && !isNaN(+v)) raw[k] = +v;
   });
   if (!start && !Object.keys(raw).length) return null;
-  return { start, end, objective: String(p.objective || ''), raw };
+  const channel = perfChannelOf(p.channel);
+  return { start, end, objective: String(p.objective || ''), channel, raw };
 }
 
 // 'YYYY-MM' month key from a start date ('' if unparseable).
@@ -7132,23 +7180,26 @@ function perfRowIssues(m) {
 
 // One display row per asset for the active month scope. hasData=false → the
 // asset has no period in scope and renders as em-dashes (never as zeros).
-function perfRowsFor(camp, month) {
+function perfRowsFor(camp, month, channel) {
+  channel = channel || 'all';
+  const chOk = p => channel === 'all' || (perfChannelOf(p.channel) === channel);
   const rows = [];
   (camp.assets || []).forEach(a => {
-    const periods = (a.metrics && a.metrics.periods) || [];
+    const periods = ((a.metrics && a.metrics.periods) || []).filter(chOk);
     const inScope = periods.filter(p => month === 'all' || perfMonthKey(p.start) === month);
     const otherMonths = new Set(
       periods.filter(p => inScope.indexOf(p) < 0).map(p => perfMonthKey(p.start)).filter(Boolean)
     );
-    if (!inScope.length) { rows.push({ asset:a, hasData:false, raw:{}, periods:[], objective:'', otherMonths }); return; }
+    if (!inScope.length) { rows.push({ asset:a, hasData:false, raw:{}, periods:[], objective:'', otherMonths, channels:new Set() }); return; }
     const sorted = inScope.slice().sort((x,y) => String(y.start).localeCompare(String(x.start)));
     const withObj = sorted.find(p => p.objective);
     rows.push({
       asset:a, hasData:true,
       raw: perfSumRaw(inScope.map(p => p.raw)),
-      periods: inScope,
+      periods: sorted,
       objective: withObj ? withObj.objective : '',
-      otherMonths
+      otherMonths,
+      channels: new Set(inScope.map(p => perfChannelOf(p.channel)))   // which channels feed this row
     });
   });
   return rows;
@@ -7178,7 +7229,17 @@ function perfDateLabel(periods) {
 }
 
 function setPerfMonth(m) { _perfMonth = m; renderPerfTable(); }
+function setPerfChannel(c) { _perfChannel = c; renderPerfTable(); }
 function togglePerfGroup(g) { if (_perfGroups.has(g)) _perfGroups.delete(g); else _perfGroups.add(g); renderPerfTable(); }
+function togglePerfRow(id) { if (_perfExpanded.has(id)) _perfExpanded.delete(id); else _perfExpanded.add(id); renderPerfTable(); }
+// Small channel badge (Ads / Organic / mixed) from a set of channels.
+function perfChanBadge(channels) {
+  const s = channels instanceof Set ? channels : new Set(channels||[]);
+  if (!s.size) return '';
+  const cls = c => c === 'organic' ? 'organic' : 'ads';
+  if (s.size === 1) { const c = Array.from(s)[0]; return `<span class="perf-chan ${cls(c)}">${c==='organic'?'Organic':'Ads'}</span>`; }
+  return `<span class="perf-chan mixed">Ads+Org</span>`;
+}
 
 function renderPerfTable() {
   const wrap = document.getElementById('perf-table-wrap');
@@ -7207,10 +7268,27 @@ function renderPerfTable() {
     monthbar.innerHTML = `<span class="lb">ช่วงเวลา</span><div class="perf-seg">${seg}</div>`;
   }
 
+  // channel (Ads / Organic) segmented control — only shown when both exist
+  const chanSet = new Set();
+  (camp.assets||[]).forEach(a => ((a.metrics&&a.metrics.periods)||[]).forEach(p => chanSet.add(perfChannelOf(p.channel))));
+  if (_perfChannel !== 'all' && !chanSet.has(_perfChannel)) _perfChannel = 'all';
+  const chanWrap = document.getElementById('perf-chan-toggle');
+  const chanBar = document.getElementById('perf-chanbar');
+  if (chanWrap && chanBar) {
+    if (chanSet.size > 1) {
+      chanWrap.style.display = '';
+      const cbtn = (v,l) => `<button class="${_perfChannel===v?'on':''}" onclick="setPerfChannel('${v}')">${l}</button>`;
+      chanBar.innerHTML = cbtn('all','รวม') + cbtn('ads','Ads') + cbtn('organic','Organic');
+    } else {
+      chanWrap.style.display = 'none';   // single channel → nothing to toggle
+      _perfChannel = 'all';
+    }
+  }
+
   // sync column chips to state
   document.querySelectorAll('#perf-chips .perf-chip').forEach(ch => ch.classList.toggle('on', _perfGroups.has(ch.dataset.grp)));
 
-  const rows = perfRowsFor(camp, _perfMonth);
+  const rows = perfRowsFor(camp, _perfMonth, _perfChannel);
   const withData = rows.filter(r => r.hasData);
   const totalRaw = perfSumRaw(withData.map(r => r.raw));
   const totalDer = perfDerived(totalRaw);
@@ -7224,6 +7302,8 @@ function renderPerfTable() {
     const lbl = document.getElementById('perf-clear-label');
     if (lbl) lbl.textContent = _perfMonth === 'all' ? 'ล้างผลทั้งหมด' : 'ล้างเดือนนี้';
   }
+  const exportBtn = document.getElementById('perf-export-btn');
+  if (exportBtn) exportBtn.style.display = withData.length ? '' : 'none';
 
   // summary tiles (rates from totals)
   if (tilesEl) {
@@ -7252,7 +7332,7 @@ function renderPerfTable() {
   let gh = '<th class="l" colspan="5"></th>';
   visibleGroups.forEach(g => {
     const cnt = PERF_METRICS.filter(m => m.group === g).length + (g==='cost' ? PERF_DERIVED.length : 0);
-    if (cnt) gh += `<th class="gh${g==='cost'?' cost':''} grp" colspan="${cnt}">${PERF_GROUP_LABEL[g]}</th>`;
+    if (cnt) gh += `<th class="gh ${g} grp" colspan="${cnt}">${PERF_GROUP_LABEL[g]}</th>`;
   });
   // column header row
   let chh = '<th class="l">Artwork</th><th class="l">ID</th><th class="l">Asset</th><th class="l">ช่วง</th><th class="l">Objective</th>';
@@ -7262,6 +7342,27 @@ function renderPerfTable() {
   uniqueShortIds(camp.assets, a => a.id, 'A');
   const campLabel = shortId(camp.id, 'C');
 
+  // Render the metric <td>s for one raw bag (+ its derived). Shared by the
+  // asset row, each expanded period row, and the per-asset subtotal.
+  const metricCells = (raw, hasData, extraCls) => {
+    const der = hasData ? perfDerived(raw) : {};
+    let out = '';
+    colList.forEach(c => {
+      const cls = (c.first ? 'grp' : '') + (extraCls ? ' ' + extraCls : '');
+      const clsAttr = cls ? ` class="${cls}"` : '';
+      if (!hasData) { out += `<td${clsAttr}><span class="perf-na">—</span></td>`; return; }
+      if (c.kind === 'raw') {
+        const v = raw[c.def.key];
+        out += `<td${clsAttr}>${v!=null ? perfFmt(v, c.def.fmt) : '<span class="perf-na">—</span>'}</td>`;
+      } else {
+        const v = der[c.def.key];
+        out += `<td${clsAttr}>${v!=null ? '<span class="perf-derived">'+perfFmt(v, c.def.fmt)+'</span>' : '<span class="perf-na">—</span>'}</td>`;
+      }
+    });
+    return out;
+  };
+
+  const canEditPerf = (typeof controlCan !== 'function' || controlCan('editSectionB'));
   let body = '';
   rows.forEach(r => {
     const a = r.asset;
@@ -7277,33 +7378,44 @@ function renderPerfTable() {
     }
     const obj = PERF_OBJECTIVES[r.objective] || PERF_OBJECTIVES[''];
     const alt = (r.otherMonths && r.otherMonths.size) ? `<span class="alt">+${r.otherMonths.size} เดือน</span>` : '';
-    const canEditPerf = (typeof controlCan !== 'function' || controlCan('editSectionB'));
     const rowClear = (r.hasData && canEditPerf)
       ? `<button class="perf-row-clear" title="ล้างผลของชิ้นงานนี้ในช่วงที่เลือก" onclick="clearPerfAsset('${escapeHtml(a.id)}')">✕</button>` : '';
+    // Ads/Organic badge — only meaningful when viewing the combined ("รวม") view.
+    const chanBadge = (r.hasData && _perfChannel === 'all') ? perfChanBadge(r.channels) : '';
+    const expanded = _perfExpanded.has(a.id);
+    const caret = (r.hasData && r.periods.length)
+      ? `<button class="perf-caret${expanded?' open':''}" title="ดูราย period" onclick="togglePerfRow('${escapeHtml(a.id)}')">▸</button>` : '';
     const period = r.hasData
-      ? `<span class="perf-period">${perfDateLabel(r.periods)}${alt}</span>${rowClear}`
+      ? `${caret}<span class="perf-period">${perfDateLabel(r.periods)}${alt}</span>${chanBadge}${rowClear}`
       : `<span class="perf-na" style="font-size:11px">ไม่มีข้อมูล${r.otherMonths && r.otherMonths.size ? ' เดือนนี้':''}</span>`;
-    const der = r.hasData ? perfDerived(r.raw) : {};
-    let cells = '';
-    colList.forEach(c => {
-      const cls = c.first ? ' class="grp"' : '';
-      if (!r.hasData) { cells += `<td${cls}><span class="perf-na">—</span></td>`; return; }
-      if (c.kind === 'raw') {
-        const v = r.raw[c.def.key];
-        cells += `<td${cls}>${v!=null ? perfFmt(v, c.def.fmt) : '<span class="perf-na">—</span>'}</td>`;
-      } else {
-        const v = der[c.def.key];
-        cells += `<td${cls}>${v!=null ? '<span class="perf-derived">'+perfFmt(v, c.def.fmt)+'</span>' : '<span class="perf-na">—</span>'}</td>`;
-      }
-    });
-    body += `<tr>
+
+    body += `<tr class="${r.hasData?'perf-arow':''}">
       <td class="l">${thumb}</td>
       <td class="l"><span class="asset-ref-id" title="${escapeHtml(campLabel+' / '+(a._displayId||''))}">${escapeHtml(a._displayId||shortId(a.id,'A'))}</span><small style="display:block;font-family:'Poppins','Prompt',sans-serif;font-size:9px;color:var(--muted-2);margin-top:2px;">${escapeHtml(campLabel)}</small></td>
       <td class="l"><div class="perf-aname">${escapeHtml(a.h2||'—')}</div><div class="perf-asub">${escapeHtml(a.catLabel||camp.brand||'')}</div></td>
       <td class="l">${period}</td>
       <td class="l"><span class="cat-pill ${obj.cls}">${escapeHtml(obj.label)}</span></td>
-      ${cells}
+      ${metricCells(r.raw, r.hasData, '')}
     </tr>`;
+
+    // expanded per-period detail rows + a per-asset subtotal row
+    if (r.hasData && expanded) {
+      r.periods.forEach(pd => {
+        const pobj = PERF_OBJECTIVES[pd.objective] || PERF_OBJECTIVES[''];
+        body += `<tr class="perf-detail">
+          <td class="l"></td>
+          <td class="l"></td>
+          <td class="l"><span class="perf-detail-lead">↳ ราย period</span></td>
+          <td class="l"><span class="perf-period sm">${perfDateLabel([pd])}</span> ${perfChanBadge([perfChannelOf(pd.channel)])}</td>
+          <td class="l"><span class="cat-pill sm ${pobj.cls}">${escapeHtml(pobj.label)}</span></td>
+          ${metricCells(pd.raw, true, 'dim')}
+        </tr>`;
+      });
+      body += `<tr class="perf-subtotal">
+        <td class="l" colspan="5">Σ รวม ${r.periods.length} ช่วง · ${escapeHtml(a.h2||a.id)}</td>
+        ${metricCells(r.raw, true, '')}
+      </tr>`;
+    }
   });
 
   let foot = '';
@@ -7314,7 +7426,8 @@ function renderPerfTable() {
       if (c.kind === 'raw') { const v = totalRaw[c.def.key]; tc += `<td${cls}>${v!=null ? perfFmt(v, c.def.fmt) : '<span class="perf-na">—</span>'}</td>`; }
       else { const v = totalDer[c.def.key]; tc += c.first ? `<td class="grp rate">${v!=null?perfFmt(v,c.def.fmt):'—'}</td>` : `<td class="rate">${v!=null?perfFmt(v,c.def.fmt):'—'}</td>`; }
     });
-    foot = `<tfoot><tr><td class="l" colspan="5">${_perfMonth==='all'?'รวมทั้งหมด':'รวมเดือนที่เลือก'} · ${withData.length} asset ที่มีข้อมูล</td>${tc}</tr></tfoot>`;
+    const chanNote = _perfChannel === 'all' ? ' · รวม Ads+Organic (CPM/ROAS แม่นเมื่อเลือก Ads)' : ' · ' + perfChannelLabel(_perfChannel);
+    foot = `<tfoot><tr><td class="l" colspan="5">${_perfMonth==='all'?'รวมทั้งหมด':'รวมเดือนที่เลือก'} · ${withData.length} asset${chanNote}</td>${tc}</tr></tfoot>`;
   }
 
   wrap.innerHTML = `<table><thead><tr>${gh}</tr><tr class="cols">${chh}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
@@ -7324,10 +7437,11 @@ function renderPerfTable() {
 function downloadPerfTemplate() {
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
-  const cols = ['id','asset','objective','period_start','period_end'].concat(PERF_METRICS.map(m => m.key));
+  // 'type' = Ads | Organic (filter in Section C). Blank defaults to Ads.
+  const cols = ['id','asset','objective','period_start','period_end','type'].concat(PERF_METRICS.map(m => m.key));
   const lines = [cols.join(',')];
   (camp.assets||[]).forEach(a => {
-    const row = [a.id, a.h2||'', '', '', ''].concat(PERF_METRICS.map(() => ''));
+    const row = [a.id, a.h2||'', '', '', '', 'Ads'].concat(PERF_METRICS.map(() => ''));
     lines.push(row.map(csvEscape).join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type:'text/csv;charset=utf-8' });
@@ -7337,6 +7451,45 @@ function downloadPerfTemplate() {
   document.body.appendChild(el); el.click(); el.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast('⬇ ดาวน์โหลด template แล้ว · กรอกเลขจากไฟล์ FB แล้ว Import กลับ', 'ok');
+}
+
+// Export the CURRENTLY VISIBLE view (respects month + channel + visible column
+// groups) to CSV — raw metrics + derived columns + a totals row. For reports.
+function exportPerfView() {
+  const camp = getCurrentCampaign();
+  if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
+  const rows = perfRowsFor(camp, _perfMonth, _perfChannel).filter(r => r.hasData);
+  if (!rows.length) { showToast('ไม่มีข้อมูลในมุมมองนี้ให้ export', 'warn'); return; }
+  const visibleGroups = PERF_GROUPS.filter(g => _perfGroups.has(g));
+  const cols = [];
+  visibleGroups.forEach(g => {
+    PERF_METRICS.filter(m => m.group === g).forEach(m => cols.push({ key:m.key, label:m.label, kind:'raw' }));
+    if (g === 'cost') PERF_DERIVED.forEach(m => cols.push({ key:m.key, label:m.label, kind:'der' }));
+  });
+  const num = (raw, der, c) => { const v = c.kind==='raw' ? raw[c.key] : der[c.key]; return (v==null||isNaN(v)) ? '' : (Math.round(v*1000)/1000); };
+  const head = ['id','asset','channel','period_start','period_end','objective'].concat(cols.map(c => c.label));
+  const lines = [head.map(csvEscape).join(',')];
+  rows.forEach(r => {
+    const der = perfDerived(r.raw);
+    const starts = r.periods.map(p=>p.start).filter(Boolean).sort();
+    const ends = r.periods.map(p=>p.end||p.start).filter(Boolean).sort();
+    const line = [ r.asset.id, r.asset.h2||'', Array.from(r.channels).join('+'),
+      starts[0]||'', ends[ends.length-1]||'', r.objective||'' ]
+      .concat(cols.map(c => num(r.raw, der, c)));
+    lines.push(line.map(csvEscape).join(','));
+  });
+  const totalRaw = perfSumRaw(rows.map(r => r.raw));
+  const totalDer = perfDerived(totalRaw);
+  lines.push(['TOTAL', rows.length+' asset', _perfChannel==='all'?'Ads+Organic':perfChannelLabel(_perfChannel), '', '', '']
+    .concat(cols.map(c => num(totalRaw, totalDer, c))).map(csvEscape).join(','));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type:'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const scope = (_perfMonth==='all'?'all':_perfMonth) + '_' + _perfChannel;
+  const el = document.createElement('a');
+  el.href = url; el.download = `perf_${String(camp.campaign||camp.id).replace(/[^\w]+/g,'_')}_${scope}.csv`;
+  document.body.appendChild(el); el.click(); el.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`⬇ Export ${rows.length} asset (${perfFullScopeLabel(_perfMonth, _perfChannel)}) แล้ว`, 'ok');
 }
 
 function triggerPerfImport() {
@@ -7407,10 +7560,11 @@ function stagePerfImport(text) {
   const startCol = findCol(PERF_START_HEADERS);
   const endCol = findCol(PERF_END_HEADERS);
   const objCol = findCol(PERF_OBJ_HEADERS);
+  const chanCol = findCol(PERF_CHANNEL_HEADERS);
 
   const metricCols = []; const usedKey = new Set();
   headers.forEach((h,i) => { const k = perfMapMetricHeader(h); if (k && !usedKey.has(k)) { usedKey.add(k); metricCols.push({ idx:i, key:k, header:h }); } });
-  const specialIdx = new Set([idCol, startCol, endCol, objCol].concat(metricCols.map(m=>m.idx)));
+  const specialIdx = new Set([idCol, startCol, endCol, objCol, chanCol].concat(metricCols.map(m=>m.idx)));
   const unknown = headers.filter((h,i) => h && !specialIdx.has(i));
 
   if (idCol < 0)         { showToast('ไม่พบคอลัมน์ id — ไฟล์ต้องมีคอลัมน์ที่ระบุ asset id', 'err'); return; }
@@ -7432,16 +7586,18 @@ function stagePerfImport(text) {
       start: startCol>=0 ? String(cells[startCol]||'').slice(0,10) : '',
       end:   endCol>=0   ? String(cells[endCol]||'').slice(0,10)   : '',
       objective: objCol>=0 ? String(cells[objCol]||'').trim().toLowerCase() : '',
+      channel: chanCol>=0 ? perfChannelOf(cells[chanCol]) : 'ads',
       raw, rowNo:r+1
     };
     // Classify against what already lives on the asset (data + metric compare).
-    const key = (m.start||'') + '|' + (m.end||'');
-    const existing = (asset.metrics && asset.metrics.periods || []).find(p => ((p.start||'')+'|'+(p.end||'')) === key);
+    // Channel is part of the key: same period, Ads vs Organic, are separate rows.
+    const key = (m.start||'') + '|' + (m.end||'') + '|' + m.channel;
+    const existing = (asset.metrics && asset.metrics.periods || []).find(p => ((p.start||'')+'|'+(p.end||'')+'|'+perfChannelOf(p.channel)) === key);
     if (!existing)                             m.status = 'new';
     else if (perfRawEqual(existing.raw, m.raw)) m.status = 'same';
     else                                        m.status = 'update';
     m.issues = perfRowIssues(m);
-    // Intra-file duplicate: two rows in the SAME file for one asset+period.
+    // Intra-file duplicate: two rows in the SAME file for one asset+period+channel.
     const fileKey = id + '|' + key;
     if (seenInFile.has(fileKey)) {
       m.dupInFile = true;
@@ -7469,6 +7625,7 @@ function showPerfImportPreview() {
   if (ctx.matched.some(m => m.start)) {
     mapRows += `<tr><td>วันเริ่มรัน (period_start)</td><td class="perf-na">→</td><td><code>เดือน</code></td><td>${escapeHtml(sample && sample.start || '—')}</td></tr>`;
   }
+  mapRows += `<tr><td>ประเภท (type)</td><td class="perf-na">→</td><td><code>ช่อง Ads/Organic</code></td><td>${escapeHtml(perfChannelLabel(sample && sample.channel || 'ads'))}</td></tr>`;
   ctx.metricCols.forEach(mc => {
     const val = sample && sample.raw[mc.key] != null ? sample.raw[mc.key].toLocaleString('en-US') : '<span class="perf-na">—</span>';
     mapRows += `<tr><td>${escapeHtml(mc.header)}</td><td class="perf-na">→</td><td><code>${mc.key}</code></td><td>${val}</td></tr>`;
@@ -7485,11 +7642,17 @@ function showPerfImportPreview() {
   // explicit before anything is written. Duplicates are skipped (no double-count).
   const c = ctx.counts || { new:0, update:0, same:0 };
   const pill = (n, color, label) => n ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px;background:${color}22;color:${color};"><b>${n}</b> ${label}</span>` : '';
+  let adsN = 0, orgN = 0;
+  ctx.matched.forEach(m => { if (m.overridden || m.status === 'same') return; if (m.channel === 'organic') orgN++; else adsN++; });
   const breakdown =
-    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">` +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">` +
     pill(c.new, '#3A7A3E', 'เพิ่มใหม่') +
     pill(c.update, '#B89248', 'อัปเดตทับ') +
     pill(c.same, '#6B6F76', 'ซ้ำ (ข้าม)') +
+    `</div>` +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">` +
+    pill(adsN, '#DD3A2C', 'Ads') +
+    pill(orgN, '#3A7A3E', 'Organic') +
     `</div>`;
 
   // Validation warnings — every flagged row surfaced, never silently dropped.
@@ -7538,9 +7701,9 @@ function applyPerfImport() {
     const a = m.asset;
     if (!a.metrics || typeof a.metrics !== 'object') a.metrics = { updatedAt:'', updatedBy:'', periods:[] };
     if (!Array.isArray(a.metrics.periods)) a.metrics.periods = [];
-    const key = (m.start||'') + '|' + (m.end||'');
-    const idx = a.metrics.periods.findIndex(p => ((p.start||'') + '|' + (p.end||'')) === key);
-    const period = { start:m.start||'', end:m.end||'', objective:m.objective||'', raw:m.raw };
+    const key = (m.start||'') + '|' + (m.end||'') + '|' + (m.channel||'ads');
+    const idx = a.metrics.periods.findIndex(p => ((p.start||'') + '|' + (p.end||'') + '|' + perfChannelOf(p.channel)) === key);
+    const period = { start:m.start||'', end:m.end||'', objective:m.objective||'', channel:m.channel||'ads', raw:m.raw };
     if (idx >= 0) { a.metrics.periods[idx] = period; updated++; } else { a.metrics.periods.push(period); added++; }
     a.metrics.updatedAt = now; a.metrics.updatedBy = by;
     touched.add(a.id);
@@ -7558,14 +7721,18 @@ function applyPerfImport() {
 }
 
 // ---- clear performance (undo a wrong import) ----
-// Is a period inside the active month scope? 'all' → every period.
-function perfInScope(p, scope) { return scope === 'all' || perfMonthKey(p.start) === scope; }
+// Is a period inside the active month + channel scope? 'all' → no filter.
+function perfInScope(p, scope, channel) {
+  const monthOk = (scope === 'all') || perfMonthKey(p.start) === scope;
+  const chanOk  = (!channel || channel === 'all') || perfChannelOf(p.channel) === channel;
+  return monthOk && chanOk;
+}
 // Remove in-scope periods from one asset; drops metrics entirely when empty.
 // Returns how many periods were removed.
-function perfStripScope(asset, scope) {
+function perfStripScope(asset, scope, channel) {
   const periods = asset.metrics && asset.metrics.periods;
   if (!Array.isArray(periods) || !periods.length) return 0;
-  const keep = periods.filter(p => !perfInScope(p, scope));
+  const keep = periods.filter(p => !perfInScope(p, scope, channel));
   const removed = periods.length - keep.length;
   if (!removed) return 0;
   if (keep.length) asset.metrics.periods = keep;
@@ -7578,27 +7745,32 @@ function perfScopeLabel(scope) {
   const d = new Date(+y, +mo-1, 1);
   return d.toLocaleDateString('th-TH', { month:'long' }) + ' ' + (+y+543);
 }
-// Header button: clear every asset's performance in the current month scope.
+function perfChannelLabel(ch) { return ch === 'ads' ? 'Ads' : ch === 'organic' ? 'Organic' : 'Ads+Organic'; }
+// Combined month + channel scope label for confirm dialogs / logs.
+function perfFullScopeLabel(scope, channel) {
+  return perfScopeLabel(scope) + (channel && channel !== 'all' ? ' · ' + perfChannelLabel(channel) : '');
+}
+// Header button: clear every asset's performance in the current month+channel view.
 function clearPerfScope() {
   if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึงล้างผลได้')) return;
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
-  const scope = _perfMonth;
+  const scope = _perfMonth, channel = _perfChannel;
   let total = 0, assetsHit = 0;
   (camp.assets||[]).forEach(a => {
-    const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope)).length;
+    const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope, channel)).length;
     if (n) { total += n; assetsHit++; }
   });
-  if (!total) { showToast('ไม่มีข้อมูลผลในช่วงที่เลือกให้ล้าง', 'warn'); return; }
+  if (!total) { showToast('ไม่มีข้อมูลผลในมุมมองนี้ให้ล้าง', 'warn'); return; }
   showConfirm('ล้างผล Performance',
-    `จะลบข้อมูลผล ${total} ช่วง จาก ${assetsHit} asset (${perfScopeLabel(scope)}) — กู้คืนไม่ได้ (แต่ import ใหม่ได้)`,
+    `จะลบข้อมูลผล ${total} ช่วง จาก ${assetsHit} asset (${perfFullScopeLabel(scope, channel)}) — กู้คืนไม่ได้ (แต่ import ใหม่ได้)`,
     () => {
       const now = new Date().toISOString();
       const by = (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || currentUserEmail || 'Unknown';
       let removed = 0; const touched = new Set();
-      (camp.assets||[]).forEach(a => { const n = perfStripScope(a, scope); if (n) { removed += n; touched.add(a.id); } });
+      (camp.assets||[]).forEach(a => { const n = perfStripScope(a, scope, channel); if (n) { removed += n; touched.add(a.id); } });
       camp.log = camp.log || [];
-      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล performance · ${removed} ช่วง · ${touched.size} asset · ${perfScopeLabel(scope)}` });
+      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล performance · ${removed} ช่วง · ${touched.size} asset · ${perfFullScopeLabel(scope, channel)}` });
       markCampaignDirty(camp.id);
       scheduleSave(camp.id);
       renderEverything();
@@ -7612,17 +7784,17 @@ function clearPerfAsset(assetId) {
   if (!camp) return;
   const a = (camp.assets||[]).find(x => x.id === assetId);
   if (!a) return;
-  const scope = _perfMonth;
-  const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope)).length;
-  if (!n) { showToast('ไม่มีข้อมูลผลให้ล้างในช่วงนี้', 'warn'); return; }
+  const scope = _perfMonth, channel = _perfChannel;
+  const n = ((a.metrics && a.metrics.periods) || []).filter(p => perfInScope(p, scope, channel)).length;
+  if (!n) { showToast('ไม่มีข้อมูลผลให้ล้างในมุมมองนี้', 'warn'); return; }
   showConfirm('ล้างผลของชิ้นงานนี้',
-    `จะลบผล ${n} ช่วง ของ "${a.h2||assetId}" (${perfScopeLabel(scope)}) — กู้คืนไม่ได้`,
+    `จะลบผล ${n} ช่วง ของ "${a.h2||assetId}" (${perfFullScopeLabel(scope, channel)}) — กู้คืนไม่ได้`,
     () => {
       const now = new Date().toISOString();
       const by = (document.getElementById('sb-name') && document.getElementById('sb-name').textContent) || currentUserEmail || 'Unknown';
-      const removed = perfStripScope(a, scope);
+      const removed = perfStripScope(a, scope, channel);
       camp.log = camp.log || [];
-      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล "${a.h2||assetId}" · ${removed} ช่วง · ${perfScopeLabel(scope)}` });
+      camp.log.unshift({ time:now, type:'PERF_CLEAR', user:by, desc:`ล้างผล "${a.h2||assetId}" · ${removed} ช่วง · ${perfFullScopeLabel(scope, channel)}` });
       markCampaignDirty(camp.id);
       scheduleSave(camp.id);
       renderEverything();
@@ -11279,6 +11451,59 @@ window.__runTests = async function() {
     eq(a.metrics, null);   // emptied → metrics dropped entirely
     eq(perfStripScope({ id:'y' }, 'all'), 0);   // no metrics → no-op
   });
+  t('metrics grouped under Catch/Connect/Convert + Cost', () => {
+    eq(METRIC_DEFS.reach.group, 'catch');
+    eq(METRIC_DEFS.likes.group, 'connect');
+    eq(METRIC_DEFS.traffic.group, 'connect');
+    eq(METRIC_DEFS.purchases.group, 'convert');
+    eq(METRIC_DEFS.spend.group, 'cost');
+    eq(PERF_GROUPS.join(','), 'catch,connect,convert,cost');
+  });
+  t('perfChannelOf: organic keywords → organic, else ads (blank=ads)', () => {
+    eq(perfChannelOf('Organic'), 'organic');
+    eq(perfChannelOf('organics'), 'organic');
+    eq(perfChannelOf('Ads'), 'ads');
+    eq(perfChannelOf('paid'), 'ads');
+    eq(perfChannelOf(''), 'ads');
+    eq(perfChannelOf(undefined), 'ads');
+  });
+  t('normalizePerfPeriod defaults channel to ads, keeps organic', () => {
+    eq(normalizePerfPeriod({ start:'2026-07-01', raw:{spend:1} }).channel, 'ads');
+    eq(normalizePerfPeriod({ start:'2026-07-01', channel:'organic', raw:{reach:9} }).channel, 'organic');
+  });
+  t('perfRowsFor filters by channel; ads and organic separate', () => {
+    const camp = { assets:[ { id:'a1', metrics:{ periods:[
+      {start:'2026-07-01',channel:'ads',raw:{spend:100,reach:10}},
+      {start:'2026-07-01',channel:'organic',raw:{reach:40}}
+    ] } } ] };
+    eq(perfRowsFor(camp, '2026-07', 'ads').find(r=>r.asset.id==='a1').raw.reach, 10);
+    eq(perfRowsFor(camp, '2026-07', 'organic').find(r=>r.asset.id==='a1').raw.reach, 40);
+    eq(perfRowsFor(camp, '2026-07', 'all').find(r=>r.asset.id==='a1').raw.reach, 50);
+  });
+  t('perfInScope respects channel; perfStripScope clears one channel only', () => {
+    const a = { id:'x', metrics:{ periods:[
+      {start:'2026-07-01',channel:'ads',raw:{spend:1}},
+      {start:'2026-07-01',channel:'organic',raw:{reach:2}}
+    ] } };
+    eq(perfStripScope(a, '2026-07', 'organic'), 1);
+    ok(a.metrics.periods.length === 1 && perfChannelOf(a.metrics.periods[0].channel) === 'ads');
+  });
+  t('perfChanBadge: single vs mixed', () => {
+    ok(perfChanBadge(['ads']).includes('Ads') && perfChanBadge(['ads']).includes('perf-chan'));
+    ok(perfChanBadge(['organic']).includes('Organic'));
+    ok(perfChanBadge(new Set(['ads','organic'])).includes('Ads+Org'));
+    eq(perfChanBadge([]), '');
+  });
+  t('perfRowsFor exposes channels set + sorted periods', () => {
+    const camp = { assets:[ { id:'a1', metrics:{ periods:[
+      {start:'2026-07-01',channel:'ads',raw:{reach:1}},
+      {start:'2026-07-05',channel:'organic',raw:{reach:2}}
+    ] } } ] };
+    const r = perfRowsFor(camp,'2026-07','all').find(x=>x.asset.id==='a1');
+    ok(r.channels.has('ads') && r.channels.has('organic'));
+    eq(r.periods[0].start, '2026-07-05');   // newest first
+  });
+  t('exportPerfView + togglePerfRow defined', () => { ok(typeof exportPerfView==='function' && typeof togglePerfRow==='function'); });
 
   // ---- Database payload ----
   t('buildDatabasePayload contains required fields', () => {
