@@ -7986,22 +7986,17 @@ function performLogout() {
 function openAddCampaignModal() {
   if (blockIfNotInternal('สร้างแคมเปญใหม่ได้เฉพาะทีม Wakuwaku')) return;
   if (blockUnless('createCampaign', 'สร้างแคมเปญได้เฉพาะ admin')) return;
-  // Campaign-first model: no member is picked in the sidebar anymore, so a new
-  // campaign is owned by whoever clicked create (the logged-in user). If a
-  // specific member is still pinned (e.g. from Settings), honour that instead.
-  const owner = currentMemberEmail || currentUserEmail;
+  // Campaign-first model: a new campaign is owned by whoever clicked create —
+  // the admin who is logged in right now. currentMemberEmail is NOT used here:
+  // it gets set to the last-viewed campaign's client (openCampaignDetail), so
+  // relying on it made Owner show that stale client instead of the creator.
+  const owner = currentUserEmail;
   if (!owner) { showToast('ยังไม่ทราบผู้สร้าง — ลอง login ใหม่', 'warn'); return; }
   ['newClient','newCampaign','newStart','newEnd','newCampaignDriveUrl'].forEach(id => document.getElementById(id).value = '');
-  // Prefill from an explicitly-pinned member (a customer) only — never from the
-  // creator's own account, whose name is a person, not a company.
-  const pinned = (currentMemberEmail && currentMemberEmail !== currentUserEmail) ? findMember(currentMemberEmail) : null;
-  if (pinned && pinned.name) document.getElementById('newClient').value = pinned.name;
-  if (pinned && pinned.driveFolderUrl) document.getElementById('newCampaignDriveUrl').value = pinned.driveFolderUrl;
   const label = document.getElementById('newCampaignMemberLabel');
   if (label) {
-    label.textContent = pinned
-      ? (pinned.name ? `${pinned.name} · ` : '') + currentMemberEmail
-      : `${owner} · (คุณ · ผู้สร้าง)`;
+    const me = findMember(owner);
+    label.textContent = (me && me.name ? `${me.name} · ` : '') + owner + ' · (คุณ · ผู้สร้าง)';
   }
   document.getElementById('addCampaignModal').classList.add('show');
 }
@@ -8019,8 +8014,9 @@ async function saveNewCampaign() {
   finally { if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = ''; } }
 }
 async function _saveNewCampaignInner() {
-  // Owner = pinned member if any, else the logged-in creator (campaign-first).
-  const owner = currentMemberEmail || currentUserEmail;
+  // Owner = the logged-in creator (campaign-first). Must match the Owner shown
+  // in the modal — not currentMemberEmail, which tracks the last-viewed client.
+  const owner = currentUserEmail;
   if (!owner) { showToast('ยังไม่ทราบผู้สร้าง — ลอง login ใหม่', 'warn'); return; }
   const client = document.getElementById('newClient').value.trim();
   const campaign = document.getElementById('newCampaign').value.trim();
