@@ -616,6 +616,10 @@
   .perf-chan.ads { background:#FBE3E0; color:var(--accent); }
   .perf-chan.organic { background:var(--connect-bg); color:var(--connect); }
   .perf-chan.mixed { background:var(--paper-3); color:var(--muted); }
+  .perf-mom { font-family:'Poppins','Prompt',sans-serif; font-size:10px; font-weight:700; padding:0 4px; border-radius:6px; white-space:nowrap; }
+  .perf-mom.up { color:var(--connect); background:var(--connect-bg); }
+  .perf-mom.down { color:var(--accent); background:#FBE3E0; }
+  .perf-mom.flat { color:var(--muted); background:var(--paper-3); }
   .perf-period.sm { font-size:11px; font-weight:500; }
   .cat-pill.sm { font-size:9px; padding:1px 7px; }
   .perf-table tr.perf-detail td { background:var(--paper-2); padding-top:5px; padding-bottom:5px; }
@@ -1303,7 +1307,7 @@
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Template
           </button>
-          <button class="btn accent" onclick="triggerPerfImport()">
+          <button class="btn accent" id="perf-import-btn" onclick="triggerPerfImport()">
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Import ผล FB
           </button>
@@ -1315,10 +1319,10 @@
             <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             <span id="perf-clear-label">ล้างผล</span>
           </button>
-          <input type="file" id="perf-import-file" accept=".csv,text/csv" style="display:none" onchange="onPerfImportFile(this)">
+          <input type="file" id="perf-import-file" accept=".csv,.xlsx,.xls,text/csv" style="display:none" onchange="onPerfImportFile(this)">
         </div>
       </div>
-      <div class="perf-sub">ผลลัพธ์ต่อชิ้นงาน · จับคู่ Artwork ด้วย asset ID · แบ่งตามเดือน · จัดกลุ่ม Catch/Connect/Convert · แยกดู Ads / Organic ได้ · Import ซ้ำได้ (เช็คซ้ำ ไม่นับซ้ำ) · ล้างได้ถ้าอัปผิด</div>
+      <div class="perf-sub">ผลลัพธ์ต่อชิ้นงาน · จับคู่ด้วย asset ID (หรือชื่อโฆษณาที่ฝัง id) · รับ .csv / .xlsx · กลุ่ม Catch/Connect/Convert · แยก Ads / Organic · Import ซ้ำได้ (เช็คซ้ำ) · ล้างได้ถ้าอัปผิด</div>
       <div class="perf-monthbar" id="perf-monthbar"></div>
       <div class="perf-tiles" id="perf-tiles"></div>
       <div class="perf-chips" id="perf-chips">
@@ -7078,6 +7082,7 @@ const PERF_START_HEADERS   = ['period_start','reporting starts','start','date','
 const PERF_END_HEADERS     = ['period_end','reporting ends','end','date_end'];
 const PERF_OBJ_HEADERS     = ['objective','objectives'];
 const PERF_CHANNEL_HEADERS = ['type','channel','source','organic/ads','ads/organic','paid/organic'];
+const PERF_NAME_HEADERS    = ['ad name','ad_name','adname','ชื่อโฆษณา','ชื่อแอด','name','asset','ad'];
 // Cell value → channel. Organic keywords win; everything else (incl. blank) = ads,
 // because FB ad exports are ad rows by default.
 function perfChannelOf(v) {
@@ -7114,6 +7119,25 @@ function normalizePerfPeriod(p) {
 function perfMonthKey(dateStr) {
   const s = String(dateStr || '').slice(0,7);
   return /^\d{4}-\d{2}$/.test(s) ? s : '';
+}
+
+// Normalize a messy date cell to 'YYYY-MM-DD'. Accepts ISO (YYYY-MM-DD or
+// YYYY/MM/DD) and day/month-first slash or dash dates (DD/MM/YYYY, common in
+// Thai/EU FB exports). Slash dates default to DAY-first; if the 2nd part is
+// >12 it must be the day, so we swap. Returns '' when nothing parses.
+function perfNormDate(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const p2 = n => (n < 10 ? '0' : '') + n;
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);           // year-first ISO-ish
+  if (m) { const mo=+m[2], d=+m[3]; if (mo>=1&&mo<=12&&d>=1&&d<=31) return `${m[1]}-${p2(mo)}-${p2(d)}`; }
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);               // day/month-first
+  if (m) {
+    let d=+m[1], mo=+m[2]; const y=m[3];
+    if (mo>12 && d<=12) { const t=d; d=mo; mo=t; }                   // 2nd part >12 → it's the day
+    if (mo>=1&&mo<=12&&d>=1&&d<=31) return `${y}-${p2(mo)}-${p2(d)}`;
+  }
+  return /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0,10)) ? s.slice(0,10) : '';
 }
 
 // Pure: derive rate/cost metrics from a raw bag. Missing inputs → key omitted.
@@ -7297,24 +7321,53 @@ function renderPerfTable() {
   // can edit Section B. Label follows the month filter (all vs one month).
   const clearBtn = document.getElementById('perf-clear-btn');
   if (clearBtn) {
-    const canClear = withData.length && (typeof controlCan !== 'function' || controlCan('editSectionB'));
+    const canClear = withData.length && (typeof controlCan !== 'function' || controlCan('managePerformance'));
     clearBtn.style.display = canClear ? '' : 'none';
     const lbl = document.getElementById('perf-clear-label');
     if (lbl) lbl.textContent = _perfMonth === 'all' ? 'ล้างผลทั้งหมด' : 'ล้างเดือนนี้';
   }
   const exportBtn = document.getElementById('perf-export-btn');
   if (exportBtn) exportBtn.style.display = withData.length ? '' : 'none';
+  // Import = admin-only (performance numbers are internal). Non-admins still
+  // see the table + Export, just not the write path.
+  const importBtn = document.getElementById('perf-import-btn');
+  if (importBtn) importBtn.style.display = (typeof controlCan !== 'function' || controlCan('managePerformance')) ? '' : 'none';
+
+  // MoM: when one month is selected, compare against the previous month with
+  // data (compact ▲/▼ % on a few tiles). 'all' view shows no delta (no baseline).
+  let prevRaw = null, prevDer = null;
+  if (_perfMonth !== 'all') {
+    const idx = months.indexOf(_perfMonth);
+    const prevMonth = idx > 0 ? months[idx-1] : null;
+    if (prevMonth) {
+      const pr = perfRowsFor(camp, prevMonth, _perfChannel).filter(r => r.hasData);
+      if (pr.length) { prevRaw = perfSumRaw(pr.map(r => r.raw)); prevDer = perfDerived(prevRaw); }
+    }
+  }
+  // ▲/▼ badge vs a previous value. higherIsBetter flips the colour for cost-like
+  // metrics (a lower CPM month is good → green even though the number dropped).
+  const delta = (cur, prev, higherIsBetter) => {
+    if (prev == null || prev === 0 || cur == null || isNaN(cur)) return '';
+    const pct = (cur - prev) / Math.abs(prev) * 100;
+    if (!isFinite(pct) || Math.abs(pct) < 0.5) return ' <span class="perf-mom flat">≈</span>';
+    const up = pct > 0, good = higherIsBetter ? up : !up;
+    return ` <span class="perf-mom ${good?'up':'down'}">${up?'▲':'▼'}${Math.abs(pct).toFixed(0)}%</span>`;
+  };
 
   // summary tiles (rates from totals)
   if (tilesEl) {
     const tile = (k,v,d,hl) => `<div class="perf-tile${hl?' hl':''}"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`;
+    const dSpend  = prevRaw ? delta(totalRaw.spend||0, prevRaw.spend||0, true) : '';
+    const dResult = prevRaw ? delta(totalRaw.conversions||0, prevRaw.conversions||0, true) : '';
+    const dCpm    = prevDer ? delta(totalDer.cpm, prevDer.cpm, false) : '';
+    const dRoas   = prevDer ? delta(totalDer.roas, prevDer.roas, true) : '';
     tilesEl.innerHTML =
-      tile('ค่าโฆษณา', '<span class="u">฿</span>'+Math.round(totalRaw.spend||0).toLocaleString('en-US'), withData.length+' asset', true) +
+      tile('ค่าโฆษณา', '<span class="u">฿</span>'+Math.round(totalRaw.spend||0).toLocaleString('en-US'), withData.length+' asset'+dSpend, true) +
       tile('Impressions', perfCompact(totalRaw.impressions), 'Reach '+perfCompact(totalRaw.reach)) +
       tile('Engagement', perfCompact(totalRaw.engagement), 'eng rate '+(totalDer.eng_rate!=null?(totalDer.eng_rate*100).toFixed(1)+'%':'—')) +
-      tile('Results', perfCompact(totalRaw.conversions), 'CPA '+(totalDer.cpa!=null?'฿'+totalDer.cpa.toFixed(1):'—')) +
-      tile('CPM', totalDer.cpm!=null?'<span class="u">฿</span>'+totalDer.cpm.toFixed(1):'—', 'จากยอดรวม') +
-      tile('ROAS', totalDer.roas!=null?totalDer.roas.toFixed(1)+'×':'—', 'Value ฿'+Math.round(totalRaw.value||0).toLocaleString('en-US'), true);
+      tile('Results', perfCompact(totalRaw.conversions), 'CPA '+(totalDer.cpa!=null?'฿'+totalDer.cpa.toFixed(1):'—')+dResult) +
+      tile('CPM', totalDer.cpm!=null?'<span class="u">฿</span>'+totalDer.cpm.toFixed(1):'—', (prevDer?'vs เดือนก่อน':'จากยอดรวม')+dCpm) +
+      tile('ROAS', totalDer.roas!=null?totalDer.roas.toFixed(1)+'×':'—', 'Value ฿'+Math.round(totalRaw.value||0).toLocaleString('en-US')+dRoas, true);
   }
 
   if (!rows.length) { wrap.innerHTML = '<div class="perf-empty">ยังไม่มี asset ในแคมเปญนี้ — เพิ่มงานใน Section B ก่อน</div>'; return; }
@@ -7362,7 +7415,7 @@ function renderPerfTable() {
     return out;
   };
 
-  const canEditPerf = (typeof controlCan !== 'function' || controlCan('editSectionB'));
+  const canEditPerf = (typeof controlCan !== 'function' || controlCan('managePerformance'));
   let body = '';
   rows.forEach(r => {
     const a = r.asset;
@@ -7493,7 +7546,7 @@ function exportPerfView() {
 }
 
 function triggerPerfImport() {
-  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึง import performance ได้')) return;
+  if (blockUnless('managePerformance', 'เฉพาะ admin จึง import performance ได้')) return;
   if (!getCurrentCampaign()) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
   const inp = document.getElementById('perf-import-file');
   if (inp) inp.click();
@@ -7502,10 +7555,28 @@ function onPerfImportFile(input) {
   const file = input.files && input.files[0];
   input.value = '';
   if (!file) return;
+  const isXlsx = /\.(xlsx|xls)$/i.test(file.name);
   const reader = new FileReader();
-  reader.onload = () => { try { stagePerfImport(String(reader.result || '')); } catch(e){ showToast('อ่านไฟล์ไม่สำเร็จ · ' + (e.message||e), 'err'); } };
   reader.onerror = () => showToast('อ่านไฟล์ไม่สำเร็จ', 'err');
-  reader.readAsText(file);
+  if (isXlsx) {
+    if (typeof XLSX === 'undefined') { showToast('XLSX library ยังไม่โหลด — refresh แล้วลองใหม่ หรือ save เป็น .csv', 'err'); return; }
+    reader.onload = () => {
+      try {
+        const wb = XLSX.read(new Uint8Array(reader.result), { type:'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        // header:1 → array-of-arrays, same shape parsePerfCSV returns. raw:false
+        // gives display strings so dates come through as the sheet shows them.
+        const rows = XLSX.utils.sheet_to_json(ws, { header:1, blankrows:false, raw:false, defval:'' })
+          .map(r => r.map(c => String(c == null ? '' : c)))
+          .filter(r => r.some(c => String(c).trim() !== ''));
+        stagePerfImportTable(rows);
+      } catch(e){ showToast('อ่าน .xlsx ไม่สำเร็จ · ' + (e.message||e), 'err'); }
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload = () => { try { stagePerfImport(String(reader.result || '')); } catch(e){ showToast('อ่านไฟล์ไม่สำเร็จ · ' + (e.message||e), 'err'); } };
+    reader.readAsText(file);
+  }
 }
 
 // RFC-4180-ish CSV parser: handles quoted fields, embedded commas/newlines,
@@ -7548,11 +7619,27 @@ function perfMapMetricHeader(h) {
   return null;
 }
 
+// Find any known asset id that appears as a substring of a free-text cell
+// (e.g. FB "Ad name" that embeds the id). Longest id first so a longer id
+// wins over a shorter one it contains. Returns the asset or null.
+function perfMatchByName(text, assetsSortedByIdLen) {
+  const hay = String(text || '').toLowerCase();
+  if (!hay) return null;
+  for (const a of assetsSortedByIdLen) { if (hay.indexOf(String(a.id).toLowerCase()) >= 0) return a; }
+  return null;
+}
+
 function stagePerfImport(text) {
+  const table = parsePerfCSV(text);
+  stagePerfImportTable(table);
+}
+
+// Core importer. `table` = array-of-string-arrays (row 0 = headers). Shared by
+// the CSV and .xlsx paths.
+function stagePerfImportTable(table) {
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
-  const table = parsePerfCSV(text);
-  if (table.length < 2) { showToast('ไฟล์ว่างหรือไม่มีแถวข้อมูล', 'err'); return; }
+  if (!Array.isArray(table) || table.length < 2) { showToast('ไฟล์ว่างหรือไม่มีแถวข้อมูล', 'err'); return; }
   const headers = table[0].map(h => String(h||'').trim());
   const lower = headers.map(h => h.toLowerCase());
   const findCol = list => { for (let i=0;i<lower.length;i++) if (list.indexOf(lower[i]) >= 0) return i; return -1; };
@@ -7561,30 +7648,40 @@ function stagePerfImport(text) {
   const endCol = findCol(PERF_END_HEADERS);
   const objCol = findCol(PERF_OBJ_HEADERS);
   const chanCol = findCol(PERF_CHANNEL_HEADERS);
+  const nameCol = findCol(PERF_NAME_HEADERS);
 
   const metricCols = []; const usedKey = new Set();
   headers.forEach((h,i) => { const k = perfMapMetricHeader(h); if (k && !usedKey.has(k)) { usedKey.add(k); metricCols.push({ idx:i, key:k, header:h }); } });
-  const specialIdx = new Set([idCol, startCol, endCol, objCol, chanCol].concat(metricCols.map(m=>m.idx)));
+  const specialIdx = new Set([idCol, startCol, endCol, objCol, chanCol, nameCol].concat(metricCols.map(m=>m.idx)));
   const unknown = headers.filter((h,i) => h && !specialIdx.has(i));
 
-  if (idCol < 0)         { showToast('ไม่พบคอลัมน์ id — ไฟล์ต้องมีคอลัมน์ที่ระบุ asset id', 'err'); return; }
+  if (idCol < 0 && nameCol < 0) { showToast('ไม่พบคอลัมน์ id — ไฟล์ต้องมีคอลัมน์ id หรือชื่อโฆษณาที่ฝัง asset id', 'err'); return; }
   if (!metricCols.length){ showToast('ไม่พบคอลัมน์ metric ที่รู้จักในไฟล์', 'err'); return; }
 
   const byId = new Map((camp.assets||[]).map(a => [String(a.id).trim(), a]));
+  const byLen = (camp.assets||[]).slice().sort((a,b) => String(b.id).length - String(a.id).length);
   const matched = [], unmatched = [];
+  let nameMatchCount = 0;
   const seenInFile = new Map();   // id|start|end → matched-row index (intra-file dup guard)
   for (let r=1; r<table.length; r++) {
     const cells = table[r];
-    const id = String(cells[idCol] || '').trim();
-    if (!id) continue;
+    let id = idCol>=0 ? String(cells[idCol] || '').trim() : '';
+    let asset = id ? byId.get(id) : null;
+    let byName = false;
+    // Fallback: id column empty or unmatched → try to find an asset id embedded
+    // in the ad-name column. If still nothing, it stays unmatched (old behavior).
+    if (!asset && nameCol >= 0) {
+      const found = perfMatchByName(cells[nameCol], byLen);
+      if (found) { asset = found; id = found.id; byName = true; nameMatchCount++; }
+    }
+    if (!id && !asset) continue;
+    if (!asset) { unmatched.push({ id: id || String(cells[nameCol]||'').slice(0,40), rowNo:r+1 }); continue; }
     const raw = {};
     metricCols.forEach(mc => { const v = perfParseNum(cells[mc.idx]); if (v != null) raw[mc.key] = v; });
-    const asset = byId.get(id);
-    if (!asset) { unmatched.push({ id, rowNo:r+1 }); continue; }
     const m = {
-      asset, id,
-      start: startCol>=0 ? String(cells[startCol]||'').slice(0,10) : '',
-      end:   endCol>=0   ? String(cells[endCol]||'').slice(0,10)   : '',
+      asset, id, byName,
+      start: startCol>=0 ? perfNormDate(cells[startCol]) : '',
+      end:   endCol>=0   ? perfNormDate(cells[endCol])   : '',
       objective: objCol>=0 ? String(cells[objCol]||'').trim().toLowerCase() : '',
       channel: chanCol>=0 ? perfChannelOf(cells[chanCol]) : 'ads',
       raw, rowNo:r+1
@@ -7612,7 +7709,7 @@ function stagePerfImport(text) {
   const counts = { new:0, update:0, same:0 };
   matched.forEach(m => { if (!m.overridden) counts[m.status]++; });
   const issueRows = matched.filter(m => !m.overridden && m.issues.length);
-  _perfImportCtx = { campId: camp.id, matched, unmatched, metricCols, unknown, counts, issueRows };
+  _perfImportCtx = { campId: camp.id, matched, unmatched, metricCols, unknown, counts, issueRows, nameMatchCount };
   showPerfImportPreview();
 }
 
@@ -7631,6 +7728,7 @@ function showPerfImportPreview() {
     mapRows += `<tr><td>${escapeHtml(mc.header)}</td><td class="perf-na">→</td><td><code>${mc.key}</code></td><td>${val}</td></tr>`;
   });
   const ignored = ctx.unknown.length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">ข้าม ${ctx.unknown.length} คอลัมน์ที่ไม่รู้จัก: ${ctx.unknown.map(escapeHtml).join(', ')}</div>` : '';
+  const nameNote = ctx.nameMatchCount ? `<div style="font-size:11px;color:var(--connect);margin-top:8px;">🔎 ${ctx.nameMatchCount} แถวจับคู่จากชื่อโฆษณา (ไม่มี id ตรง — ดึง asset id จากชื่อให้)</div>` : '';
   let unmatchedBlock = '';
   if (ctx.unmatched.length) {
     const list = ctx.unmatched.slice(0,8).map(u => `<code>${escapeHtml(u.id)}</code>`).join(', ');
@@ -7673,7 +7771,7 @@ function showPerfImportPreview() {
     breakdown +
     `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2);font-weight:700;margin-bottom:6px;">การจับคู่คอลัมน์ → metric (ตัวอย่างจากแถวแรก)</div>` +
     `<table class="perf-map"><thead><tr><th>คอลัมน์ในไฟล์</th><th></th><th>เก็บเป็น</th><th>ค่าตัวอย่าง</th></tr></thead><tbody>${mapRows}</tbody></table>` +
-    ignored + issueBlock + unmatchedBlock +
+    ignored + nameNote + issueBlock + unmatchedBlock +
     (writable ? '' : '<div class="perf-warn" style="margin-top:14px;"><b>ไม่มีข้อมูลใหม่ให้เขียน</b> — ทุกแถวซ้ำกับที่มีอยู่แล้ว หรือจับคู่ ID ไม่ได้</div>');
   if (applyBtn) {
     applyBtn.disabled = !writable;
@@ -7688,7 +7786,7 @@ function closePerfImport() {
 }
 function applyPerfImport() {
   const ctx = _perfImportCtx; if (!ctx) return;
-  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้')) return;
+  if (blockUnless('managePerformance', 'เฉพาะ admin จึงแก้ performance ได้')) return;
   const camp = campaigns.find(c => c.id === ctx.campId);
   if (!camp) { showToast('แคมเปญหาย — ปิดแล้วลองใหม่', 'err'); closePerfImport(); return; }
   const now = new Date().toISOString();
@@ -7752,7 +7850,7 @@ function perfFullScopeLabel(scope, channel) {
 }
 // Header button: clear every asset's performance in the current month+channel view.
 function clearPerfScope() {
-  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึงล้างผลได้')) return;
+  if (blockUnless('managePerformance', 'เฉพาะ admin จึงล้างผลได้')) return;
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
   const scope = _perfMonth, channel = _perfChannel;
@@ -7779,7 +7877,7 @@ function clearPerfScope() {
 }
 // Per-row button: clear one asset's performance in the current month scope.
 function clearPerfAsset(assetId) {
-  if (blockUnless('editSectionB', 'เฉพาะทีมที่แก้ Section B ได้ จึงล้างผลได้')) return;
+  if (blockUnless('managePerformance', 'เฉพาะ admin จึงล้างผลได้')) return;
   const camp = getCurrentCampaign();
   if (!camp) return;
   const a = (camp.assets||[]).find(x => x.id === assetId);
@@ -11500,6 +11598,27 @@ window.__runTests = async function() {
     eq(r.periods[0].start, '2026-07-05');   // newest first
   });
   t('exportPerfView + togglePerfRow defined', () => { ok(typeof exportPerfView==='function' && typeof togglePerfRow==='function'); });
+  t('perfNormDate: ISO passthrough + DD/MM/YYYY + swap + junk', () => {
+    eq(perfNormDate('2026-07-01'), '2026-07-01');
+    eq(perfNormDate('2026/07/09'), '2026-07-09');
+    eq(perfNormDate('01/07/2026'), '2026-07-01');   // day-first default
+    eq(perfNormDate('13/07/2026'), '2026-07-13');   // 1st>12 → day
+    eq(perfNormDate('07/13/2026'), '2026-07-13');   // 2nd>12 → it's the day, swap
+    eq(perfNormDate('2026-07-01T08:00:00'), '2026-07-01');
+    eq(perfNormDate('not a date'), '');
+  });
+  t('perfMatchByName finds embedded asset id, longest first', () => {
+    const assets = [{ id:'asset-1' }, { id:'asset-12' }].sort((a,b)=>b.id.length-a.id.length);
+    eq(perfMatchByName('Boost - asset-12 - July', assets).id, 'asset-12');
+    eq(perfMatchByName('nothing here', assets), null);
+  });
+  t('managePerformance permission is admin-only', () => {
+    ok(window.Control && typeof window.Control.can === 'function');
+    ok(window.Control.can('admin', 'managePerformance'));
+    ok(!window.Control.can('editor', 'managePerformance'));
+    ok(!window.Control.can('operation', 'managePerformance'));
+    ok(!window.Control.can('customer', 'managePerformance'));
+  });
 
   // ---- Database payload ----
   t('buildDatabasePayload contains required fields', () => {

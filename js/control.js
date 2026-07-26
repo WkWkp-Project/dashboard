@@ -35,16 +35,16 @@
   var ROLES = ['admin', 'editor', 'operation', 'viewer', 'customer'];
 
   var PERMISSIONS = {
-    admin:     { manageMembers: true,  manageAdmins: true,  seeAllCampaigns: true,  assignCampaign: true,  createCampaign: true,  deleteCampaign: true,  editSectionA: true,  editSectionB: true },
-    editor:    { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: true,  editSectionB: true },
-    operation: { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: true },
-    viewer:    { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: false },
+    admin:     { manageMembers: true,  manageAdmins: true,  seeAllCampaigns: true,  assignCampaign: true,  createCampaign: true,  deleteCampaign: true,  editSectionA: true,  editSectionB: true,  managePerformance: true  },
+    editor:    { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: true,  editSectionB: true,  managePerformance: false },
+    operation: { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: true,  managePerformance: false },
+    viewer:    { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: false, managePerformance: false },
     // Customer = pure read-only by design. They can expand details and browse
     // assigned campaigns but cannot mutate. The UX rule is: if you click a
     // button as customer, nothing should happen except a 'read-only' hint —
     // and we'd rather show no button at all than a button that silently fails.
     // To grant edit power, an admin promotes them to operation or higher.
-    customer:  { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: false }
+    customer:  { manageMembers: false, manageAdmins: false, seeAllCampaigns: false, assignCampaign: false, createCampaign: false, deleteCampaign: false, editSectionA: false, editSectionB: false, managePerformance: false }
   };
 
   function normEmail(e) { return String(e || '').trim().toLowerCase(); }
