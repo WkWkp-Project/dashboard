@@ -2473,14 +2473,24 @@ function onCampaignSignal(sig) {
     if (!camp) return; // already not in our list
     const name = camp.campaign || camp.id;
     campaigns = campaigns.filter(c => c.id !== sig.id);
+    // Persist the deleted id so a later Drive search can't zombie it back for
+    // us (mirrors the deleter's own confirmDeleteCampaign path). Without this,
+    // if the Firestore signal is pruned or our listener restarts, the still-
+    // untrashed customer-owned JSON re-appears on the next sync.
+    if (typeof _rememberDeletedCampaignId === 'function') _rememberDeletedCampaignId(sig.id);
     // Drop the dirty mark for the deleted campaign too. Without this, a queued
     // saveToDrive would filter targets down to "deleted id only", get an empty
     // set, and fall back to its 'save all' path — re-uploading every campaign
     // the user can see, which is both wasteful and risks pushing stale data.
     _dirtyCampaignIds.delete(sig.id);
     if (currentCampaignId === sig.id) {
+      // Prefer a campaign under the same member, but fall back to ANY remaining
+      // campaign so the view never blanks when the deleted one was the last for
+      // that member even though others remain.
       const myCamps = currentMemberEmail ? campaigns.filter(c => (c.clientEmail || '') === currentMemberEmail) : campaigns;
-      currentCampaignId = myCamps[0] ? myCamps[0].id : null;
+      const next = myCamps[0] || campaigns[0] || null;
+      currentCampaignId = next ? next.id : null;
+      if (next) currentMemberEmail = (next.clientEmail || currentMemberEmail || '').toLowerCase();
     }
     if (typeof renderEverything === 'function') renderEverything();
     showToast(`🗑️ ${sig.displayName || sig.modifiedBy || 'ทีม'} ลบ "${name}"`, 'warn');
@@ -2910,7 +2920,7 @@ function dedupCampaigns(list) {
   const byFolder = new Map();
   const finalKept = [];
   afterId.forEach(c => {
-    const folderKey = (c.clientEmail || '').toLowerCase() + '' + (c.driveFolderId || '');
+    const folderKey = (c.driveFolderId || '');
     if (!c.driveFolderId) { finalKept.push(c); return; }
     const prev = byFolder.get(folderKey);
     if (!prev) { byFolder.set(folderKey, c); finalKept.push(c); return; }
@@ -4163,6 +4173,19 @@ async function saveToDrive() {
     const dirty = _dirtyCampaignIds.size > 0
       ? targets.filter(c => _dirtyCampaignIds.has(c.id))
       : targets;
+    // If the dirty set is non-empty but none of its ids map to a saveable
+    // campaign, the ids are STALE (their campaign was removed/rebuilt by a
+    // resync). Prune them and stop — do NOT fall back to "save all", which
+    // would re-upload every campaign from a possibly-stale local snapshot and
+    // clobber another admin's field edits. Save-all is only for the genuinely
+    // empty dirty set (forceSave / login flush / migration).
+    if (_dirtyCampaignIds.size > 0 && !dirty.length) {
+      const targetIds = new Set(targets.map(c => c.id));
+      Array.from(_dirtyCampaignIds).forEach(id => { if (!targetIds.has(id)) _dirtyCampaignIds.delete(id); });
+      pendingChanges = false;
+      setSaveStatus('saved', 'No pending changes');
+      return;
+    }
     const toSave = dirty.length ? dirty : targets;
     // Parallel save with concurrency cap = 6. Each saveCampaignJsonToDrive
     // hits a different Drive folder + a different Firestore index doc + its
@@ -4370,7 +4393,11 @@ function downloadManualBackup() {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const filename = `wakuwaku_manual_backup_${todayLocalISO()}_${new Date().getHours()}${String(new Date().getMinutes()).padStart(2,'0')}.json`;
     downloadBlob(blob, filename);
-    pendingChanges = false;
+    // NB: a disk backup is NOT a Drive save — never clear pendingChanges here.
+    // Clearing it used to (a) stop the retry loop (scheduleSaveRetry returns on
+    // !pendingChanges) and (b) drop the silent-sync guard, so a resync could
+    // overwrite the still-unsaved edit. The Drive save stays pending until it
+    // actually succeeds.
     setSaveStatus('saved', `Manual backup saved · ${filename}`);
     showToast('✓ Manual backup เซฟลงเครื่องแล้ว', 'ok');
     logAction('BACKUP', `Manual JSON backup (${(blob.size/1024).toFixed(1)} KB)`);
@@ -4826,9 +4853,12 @@ function _invalidateCampaignFileCache(campId) {
   if (campId) _CAMP_FILE_CACHE.delete(campId);
   else _CAMP_FILE_CACHE.clear();
 }
-async function findCampaignJsonFile(camp) {
+async function findCampaignJsonFile(camp, forceFresh) {
   if (!camp || !camp.driveFolderId) return null;
-  const cached = camp.id ? _CAMP_FILE_CACHE.get(camp.id) : null;
+  // forceFresh: skip the 10s cache. Required by the pre-write conflict check —
+  // the cached modifiedTime reflects OUR last write, so a different admin's
+  // edit inside the window would be invisible and get silently overwritten.
+  const cached = (!forceFresh && camp.id) ? _CAMP_FILE_CACHE.get(camp.id) : null;
   if (cached && Date.now() - cached.ts < _CAMP_FILE_CACHE_TTL_MS) return cached.value;
   let result = null;
   if (camp.driveDbFileId) {
@@ -4869,7 +4899,8 @@ async function saveCampaignJsonToDrive(camp, opts) {
   if (!camp || !camp.id) throw new Error('ไม่พบ campaign ที่จะเซฟ');
   if (!camp.driveFolderId) throw new Error(`Campaign "${camp.campaign || camp.id}" ยังไม่มี Client Drive Folder URL`);
   const allowOverwrite = !!(opts && opts.allowOverwrite);
-  const existing = await findCampaignJsonFile(camp);
+  // Fresh read (bypass cache) so the conflict check sees another admin's write.
+  const existing = await findCampaignJsonFile(camp, true);
   // Optimistic concurrency: if the Drive file has been updated by someone
   // else after we loaded it, throw instead of blindly overwriting. The
   // caller (saveToDrive) catches this and asks the user what to do.
@@ -5182,7 +5213,9 @@ function renderEditingIndicator() {
   bar.innerHTML = `<span style="font-size:14px;">🔴</span> <strong>${names}</strong> กำลังแก้ ${typeStr} ของแคมเปญนี้อยู่ — ระวังการแก้ทับ`;
 }
 function _hasLocalEditInFlight() {
-  return !!(pendingChanges || saveTimer || isSaving || _editModalOpenCount > 0);
+  // _saveRetryTimer: a save failed and a retry is armed — the edit is still
+  // only in memory, so a silent resync must not overwrite it.
+  return !!(pendingChanges || saveTimer || isSaving || _saveRetryTimer || _editModalOpenCount > 0);
 }
 
 // Soft-deleted campaign ids — populated from two stores so a deleted
@@ -5397,7 +5430,7 @@ const RESYNC_COOLDOWN_MS = 8000;
 async function maybeResync(reason) {
   if (!accessToken || isOfflineMode) return;
   if (!_readyToSave) return;
-  if (isSaving || saveTimer || pendingChanges) return; // don't overwrite local edits
+  if (_hasLocalEditInFlight()) return; // don't overwrite local edits (incl. armed retry)
   if (typeof document !== 'undefined' && document.hidden) return;
   const now = Date.now();
   if (now - _lastResyncTs < RESYNC_COOLDOWN_MS) return;
@@ -5482,7 +5515,7 @@ function normalizeCampaign(c) {
     description: c.description || '',
     stakeholders: c.stakeholders || '',
     tags: Array.isArray(c.tags) ? c.tags : (typeof c.tags === 'string' ? c.tags.split(',').map(s=>s.trim()).filter(Boolean) : []),
-    status: c.status || 'draft',
+    status: (typeof c.status === 'string' && c.status) ? c.status : 'draft',
     handoffInfo: c.handoffInfo || null,
     assets,
     log: Array.isArray(c.log) ? c.log : [],
@@ -5975,7 +6008,7 @@ function renderHubSidebar() {
   const sb = document.getElementById('sb-hub-link');
   if (!sb) return;
   if (hub.folderUrl) {
-    sb.innerHTML = `<a href="${escapeHtml(hub.folderUrl)}" target="_blank" title="${escapeHtml(hub.folderUrl)}">🌐 Hub folder ↗</a>`;
+    sb.innerHTML = `<a href="${escapeHtml(hub.folderUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(hub.folderUrl)}">🌐 Hub folder ↗</a>`;
     sb.style.display = '';
   } else {
     sb.style.display = 'none';
@@ -6354,7 +6387,7 @@ function _makeCampaignCard(c) {
   const card = document.createElement('div');
   card.className = 'camp-card';
   card.onclick = () => openCampaignDetail(c.id);
-  const status = c.status === 'handed-off' ? 'completed' : (c.status || 'draft');
+  const status = c.status === 'handed-off' ? 'completed' : (typeof c.status === 'string' && c.status ? c.status : 'draft');
   const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
   card.innerHTML =
     `<div class="camp-card-top">
@@ -6763,8 +6796,9 @@ function updateCampaignUI() {
     periodText += ` (${days}d)`;
   }
   document.getElementById('meta-period').textContent = periodText;
-  const statusText = camp.status === 'handed-off' ? 'Handed Off' : camp.status.charAt(0).toUpperCase() + camp.status.slice(1);
-  document.getElementById('meta-status').innerHTML = `<span class="status-pill ${camp.status}">${statusText}</span>`;
+  const cStatus = (typeof camp.status === 'string' && camp.status) ? camp.status : 'draft';
+  const statusText = cStatus === 'handed-off' ? 'Handed Off' : cStatus.charAt(0).toUpperCase() + cStatus.slice(1);
+  document.getElementById('meta-status').innerHTML = `<span class="status-pill ${escapeHtml(cStatus)}">${escapeHtml(statusText)}</span>`;
   const banner = document.getElementById('handoffBanner');
   if (camp.handoffInfo) {
     banner.classList.remove('hidden');
@@ -6833,6 +6867,17 @@ function togglePromptExpand(assetId, btn) {
 // recognisable per-site icon + short platform/domain name instead of a long
 // truncated URL. The full URL stays available via the chip's title tooltip.
 // Pure + offline-safe (no favicon fetch) — extend the table to add a platform.
+// Return the URL only if its scheme is safe to put in an href. Blocks
+// javascript:/data:/vbscript: etc. that a customer could hand-edit into their
+// campaign JSON — those would run in an admin's session on click. Bare
+// (scheme-less) links get an https:// prefix; anything unsafe → '' (no href).
+function safeUrl(url) {
+  const s = String(url == null ? '' : url).trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(s)) return '';   // has a scheme, and it isn't allowed
+  return 'https://' + s;                            // scheme-less → assume https
+}
 function linkMeta(url) {
   let host = '';
   try { host = new URL(url).hostname; }
@@ -6906,7 +6951,11 @@ function renderAssets() {
       mediaChip = `<button class="media-count-chip" onclick="openMediaViewer('${a.id}')" title="View / Download media">📎 ${parts.join(' · ') || fileCount + ' files'}</button>`;
     }
     const linkArr = (a.links && a.links.length) ? a.links : (a.link ? [a.link] : []);
-    const linksMarkup = linkArr.map(u => { const m = linkMeta(u); return `<a href="${escapeHtml(u)}" target="_blank" class="file-chip link-chip" title="${escapeHtml(u)}"><span class="lc-ico">${m.icon}</span>${escapeHtml(m.label)}</a>`; }).join('');
+    const linksMarkup = linkArr.map(u => {
+      const m = linkMeta(u); const su = safeUrl(u);
+      if (!su) return `<span class="file-chip link-chip" title="${escapeHtml(u)}" style="opacity:.6;cursor:not-allowed;"><span class="lc-ico">⚠️</span>${escapeHtml(m.label)}</span>`;
+      return `<a href="${escapeHtml(su)}" target="_blank" rel="noopener noreferrer" class="file-chip link-chip" title="${escapeHtml(u)}"><span class="lc-ico">${m.icon}</span>${escapeHtml(m.label)}</a>`;
+    }).join('');
     const linksHTML = linksMarkup + mediaChip;
     // Inline creative preview (first image, else first video, else first file)
     const allFiles = (a.files && a.files.length) ? a.files : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
@@ -7121,21 +7170,40 @@ function perfMonthKey(dateStr) {
   return /^\d{4}-\d{2}$/.test(s) ? s : '';
 }
 
-// Normalize a messy date cell to 'YYYY-MM-DD'. Accepts ISO (YYYY-MM-DD or
-// YYYY/MM/DD) and day/month-first slash or dash dates (DD/MM/YYYY, common in
-// Thai/EU FB exports). Slash dates default to DAY-first; if the 2nd part is
-// >12 it must be the day, so we swap. Returns '' when nothing parses.
+const PERF_MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+// Normalize a messy date cell to 'YYYY-MM-DD'. Handles ISO (YYYY-MM-DD / with a
+// time suffix), year-first slash, day/month-first slash or dash with 2- OR
+// 4-digit year (DD/MM/YYYY, common in Thai/EU FB exports), month-name dates
+// ("Jul 1, 2026", "1-Jul-2026"), and bare Excel serial numbers (from .xlsx).
+// Slash dates default to DAY-first; if the 2nd part is >12 it must be the day,
+// so we swap. Returns '' when nothing parses.
 function perfNormDate(v) {
-  const s = String(v || '').trim();
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  const s = String(v == null ? '' : v).trim();
   if (!s) return '';
   const p2 = n => (n < 10 ? '0' : '') + n;
-  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);           // year-first ISO-ish
+  const yr = y => { y = +y; return y < 100 ? 2000 + y : y; };
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);              // year-first ISO-ish
   if (m) { const mo=+m[2], d=+m[3]; if (mo>=1&&mo<=12&&d>=1&&d<=31) return `${m[1]}-${p2(mo)}-${p2(d)}`; }
-  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);               // day/month-first
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);              // day/month-first, 2- or 4-digit year
   if (m) {
-    let d=+m[1], mo=+m[2]; const y=m[3];
-    if (mo>12 && d<=12) { const t=d; d=mo; mo=t; }                   // 2nd part >12 → it's the day
+    let d=+m[1], mo=+m[2]; const y=yr(m[3]);
+    if (mo>12 && d<=12) { const t=d; d=mo; mo=t; }                     // 2nd part >12 → it's the day
     if (mo>=1&&mo<=12&&d>=1&&d<=31) return `${y}-${p2(mo)}-${p2(d)}`;
+  }
+  const mn = s.toLowerCase().match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);  // month-name
+  if (mn) {
+    const mo = PERF_MONTHS[mn[1]];
+    const nums = s.match(/\d+/g) || [];
+    let year = null, day = null;
+    nums.forEach(n => { if (n.length >= 4) year = +n; });
+    for (const n of nums) { if (n.length < 4 && +n>=1 && +n<=31) { day = +n; break; } }
+    if (!year) for (const n of nums) { if (n.length <= 2 && +n>31) year = yr(n); }
+    if (year && day) return `${year}-${p2(mo)}-${p2(day)}`;
+  }
+  if (/^\d{4,6}$/.test(s)) {                                           // bare Excel serial
+    const n = +s;
+    if (n >= 20000 && n <= 60000) return new Date(Date.UTC(1899,11,30) + n*86400000).toISOString().slice(0,10);
   }
   return /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0,10)) ? s.slice(0,10) : '';
 }
@@ -7562,12 +7630,13 @@ function onPerfImportFile(input) {
     if (typeof XLSX === 'undefined') { showToast('XLSX library ยังไม่โหลด — refresh แล้วลองใหม่ หรือ save เป็น .csv', 'err'); return; }
     reader.onload = () => {
       try {
-        const wb = XLSX.read(new Uint8Array(reader.result), { type:'array' });
+        const wb = XLSX.read(new Uint8Array(reader.result), { type:'array', cellDates:true });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        // header:1 → array-of-arrays, same shape parsePerfCSV returns. raw:false
-        // gives display strings so dates come through as the sheet shows them.
-        const rows = XLSX.utils.sheet_to_json(ws, { header:1, blankrows:false, raw:false, defval:'' })
-          .map(r => r.map(c => String(c == null ? '' : c)))
+        // header:1 → array-of-arrays (same shape parsePerfCSV returns). cellDates
+        // keeps real date cells as Date objects → perfNormDate reads them exactly
+        // (dodges Excel's 2-digit-year / m-d-yy display formats). Non-dates → text.
+        const rows = XLSX.utils.sheet_to_json(ws, { header:1, blankrows:false, raw:true, defval:'' })
+          .map(r => r.map(c => (c instanceof Date) ? perfNormDate(c) : String(c == null ? '' : c)))
           .filter(r => r.some(c => String(c).trim() !== ''));
         stagePerfImportTable(rows);
       } catch(e){ showToast('อ่าน .xlsx ไม่สำเร็จ · ' + (e.message||e), 'err'); }
@@ -7926,7 +7995,8 @@ function renderHistory() {
       const time = new Date(h.time).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit'});
       const item = document.createElement('div');
       item.className = 'history-item';
-      item.innerHTML = `<div><strong>${escapeHtml(h.user)}</strong>: ${escapeHtml(h.desc)} <span class="history-tag tag-${h.type.toLowerCase()}">${h.type}</span></div><span style="opacity:0.6;">${time}</span>`;
+      const htype = String(h.type || '');
+      item.innerHTML = `<div><strong>${escapeHtml(h.user)}</strong>: ${escapeHtml(h.desc)} <span class="history-tag tag-${escapeHtml(htype.toLowerCase())}">${escapeHtml(htype)}</span></div><span style="opacity:0.6;">${time}</span>`;
       g.appendChild(item);
     });
     body.appendChild(g);
@@ -7985,11 +8055,18 @@ function closeConfirm() { document.getElementById('confirmModal').classList.remo
 function confirmDeleteAsset(id) {
   if (blockIfClient('ไม่สามารถลบ asset ได้')) return;
   const camp = getCurrentCampaign();
+  if (!camp) return;
   const a = camp.assets.find(x => x.id === id);
   if (!a) return;
-  showConfirm('Delete this asset?', `"${a.h2 || 'asset'}" จะถูกลบถาวร (จะมี log ไว้)`, () => {
-    camp.assets = camp.assets.filter(x => x.id !== id);
-    logAction('DELETE', `Removed asset: ${a.h2 || 'asset'}`);
+  const lockedId = camp.id, label = a.h2 || 'asset';
+  showConfirm('Delete this asset?', `"${label}" จะถูกลบถาวร (จะมี log ไว้)`, () => {
+    // Re-resolve the campaign inside the callback: a background resync may have
+    // rebuilt the campaigns array while the dialog was open, orphaning `camp`.
+    // (Same guard saveAssetFromModal uses.)
+    const live = campaigns.find(c => c.id === lockedId);
+    if (!live || !Array.isArray(live.assets)) { showToast('แคมเปญเปลี่ยนสถานะ — ลองใหม่', 'warn'); return; }
+    live.assets = live.assets.filter(x => x.id !== id);
+    logAction('DELETE', `Removed asset: ${label}`);
     renderAssets(); showToast('Asset deleted');
   });
 }
@@ -8249,8 +8326,13 @@ function confirmDeleteCampaign() {
     //    loadCampaignJsonFilesFromDrive would re-find it without this guard.
     _rememberDeletedCampaignId(removedId);
     campaigns = campaigns.filter(x => x.id !== removedId);
-    const myCamps = currentMemberEmail ? campaigns.filter(x => (x.clientEmail || '') === currentMemberEmail) : [];
-    currentCampaignId = myCamps[0] ? myCamps[0].id : null;
+    // Prefer a campaign under the same member, but fall back to ANY remaining
+    // campaign so the view never blanks when the deleted one was the last for
+    // that member even though others remain.
+    const myLeft = currentMemberEmail ? campaigns.filter(x => (x.clientEmail || '') === currentMemberEmail) : campaigns;
+    const nextCamp = myLeft[0] || campaigns[0] || null;
+    currentCampaignId = nextCamp ? nextCamp.id : null;
+    if (nextCamp) currentMemberEmail = (nextCamp.clientEmail || currentMemberEmail || '').toLowerCase();
     closeEditModal();
     renderEverything();
     if (softDelete) {
@@ -8369,7 +8451,9 @@ function renderAssetLinksList() {
   pendingLinks.forEach((url, i) => {
     const div = document.createElement('div');
     div.className = 'ref-link-item';
-    div.innerHTML = `<span style="font-family:'Poppins','Prompt',sans-serif; font-size:10px; color:var(--muted-2);">${i+1}.</span><a href="${escapeHtml(url)}" target="_blank">${escapeHtml(url)}</a><button type="button" class="rm" title="Remove" onclick="removeAssetLink(${i})">×</button>`;
+    const su = safeUrl(url);
+    const linkEl = su ? `<a href="${escapeHtml(su)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : `<span style="opacity:.6;" title="scheme ไม่ปลอดภัย">⚠️ ${escapeHtml(url)}</span>`;
+    div.innerHTML = `<span style="font-family:'Poppins','Prompt',sans-serif; font-size:10px; color:var(--muted-2);">${i+1}.</span>${linkEl}<button type="button" class="rm" title="Remove" onclick="removeAssetLink(${i})">×</button>`;
     wrap.appendChild(div);
   });
 }
@@ -8471,7 +8555,7 @@ function renderMediaViewer() {
   } else if (src && isVideoType(f.type)) {
     body = `<video src="${src}" controls playsinline preload="metadata" style="background:#000;"></video>`;
   } else if (fileIsOnDrive(f)) {
-    body = `<div style="color:#ddd; text-align:center; padding:32px;">☁️<br><strong>${escapeHtml(f.name)}</strong><br><small>ไฟล์อยู่บน Google Drive</small><br><button class="btn sm" style="margin-top:10px;" onclick="loadCurrentMediaFile()">โหลด preview</button>${f.webViewLink ? `<a class="btn sm" style="margin-top:10px; margin-left:6px;" href="${escapeHtml(f.webViewLink)}" target="_blank">เปิดใน Drive ↗</a>` : ''}</div>`;
+    body = `<div style="color:#ddd; text-align:center; padding:32px;">☁️<br><strong>${escapeHtml(f.name)}</strong><br><small>ไฟล์อยู่บน Google Drive</small><br><button class="btn sm" style="margin-top:10px;" onclick="loadCurrentMediaFile()">โหลด preview</button>${f.webViewLink ? `<a class="btn sm" style="margin-top:10px; margin-left:6px;" href="${escapeHtml(f.webViewLink)}" target="_blank" rel="noopener noreferrer">เปิดใน Drive ↗</a>` : ''}</div>`;
   } else {
     body = `<div style="color:#ddd; text-align:center; padding:32px;">📄<br><strong>${escapeHtml(f.name)}</strong><br><small>คลิก Download เพื่อบันทึกไฟล์</small></div>`;
   }
@@ -10220,7 +10304,7 @@ async function finalizeHandoff() {
 // manual-share link if the API rejects the transfer (common across Workspace
 // orgs or for consumer Gmail accounts).
 async function transferCampaignDriveOwnership() {
-  if (blockIfNotInternal('Transfer ownership เฉพาะ admin')) return;
+  if (blockUnless('manageMembers', 'Transfer ownership เฉพาะ admin')) return;
   const camp = getCurrentCampaign();
   if (!camp || !camp.driveFolderId) {
     showToast('แคมเปญนี้ยังไม่ได้กรอก Client Drive Folder URL', 'warn');
@@ -10527,14 +10611,34 @@ function saveCampaignInfo() {
   const newDriveUrl = document.getElementById('editDriveFolderUrl').value.trim();
   const oldFolderId = camp.driveFolderId || '';
   if (newDriveUrl !== (camp.driveFolderUrl || '')) {
-    camp.driveFolderUrl = newDriveUrl;
     const fid = newDriveUrl ? parseDriveFolderId(newDriveUrl) : '';
-    camp.driveFolderId = fid || '';
-    if ((camp.driveFolderId || '') !== oldFolderId) {
-      camp.mediaFolderId = ''; // re-resolve next time we need to upload
-      if (oldFolderId) showToast('🔁 เปลี่ยนปลายทางแคมเปญแล้ว · ไฟล์เก่ายังอยู่ folder เดิม ใช้งานได้ปกติ', 'ok');
+    // Same invariant the create flow enforces: never point two campaigns at one
+    // Drive folder (their wakuwaku_campaign.json would overwrite each other).
+    // The edit path was missing this guard.
+    if (fid && fid !== oldFolderId) {
+      const localClash = campaigns.find(c => c.id !== camp.id && c.driveFolderId === fid);
+      let remoteClash = null;
+      try {
+        if (window.Control && window.Control.available() && typeof window.Control.cachedCampaignIndex === 'function') {
+          remoteClash = (window.Control.cachedCampaignIndex() || []).find(r => r && r.driveFolderId === fid && r.id !== camp.id);
+        }
+      } catch(e) { /* lookup failure must not block a legit edit */ }
+      const clash = localClash || remoteClash;
+      if (clash) {
+        showToast(`โฟลเดอร์นี้ถูกใช้โดยแคมเปญ "${(clash.campaign || clash.name || clash.id)}" แล้ว — ใช้โฟลเดอร์อื่น`, 'err');
+        // leave camp.driveFolderUrl / driveFolderId unchanged
+      } else {
+        camp.driveFolderUrl = newDriveUrl;
+        camp.driveFolderId = fid;
+        camp.mediaFolderId = ''; // re-resolve next time we need to upload
+        if (oldFolderId) showToast('🔁 เปลี่ยนปลายทางแคมเปญแล้ว · ไฟล์เก่ายังอยู่ folder เดิม ใช้งานได้ปกติ', 'ok');
+      }
+    } else {
+      // URL text changed but folder id same (or cleared) — safe to store as-is.
+      camp.driveFolderUrl = newDriveUrl;
+      camp.driveFolderId = fid || '';
+      if (newDriveUrl && !fid) showToast('⚠ URL ไม่ใช่รูปแบบโฟลเดอร์ Drive ที่รู้จัก — ตรวจอีกครั้ง', 'warn');
     }
-    if (newDriveUrl && !fid) showToast('⚠ URL ไม่ใช่รูปแบบโฟลเดอร์ Drive ที่รู้จัก — ตรวจอีกครั้ง', 'warn');
   }
   // Render only if the locked campaign is still the displayed one
   if (currentCampaignId === (lockedId || camp.id)) { updateCampaignUI(); renderCampaignNav(); }
@@ -11598,12 +11702,16 @@ window.__runTests = async function() {
     eq(r.periods[0].start, '2026-07-05');   // newest first
   });
   t('exportPerfView + togglePerfRow defined', () => { ok(typeof exportPerfView==='function' && typeof togglePerfRow==='function'); });
-  t('perfNormDate: ISO passthrough + DD/MM/YYYY + swap + junk', () => {
+  t('perfNormDate: ISO + DD/MM/YYYY + swap + 2-digit yr + month-name + serial', () => {
     eq(perfNormDate('2026-07-01'), '2026-07-01');
     eq(perfNormDate('2026/07/09'), '2026-07-09');
     eq(perfNormDate('01/07/2026'), '2026-07-01');   // day-first default
     eq(perfNormDate('13/07/2026'), '2026-07-13');   // 1st>12 → day
     eq(perfNormDate('07/13/2026'), '2026-07-13');   // 2nd>12 → it's the day, swap
+    eq(perfNormDate('1/7/26'), '2026-07-01');        // 2-digit year
+    eq(perfNormDate('Jul 1, 2026'), '2026-07-01');   // month-name
+    eq(perfNormDate('15 Jul 2026'), '2026-07-15');
+    eq(perfNormDate('46204'), '2026-07-01');         // Excel serial
     eq(perfNormDate('2026-07-01T08:00:00'), '2026-07-01');
     eq(perfNormDate('not a date'), '');
   });
@@ -11611,6 +11719,23 @@ window.__runTests = async function() {
     const assets = [{ id:'asset-1' }, { id:'asset-12' }].sort((a,b)=>b.id.length-a.id.length);
     eq(perfMatchByName('Boost - asset-12 - July', assets).id, 'asset-12');
     eq(perfMatchByName('nothing here', assets), null);
+  });
+  t('safeUrl allows http/https/mailto, blocks javascript/data, prefixes bare', () => {
+    eq(safeUrl('https://x.com'), 'https://x.com');
+    eq(safeUrl('mailto:a@b.com'), 'mailto:a@b.com');
+    eq(safeUrl('drive.google.com/x'), 'https://drive.google.com/x');
+    eq(safeUrl('javascript:alert(1)'), '');
+    eq(safeUrl('JavaScript:alert(1)'), '');
+    eq(safeUrl('data:text/html,x'), '');
+    eq(safeUrl(''), '');
+  });
+  t('dedupCampaigns collapses two owners in the same Drive folder', () => {
+    const out = dedupCampaigns([
+      { id:'c1', clientEmail:'admin-a@x.com', driveFolderId:'F1', driveDbModifiedTime:'2026-07-01T00:00:00Z' },
+      { id:'c2', clientEmail:'admin-b@x.com', driveFolderId:'F1', driveDbModifiedTime:'2026-07-02T00:00:00Z' }
+    ]).kept;
+    eq(out.length, 1);           // same folder → one survives regardless of owner
+    eq(out[0].id, 'c2');         // newest driveDbModifiedTime wins
   });
   t('managePerformance permission is admin-only', () => {
     ok(window.Control && typeof window.Control.can === 'function');
@@ -12313,7 +12438,7 @@ window.__runTests = async function() {
   t('onCampaignSignal removes campaign on deleted signal', () => {
     const svC = campaigns.slice(); const svId = currentCampaignId; const svE = currentUserEmail;
     currentUserEmail = 'me@x.y';
-    campaigns = [{ id:'doomed', campaign:'X', clientEmail:'c@x.y', assets:[] }, { id:'safe', campaign:'Y', clientEmail:'c@x.y', assets:[] }];
+    campaigns = [normalizeCampaign({ id:'doomed', campaign:'X', clientEmail:'c@x.y', assets:[] }), normalizeCampaign({ id:'safe', campaign:'Y', clientEmail:'c@x.y', assets:[] })];
     currentCampaignId = 'doomed';
     onCampaignSignal({ id:'doomed', deleted:true, modifiedBy:'other@x.y', displayName:'Other', ts: Date.now() });
     const gone = !campaigns.find(c => c.id === 'doomed');
@@ -12619,8 +12744,8 @@ window.__runTests = async function() {
   // listeners can't accidentally wipe a user's mid-edit campaigns array.
   t('_hasLocalEditInFlight helper defined', () => ok(typeof _hasLocalEditInFlight === 'function'));
   t('_hasLocalEditInFlight true when pendingChanges OR saveTimer OR isSaving', () => {
-    const svP = pendingChanges, svT = saveTimer, svS = isSaving;
-    pendingChanges = false; saveTimer = null; isSaving = false;
+    const svP = pendingChanges, svT = saveTimer, svS = isSaving, svR = _saveRetryTimer;
+    pendingChanges = false; saveTimer = null; isSaving = false; _saveRetryTimer = null;
     const idle = _hasLocalEditInFlight() === false;
     pendingChanges = true;
     const onPending = _hasLocalEditInFlight() === true;
@@ -12628,8 +12753,10 @@ window.__runTests = async function() {
     const onTimer = _hasLocalEditInFlight() === true;
     saveTimer = null; isSaving = true;
     const onSaving = _hasLocalEditInFlight() === true;
-    pendingChanges = svP; saveTimer = svT; isSaving = svS;
-    ok(idle && onPending && onTimer && onSaving);
+    isSaving = false; _saveRetryTimer = 456;
+    const onRetry = _hasLocalEditInFlight() === true;
+    pendingChanges = svP; saveTimer = svT; isSaving = svS; _saveRetryTimer = svR;
+    ok(idle && onPending && onTimer && onSaving && onRetry);
   });
   t('syncDatabaseFromDrive silent path bails when local edit in flight (source guard)', () => {
     const src = syncDatabaseFromDrive.toString();
