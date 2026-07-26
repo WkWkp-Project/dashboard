@@ -2813,6 +2813,20 @@ function controlCan(action) {
   return isAdmin;
 }
 
+// Section C import/clear = admin only. We OR in isAdmin so a genuine admin is
+// never locked out by a lagging control-doc role or a stale control.js that
+// predates the managePerformance capability (belt-and-suspenders: isAdmin is
+// itself true only for the admin control role).
+function canManagePerf() {
+  return !!(isAdmin || controlCan('managePerformance'));
+}
+// Block a performance action unless allowed. Returns true if blocked.
+function blockPerf(label) {
+  if (canManagePerf()) return false;
+  showToast(label || 'เฉพาะ admin ทำรายการนี้ได้', 'warn');
+  return true;
+}
+
 // Block an action unless the current role has the capability. Returns true if blocked.
 function blockUnless(action, label) {
   if (controlCan(action)) return false;
@@ -7389,7 +7403,7 @@ function renderPerfTable() {
   // can edit Section B. Label follows the month filter (all vs one month).
   const clearBtn = document.getElementById('perf-clear-btn');
   if (clearBtn) {
-    const canClear = withData.length && (typeof controlCan !== 'function' || controlCan('managePerformance'));
+    const canClear = withData.length && canManagePerf();
     clearBtn.style.display = canClear ? '' : 'none';
     const lbl = document.getElementById('perf-clear-label');
     if (lbl) lbl.textContent = _perfMonth === 'all' ? 'ล้างผลทั้งหมด' : 'ล้างเดือนนี้';
@@ -7399,7 +7413,7 @@ function renderPerfTable() {
   // Import = admin-only (performance numbers are internal). Non-admins still
   // see the table + Export, just not the write path.
   const importBtn = document.getElementById('perf-import-btn');
-  if (importBtn) importBtn.style.display = (typeof controlCan !== 'function' || controlCan('managePerformance')) ? '' : 'none';
+  if (importBtn) importBtn.style.display = canManagePerf() ? '' : 'none';
 
   // MoM: when one month is selected, compare against the previous month with
   // data (compact ▲/▼ % on a few tiles). 'all' view shows no delta (no baseline).
@@ -7483,7 +7497,7 @@ function renderPerfTable() {
     return out;
   };
 
-  const canEditPerf = (typeof controlCan !== 'function' || controlCan('managePerformance'));
+  const canEditPerf = canManagePerf();
   let body = '';
   rows.forEach(r => {
     const a = r.asset;
@@ -7614,7 +7628,7 @@ function exportPerfView() {
 }
 
 function triggerPerfImport() {
-  if (blockUnless('managePerformance', 'เฉพาะ admin จึง import performance ได้')) return;
+  if (blockPerf('เฉพาะ admin จึง import performance ได้')) return;
   if (!getCurrentCampaign()) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
   const inp = document.getElementById('perf-import-file');
   if (inp) inp.click();
@@ -7855,7 +7869,7 @@ function closePerfImport() {
 }
 function applyPerfImport() {
   const ctx = _perfImportCtx; if (!ctx) return;
-  if (blockUnless('managePerformance', 'เฉพาะ admin จึงแก้ performance ได้')) return;
+  if (blockPerf('เฉพาะ admin จึงแก้ performance ได้')) return;
   const camp = campaigns.find(c => c.id === ctx.campId);
   if (!camp) { showToast('แคมเปญหาย — ปิดแล้วลองใหม่', 'err'); closePerfImport(); return; }
   const now = new Date().toISOString();
@@ -7919,7 +7933,7 @@ function perfFullScopeLabel(scope, channel) {
 }
 // Header button: clear every asset's performance in the current month+channel view.
 function clearPerfScope() {
-  if (blockUnless('managePerformance', 'เฉพาะ admin จึงล้างผลได้')) return;
+  if (blockPerf('เฉพาะ admin จึงล้างผลได้')) return;
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
   const scope = _perfMonth, channel = _perfChannel;
@@ -7946,7 +7960,7 @@ function clearPerfScope() {
 }
 // Per-row button: clear one asset's performance in the current month scope.
 function clearPerfAsset(assetId) {
-  if (blockUnless('managePerformance', 'เฉพาะ admin จึงล้างผลได้')) return;
+  if (blockPerf('เฉพาะ admin จึงล้างผลได้')) return;
   const camp = getCurrentCampaign();
   if (!camp) return;
   const a = (camp.assets||[]).find(x => x.id === assetId);
