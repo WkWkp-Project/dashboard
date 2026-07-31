@@ -627,11 +627,24 @@
   .perf-detail-lead { font-size:10px; color:var(--muted-2); font-style:italic; }
   .perf-table tr.perf-subtotal td { background:var(--paper-3); font-weight:700; border-top:1px solid var(--line); border-bottom:2px solid var(--line); }
   .perf-table tr.perf-subtotal td.l { font-size:11px; color:var(--muted); text-align:right; font-weight:600; }
+  /* Creative block grouping: a firmer top border starts each creative; the
+     continuation rows (extra objectives) get no top border so they read as one
+     block, with a subtle left accent to tie them together. */
+  .perf-table tr.perf-block-start > td { border-top:2px solid var(--line); }
+  .perf-table tr.perf-block-cont > td { border-top:none; }
+  .perf-table tr.perf-block-cont > td:first-child { border-left:2px solid var(--paper-3); }
   .perf-derived { color:var(--gold); font-weight:700; }
   .perf-na { color:var(--muted-2); }
   .perf-table tfoot td { font-weight:800; background:var(--paper-2); border-top:2px solid var(--line-2); border-bottom:none; }
   .perf-table tfoot td.l { text-align:left; }
   .perf-table tfoot .rate { color:var(--gold); }
+  /* Grand-total SUM bar — strong dark row pinned at the very bottom so the
+     all-creatives total is unmistakable. */
+  .perf-table tfoot tr.perf-grandtotal td { background:var(--ink); color:var(--paper); border-top:3px solid var(--gold); font-size:12px; padding-top:10px; padding-bottom:10px; }
+  .perf-table tfoot tr.perf-grandtotal td.l { color:var(--paper); letter-spacing:.02em; }
+  .perf-table tfoot tr.perf-grandtotal .rate { color:var(--gold); }
+  .perf-table tfoot tr.perf-grandtotal .perf-derived { color:#F0D28C; }
+  .perf-table tfoot tr.perf-grandtotal .perf-na { color:rgba(255,255,255,.4); }
   .perf-legend { display:flex; gap:16px; flex-wrap:wrap; font-size:11px; color:var(--muted); margin-bottom:28px; }
   .perf-legend span { display:inline-flex; align-items:center; gap:6px; }
   .perf-legend .dot { width:9px; height:9px; border-radius:50%; }
@@ -1322,7 +1335,7 @@
           <input type="file" id="perf-import-file" accept=".csv,.xlsx,.xls,text/csv" style="display:none" onchange="onPerfImportFile(this)">
         </div>
       </div>
-      <div class="perf-sub">ผลลัพธ์ต่อชิ้นงาน · จับคู่ด้วย asset ID (หรือชื่อโฆษณาที่ฝัง id) · รับ .csv / .xlsx · กลุ่ม Catch/Connect/Convert · แยก Ads / Organic · Import ซ้ำได้ (เช็คซ้ำ) · ล้างได้ถ้าอัปผิด</div>
+      <div class="perf-sub">ผลลัพธ์ต่อชิ้นงาน · แยกแถวตาม objective ในครีเอทีฟเดียวกัน (Reach/Engage/Convert) · จับคู่ด้วย asset ID หรือชื่อโฆษณา · รับ .csv / .xlsx · แยก Ads / Organic · Import ซ้ำได้ · ล้างได้</div>
       <div class="perf-monthbar" id="perf-monthbar"></div>
       <div class="perf-tiles" id="perf-tiles"></div>
       <div class="perf-chips" id="perf-chips">
@@ -7311,6 +7324,44 @@ function perfRowsFor(camp, month, channel) {
   return rows;
 }
 
+// Funnel rank for objective ordering within a creative block: Catch(reach/
+// traffic)=1, Connect(engagement)=2, Convert(conversion/sales)=3, unknown=4.
+function perfObjRank(objective) {
+  const o = PERF_OBJECTIVES[objective] || PERF_OBJECTIVES[''];
+  return o.cls === 'catch' ? 1 : o.cls === 'connect' ? 2 : o.cls === 'convert' ? 3 : 4;
+}
+// Like perfRowsFor, but splits each creative into one entry PER OBJECTIVE
+// (periods sharing an objective are summed — same calculation basis), kept as a
+// block under the creative. `raw` on the block is the creative overview (sum
+// across its objectives). Objectives sorted by funnel, then spend desc.
+function perfBlocksFor(camp, month, channel) {
+  channel = channel || 'all';
+  const chOk = p => channel === 'all' || (perfChannelOf(p.channel) === channel);
+  const blocks = [];
+  (camp.assets || []).forEach(a => {
+    const periods = ((a.metrics && a.metrics.periods) || []).filter(chOk);
+    const inScope = periods.filter(p => month === 'all' || perfMonthKey(p.start) === month);
+    const otherMonths = new Set(periods.filter(p => inScope.indexOf(p) < 0).map(p => perfMonthKey(p.start)).filter(Boolean));
+    if (!inScope.length) { blocks.push({ asset:a, hasData:false, objectives:[], raw:{}, channels:new Set(), otherMonths }); return; }
+    const byObj = new Map();
+    inScope.forEach(p => { const k = String(p.objective || ''); if (!byObj.has(k)) byObj.set(k, []); byObj.get(k).push(p); });
+    const objectives = Array.from(byObj.entries()).map(([objective, ps]) => ({
+      objective,
+      periods: ps.slice().sort((x,y) => String(y.start).localeCompare(String(x.start))),
+      raw: perfSumRaw(ps.map(p => p.raw)),
+      channels: new Set(ps.map(p => perfChannelOf(p.channel)))
+    }));
+    objectives.sort((A,B) => perfObjRank(A.objective) - perfObjRank(B.objective) || ((B.raw.spend||0) - (A.raw.spend||0)));
+    blocks.push({
+      asset:a, hasData:true, objectives,
+      raw: perfSumRaw(inScope.map(p => p.raw)),
+      channels: new Set(inScope.map(p => perfChannelOf(p.channel))),
+      otherMonths
+    });
+  });
+  return blocks;
+}
+
 // --- formatting ---
 function perfFmt(v, fmt) {
   if (v == null || isNaN(v)) return '<span class="perf-na">—</span>';
@@ -7498,10 +7549,8 @@ function renderPerfTable() {
   };
 
   const canEditPerf = canManagePerf();
-  let body = '';
-  rows.forEach(r => {
-    const a = r.asset;
-    // artwork thumbnail — reuse the same file/preview the Section B row uses
+  // Identity (thumb + id + name) cells — shown once on a block's first row.
+  const identityCells = (a) => {
     const allFiles = (a.files && a.files.length) ? a.files
       : (a.fileData ? [{ name:a.fileName||'file', type:guessMimeFromDataUrl(a.fileData), data:a.fileData }] : []);
     const pf = allFiles.find(f => isImageType(f.type)) || allFiles[0];
@@ -7511,45 +7560,58 @@ function renderPerfTable() {
       if (src && isImageType(pf.type)) thumb = `<img class="perf-thumb" src="${src}" alt="" onclick="openMediaViewer('${a.id}')">`;
       else thumb = `<div class="perf-thumb ph" onclick="openMediaViewer('${a.id}')">${fileIsOnDrive(pf)?'☁️':'📄'}</div>`;
     }
-    const obj = PERF_OBJECTIVES[r.objective] || PERF_OBJECTIVES[''];
-    const alt = (r.otherMonths && r.otherMonths.size) ? `<span class="alt">+${r.otherMonths.size} เดือน</span>` : '';
-    const rowClear = (r.hasData && canEditPerf)
-      ? `<button class="perf-row-clear" title="ล้างผลของชิ้นงานนี้ในช่วงที่เลือก" onclick="clearPerfAsset('${escapeHtml(a.id)}')">✕</button>` : '';
-    // Ads/Organic badge — only meaningful when viewing the combined ("รวม") view.
-    const chanBadge = (r.hasData && _perfChannel === 'all') ? perfChanBadge(r.channels) : '';
-    const expanded = _perfExpanded.has(a.id);
-    const caret = (r.hasData && r.periods.length)
-      ? `<button class="perf-caret${expanded?' open':''}" title="ดูราย period" onclick="togglePerfRow('${escapeHtml(a.id)}')">▸</button>` : '';
-    const period = r.hasData
-      ? `${caret}<span class="perf-period">${perfDateLabel(r.periods)}${alt}</span>${chanBadge}${rowClear}`
-      : `<span class="perf-na" style="font-size:11px">ไม่มีข้อมูล${r.otherMonths && r.otherMonths.size ? ' เดือนนี้':''}</span>`;
+    return `<td class="l">${thumb}</td>` +
+      `<td class="l"><span class="asset-ref-id" title="${escapeHtml(campLabel+' / '+(a._displayId||''))}">${escapeHtml(a._displayId||shortId(a.id,'A'))}</span><small style="display:block;font-family:'Poppins','Prompt',sans-serif;font-size:9px;color:var(--muted-2);margin-top:2px;">${escapeHtml(campLabel)}</small></td>` +
+      `<td class="l"><div class="perf-aname">${escapeHtml(a.h2||'—')}</div><div class="perf-asub">${escapeHtml(a.catLabel||camp.brand||'')}</div></td>`;
+  };
+  const emptyIdentity = `<td class="l"></td><td class="l"></td><td class="l"></td>`;
 
-    body += `<tr class="${r.hasData?'perf-arow':''}">
-      <td class="l">${thumb}</td>
-      <td class="l"><span class="asset-ref-id" title="${escapeHtml(campLabel+' / '+(a._displayId||''))}">${escapeHtml(a._displayId||shortId(a.id,'A'))}</span><small style="display:block;font-family:'Poppins','Prompt',sans-serif;font-size:9px;color:var(--muted-2);margin-top:2px;">${escapeHtml(campLabel)}</small></td>
-      <td class="l"><div class="perf-aname">${escapeHtml(a.h2||'—')}</div><div class="perf-asub">${escapeHtml(a.catLabel||camp.brand||'')}</div></td>
-      <td class="l">${period}</td>
-      <td class="l"><span class="cat-pill ${obj.cls}">${escapeHtml(obj.label)}</span></td>
-      ${metricCells(r.raw, r.hasData, '')}
-    </tr>`;
-
-    // expanded per-period detail rows + a per-asset subtotal row
-    if (r.hasData && expanded) {
-      r.periods.forEach(pd => {
-        const pobj = PERF_OBJECTIVES[pd.objective] || PERF_OBJECTIVES[''];
-        body += `<tr class="perf-detail">
-          <td class="l"></td>
-          <td class="l"></td>
-          <td class="l"><span class="perf-detail-lead">↳ ราย period</span></td>
-          <td class="l"><span class="perf-period sm">${perfDateLabel([pd])}</span> ${perfChanBadge([perfChannelOf(pd.channel)])}</td>
-          <td class="l"><span class="cat-pill sm ${pobj.cls}">${escapeHtml(pobj.label)}</span></td>
-          ${metricCells(pd.raw, true, 'dim')}
-        </tr>`;
-      });
-      body += `<tr class="perf-subtotal">
-        <td class="l" colspan="5">Σ รวม ${r.periods.length} ช่วง · ${escapeHtml(a.h2||a.id)}</td>
-        ${metricCells(r.raw, true, '')}
-      </tr>`;
+  const blocks = perfBlocksFor(camp, _perfMonth, _perfChannel);
+  let body = '';
+  blocks.forEach(blk => {
+    const a = blk.asset;
+    // no data in scope → single em-dash row for the creative
+    if (!blk.hasData) {
+      const o0 = PERF_OBJECTIVES[''];
+      body += `<tr class="perf-block-start">${identityCells(a)}` +
+        `<td class="l"><span class="perf-na" style="font-size:11px">ไม่มีข้อมูล${blk.otherMonths && blk.otherMonths.size ? ' เดือนนี้':''}</span></td>` +
+        `<td class="l"><span class="cat-pill ${o0.cls}">${escapeHtml(o0.label)}</span></td>${metricCells({}, false, '')}</tr>`;
+      return;
+    }
+    const multi = blk.objectives.length >= 2;
+    const rowClear = canEditPerf
+      ? `<button class="perf-row-clear" title="ล้างผลทั้ง creative นี้ในช่วงที่เลือก" onclick="clearPerfAsset('${escapeHtml(a.id)}')">✕</button>` : '';
+    // one row per objective, grouped as a contiguous block under the creative
+    blk.objectives.forEach((ob, oi) => {
+      const obj = PERF_OBJECTIVES[ob.objective] || PERF_OBJECTIVES[''];
+      const alt = (oi === 0 && blk.otherMonths && blk.otherMonths.size) ? `<span class="alt">+${blk.otherMonths.size} เดือน</span>` : '';
+      const chanBadge = (_perfChannel === 'all') ? perfChanBadge(ob.channels) : '';
+      const objKey = a.id + '::' + String(ob.objective || '').replace(/[^a-z0-9]/gi, '_');
+      const expanded = _perfExpanded.has(objKey);
+      const caret = ob.periods.length ? `<button class="perf-caret${expanded?' open':''}" title="ดูราย period" onclick="togglePerfRow('${escapeHtml(objKey)}')">▸</button>` : '';
+      const period = `${caret}<span class="perf-period">${perfDateLabel(ob.periods)}${alt}</span>${chanBadge}${oi===0?rowClear:''}`;
+      body += `<tr class="perf-arow ${oi===0?'perf-block-start':'perf-block-cont'}">` +
+        (oi === 0 ? identityCells(a) : emptyIdentity) +
+        `<td class="l">${period}</td>` +
+        `<td class="l"><span class="cat-pill ${obj.cls}">${escapeHtml(obj.label)}</span></td>` +
+        `${metricCells(ob.raw, true, '')}</tr>`;
+      // ▸ expand = this objective's periods
+      if (expanded) {
+        ob.periods.forEach(pd => {
+          body += `<tr class="perf-detail">` +
+            `<td class="l"></td><td class="l"></td>` +
+            `<td class="l"><span class="perf-detail-lead">↳ ราย period</span></td>` +
+            `<td class="l"><span class="perf-period sm">${perfDateLabel([pd])}</span> ${perfChanBadge([perfChannelOf(pd.channel)])}</td>` +
+            `<td class="l"><span class="cat-pill sm ${obj.cls}">${escapeHtml(obj.label)}</span></td>` +
+            `${metricCells(pd.raw, true, 'dim')}</tr>`;
+        });
+      }
+    });
+    // creative overview row — only when the creative has >1 objective
+    if (multi) {
+      body += `<tr class="perf-subtotal">` +
+        `<td class="l" colspan="5">Σ รวมครีเอทีฟ · ${blk.objectives.length} objective · ${escapeHtml(a.h2||a.id)}</td>` +
+        `${metricCells(blk.raw, true, '')}</tr>`;
     }
   });
 
@@ -7562,7 +7624,8 @@ function renderPerfTable() {
       else { const v = totalDer[c.def.key]; tc += c.first ? `<td class="grp rate">${v!=null?perfFmt(v,c.def.fmt):'—'}</td>` : `<td class="rate">${v!=null?perfFmt(v,c.def.fmt):'—'}</td>`; }
     });
     const chanNote = _perfChannel === 'all' ? ' · รวม Ads+Organic (CPM/ROAS แม่นเมื่อเลือก Ads)' : ' · ' + perfChannelLabel(_perfChannel);
-    foot = `<tfoot><tr><td class="l" colspan="5">${_perfMonth==='all'?'รวมทั้งหมด':'รวมเดือนที่เลือก'} · ${withData.length} asset${chanNote}</td>${tc}</tr></tfoot>`;
+    const sumLabel = _perfMonth === 'all' ? 'รวมทั้งหมด (SUM)' : 'รวมเดือนที่เลือก (SUM)';
+    foot = `<tfoot><tr class="perf-grandtotal"><td class="l" colspan="5">Σ ${sumLabel} · ${withData.length} asset${chanNote}</td>${tc}</tr></tfoot>`;
   }
 
   wrap.innerHTML = `<table><thead><tr>${gh}</tr><tr class="cols">${chh}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
@@ -7593,8 +7656,8 @@ function downloadPerfTemplate() {
 function exportPerfView() {
   const camp = getCurrentCampaign();
   if (!camp) { showToast('เลือกแคมเปญก่อน', 'warn'); return; }
-  const rows = perfRowsFor(camp, _perfMonth, _perfChannel).filter(r => r.hasData);
-  if (!rows.length) { showToast('ไม่มีข้อมูลในมุมมองนี้ให้ export', 'warn'); return; }
+  const blocks = perfBlocksFor(camp, _perfMonth, _perfChannel).filter(b => b.hasData);
+  if (!blocks.length) { showToast('ไม่มีข้อมูลในมุมมองนี้ให้ export', 'warn'); return; }
   const visibleGroups = PERF_GROUPS.filter(g => _perfGroups.has(g));
   const cols = [];
   visibleGroups.forEach(g => {
@@ -7604,18 +7667,29 @@ function exportPerfView() {
   const num = (raw, der, c) => { const v = c.kind==='raw' ? raw[c.key] : der[c.key]; return (v==null||isNaN(v)) ? '' : (Math.round(v*1000)/1000); };
   const head = ['id','asset','channel','period_start','period_end','objective'].concat(cols.map(c => c.label));
   const lines = [head.map(csvEscape).join(',')];
-  rows.forEach(r => {
-    const der = perfDerived(r.raw);
-    const starts = r.periods.map(p=>p.start).filter(Boolean).sort();
-    const ends = r.periods.map(p=>p.end||p.start).filter(Boolean).sort();
-    const line = [ r.asset.id, r.asset.h2||'', Array.from(r.channels).join('+'),
-      starts[0]||'', ends[ends.length-1]||'', r.objective||'' ]
-      .concat(cols.map(c => num(r.raw, der, c)));
-    lines.push(line.map(csvEscape).join(','));
+  // one line per (creative × objective) — matches the on-screen table; a
+  // creative-total line follows when the creative has >1 objective.
+  let assetCount = 0;
+  blocks.forEach(blk => {
+    assetCount++;
+    blk.objectives.forEach(ob => {
+      const der = perfDerived(ob.raw);
+      const starts = ob.periods.map(p=>p.start).filter(Boolean).sort();
+      const ends = ob.periods.map(p=>p.end||p.start).filter(Boolean).sort();
+      const line = [ blk.asset.id, blk.asset.h2||'', Array.from(ob.channels).join('+'),
+        starts[0]||'', ends[ends.length-1]||'', ob.objective||'' ]
+        .concat(cols.map(c => num(ob.raw, der, c)));
+      lines.push(line.map(csvEscape).join(','));
+    });
+    if (blk.objectives.length >= 2) {
+      const der = perfDerived(blk.raw);
+      lines.push([ blk.asset.id, blk.asset.h2||'', Array.from(blk.channels).join('+'), '', '', 'CREATIVE_TOTAL' ]
+        .concat(cols.map(c => num(blk.raw, der, c))).map(csvEscape).join(','));
+    }
   });
-  const totalRaw = perfSumRaw(rows.map(r => r.raw));
+  const totalRaw = perfSumRaw(blocks.map(b => b.raw));
   const totalDer = perfDerived(totalRaw);
-  lines.push(['TOTAL', rows.length+' asset', _perfChannel==='all'?'Ads+Organic':perfChannelLabel(_perfChannel), '', '', '']
+  lines.push(['TOTAL', assetCount+' asset', _perfChannel==='all'?'Ads+Organic':perfChannelLabel(_perfChannel), '', '', '']
     .concat(cols.map(c => num(totalRaw, totalDer, c))).map(csvEscape).join(','));
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type:'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -7624,7 +7698,7 @@ function exportPerfView() {
   el.href = url; el.download = `perf_${String(camp.campaign||camp.id).replace(/[^\w]+/g,'_')}_${scope}.csv`;
   document.body.appendChild(el); el.click(); el.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast(`⬇ Export ${rows.length} asset (${perfFullScopeLabel(_perfMonth, _perfChannel)}) แล้ว`, 'ok');
+  showToast(`⬇ Export ${assetCount} asset (${perfFullScopeLabel(_perfMonth, _perfChannel)}) แล้ว`, 'ok');
 }
 
 function triggerPerfImport() {
@@ -11733,6 +11807,25 @@ window.__runTests = async function() {
     const assets = [{ id:'asset-1' }, { id:'asset-12' }].sort((a,b)=>b.id.length-a.id.length);
     eq(perfMatchByName('Boost - asset-12 - July', assets).id, 'asset-12');
     eq(perfMatchByName('nothing here', assets), null);
+  });
+  t('perfBlocksFor splits by objective, sums same-obj, funnel order, creative total', () => {
+    const camp = { assets:[ { id:'a1', metrics:{ periods:[
+      { start:'2026-07-01', objective:'engagement', channel:'ads', raw:{ spend:100, engagement:50 } },
+      { start:'2026-07-10', objective:'engagement', channel:'ads', raw:{ spend:40, engagement:20 } },
+      { start:'2026-07-05', objective:'reach', channel:'ads', raw:{ spend:60, reach:900 } }
+    ] } } ] };
+    const blk = perfBlocksFor(camp, '2026-07', 'all')[0];
+    ok(blk.hasData);
+    eq(blk.objectives.length, 2);                       // reach + engagement
+    eq(blk.objectives[0].objective, 'reach');           // funnel: catch before connect
+    eq(blk.objectives[1].objective, 'engagement');
+    eq(blk.objectives[1].raw.spend, 140);               // two engagement periods summed
+    eq(blk.objectives[1].raw.engagement, 70);
+    eq(blk.raw.spend, 200);                             // creative overview = all objectives
+  });
+  t('perfBlocksFor: no-data asset yields an empty block', () => {
+    const blk = perfBlocksFor({ assets:[{ id:'x' }] }, 'all', 'all')[0];
+    ok(!blk.hasData && blk.objectives.length === 0);
   });
   t('safeUrl allows http/https/mailto, blocks javascript/data, prefixes bare', () => {
     eq(safeUrl('https://x.com'), 'https://x.com');
