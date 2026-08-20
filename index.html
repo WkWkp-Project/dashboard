@@ -6960,10 +6960,22 @@ function renderAssets() {
   uniqueShortIds(camp.assets, a => a.id, 'A');
   const campLabel = shortId(camp.id, 'C');
   const total = camp.assets.length;
+  // Display order: by scheduledDate ascending (earliest first); assets with no
+  // date sink to the bottom. Sort a COPY only — never reorder camp.assets, so
+  // nothing is marked dirty and _displayId labels (derived from id) stay stable.
+  // localeCompare on 'YYYY-MM-DD' strings is already chronological; equal dates
+  // keep their original order (V8 sort is stable).
+  const ordered = camp.assets.slice().sort((a, b) => {
+    const da = a.scheduledDate || '', db = b.scheduledDate || '';
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da.localeCompare(db);
+  });
   const pages = Math.max(1, Math.ceil(total / ASSETS_PER_PAGE));
   if (_assetPage > pages) _assetPage = pages;
   const start = (_assetPage - 1) * ASSETS_PER_PAGE;
-  const pageAssets = camp.assets.slice(start, start + ASSETS_PER_PAGE);
+  const pageAssets = ordered.slice(start, start + ASSETS_PER_PAGE);
   pageAssets.forEach(a => {
     const tr = document.createElement('tr');
     const d = new Date(a.createdAt || a.date);
