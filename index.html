@@ -9651,6 +9651,10 @@ function reopenForRevise() {
   showConfirm('Re-open for revision?', 'Bundle ที่ส่งไปแล้วยังใช้งานได้ — แก้ไขเสร็จสามารถสร้าง bundle ใหม่', () => {
     const camp = getCurrentCampaign();
     camp.status = 'active';
+    // Clear the handoff record too — the yellow "handed off" banner keys off
+    // handoffInfo (not status), so leaving it set kept the banner up forever
+    // even after re-opening. A fresh handoff will stamp a new handoffInfo.
+    camp.handoffInfo = null;
     logAction('SYSTEM', 'Re-opened for revision');
     updateCampaignUI(); renderAssets();
     showToast('Campaign re-opened');
