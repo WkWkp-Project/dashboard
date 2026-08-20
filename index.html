@@ -8,13 +8,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600&family=Prompt:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600&display=swap" rel="stylesheet">
-<!-- Libraries from cdnjs. SRI (integrity) was removed: the hash/cache churn was
-     not worth it for these render/export helpers. The real supply-chain
-     mitigation lives with xlsx below (self-hosted). If tamper protection is
-     wanted here again, self-host these three too rather than re-adding SRI. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- Libraries self-hosted from js/vendor/ (same-origin) — no CDN dependency and
+     no SRI to maintain. Files pinned in the repo:
+       html2canvas 1.4.1 · jspdf 2.5.1 (UMD) · jszip 3.10.1 · xlsx 0.20.3
+     To upgrade one: drop the new min.js into js/vendor/ and commit it.
+     FILES MUST EXIST before these lines ship (else 404 -> feature breaks). -->
+<script src="js/vendor/html2canvas.min.js"></script>
+<script src="js/vendor/jspdf.umd.min.js"></script>
+<script src="js/vendor/jszip.min.js"></script>
 <!-- SheetJS self-hosted 0.20.3 (fixes CVE-2023-30533 prototype pollution +
      CVE-2024-22363 ReDoS; cdnjs only carries the vulnerable 0.18.5). Served
      same-origin from the repo, so no CDN supply-chain and no SRI to maintain.
