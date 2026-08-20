@@ -7557,55 +7557,7 @@ function onPerfImportFile(input) {
   }
 }
 
-// RFC-4180-ish CSV parser: handles quoted fields, embedded commas/newlines,
-// and "" escapes. Returns array of string-arrays; blank rows dropped.
-function parsePerfCSV(text) {
-  text = String(text || '').replace(/^﻿/, '');
-  const rows = []; let row = [], cell = '', q = false;
-  for (let i=0; i<text.length; i++) {
-    const ch = text[i];
-    if (q) {
-      if (ch === '"') { if (text[i+1] === '"') { cell += '"'; i++; } else q = false; }
-      else cell += ch;
-    } else {
-      if (ch === '"') q = true;
-      else if (ch === ',') { row.push(cell); cell = ''; }
-      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-      else if (ch === '\r') { /* ignore */ }
-      else cell += ch;
-    }
-  }
-  if (cell.length || row.length) { row.push(cell); rows.push(row); }
-  return rows.filter(r => r.some(c => String(c).trim() !== ''));
-}
-
-// Parse a messy numeric cell ("1,200 ฿", "2.9%") → number or null.
-function perfParseNum(v) {
-  if (v == null) return null;
-  let s = String(v).trim();
-  if (s === '') return null;
-  s = s.replace(/[,\s฿%]/g, '').replace(/[^\d.\-]/g, '');
-  if (s === '' || s === '-' || isNaN(+s)) return null;
-  return +s;
-}
-// FB column header → canonical metric key (exact key OR alias; else null).
-function perfMapMetricHeader(h) {
-  const n = String(h || '').trim().toLowerCase();
-  if (!n) return null;
-  if (METRIC_DEFS[n]) return n;
-  for (const m of PERF_METRICS) { if (m.aliases && m.aliases.indexOf(n) >= 0) return m.key; }
-  return null;
-}
-
-// Find any known asset id that appears as a substring of a free-text cell
-// (e.g. FB "Ad name" that embeds the id). Longest id first so a longer id
-// wins over a shorter one it contains. Returns the asset or null.
-function perfMatchByName(text, assetsSortedByIdLen) {
-  const hay = String(text || '').toLowerCase();
-  if (!hay) return null;
-  for (const a of assetsSortedByIdLen) { if (hay.indexOf(String(a.id).toLowerCase()) >= 0) return a; }
-  return null;
-}
+// [moved to js/perf.js — step 3] parsePerfCSV / perfParseNum / perfMapMetricHeader / perfMatchByName
 
 function stagePerfImport(text) {
   const table = parsePerfCSV(text);
