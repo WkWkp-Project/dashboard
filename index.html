@@ -1719,6 +1719,11 @@
         <textarea id="asset-prompt" placeholder="คำอธิบายภาพ / brief สำหรับการสร้าง content"></textarea>
       </div>
 
+      <div class="input-group">
+        <label>📝 Caption โพสต์ <small class="hint-label">(อีโมจิ · สัญลักษณ์ · ลิงก์ ได้ · เอาไปแปะ FB/IG)</small></label>
+        <textarea id="asset-caption" placeholder="แคปชั่นสำหรับโพสต์ — พิมพ์อีโมจิ ใส่ลิงก์ ขึ้นบรรทัดใหม่ได้เลย 🎉"></textarea>
+      </div>
+
       <div class="grid-2">
         <div class="input-group">
           <label>Scheduled Date (สำหรับปฏิทิน)</label>
@@ -2117,6 +2122,26 @@
     <div class="simple-modal-footer">
       <button class="btn" onclick="closeConfirm()">Cancel</button>
       <button class="btn accent" id="confirm-action-btn" onclick="executeConfirm()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Caption viewer/copy — reads the post caption for an asset, renders it with
+     emoji/symbols intact and links clickable, and copies the raw text for
+     pasting into Facebook / Instagram. -->
+<div class="simple-overlay" id="captionModal">
+  <div class="simple-modal">
+    <div class="simple-modal-head">
+      <h3>📝 Caption โพสต์</h3>
+      <button class="close-btn" onclick="closeCaptionModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="simple-modal-body">
+      <div id="caption-render" style="white-space:pre-wrap; word-break:break-word; font-size:14px; line-height:1.7; color:var(--ink); background:var(--paper-2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; max-height:52vh; overflow-y:auto;"></div>
+      <div id="caption-meta" style="font-size:11px; color:var(--muted); margin-top:8px;"></div>
+    </div>
+    <div class="simple-modal-footer">
+      <button class="btn" onclick="closeCaptionModal()">ปิด</button>
+      <button class="btn accent" id="caption-copy-btn" onclick="copyCaption()">📋 คัดลอกไปโพสต์</button>
     </div>
   </div>
 </div>
@@ -5733,7 +5758,7 @@ function normalizeAsset(a) {
       };
     }
   }
-  return { ...a, files, links, metrics };
+  return { ...a, files, links, metrics, caption: (typeof a.caption === 'string' ? a.caption : '') };
 }
 
 function guessMimeFromDataUrl(d) {
@@ -6935,6 +6960,47 @@ function linkMeta(url) {
   return { icon: '🔗', label: host || 'link' };
 }
 
+// ---- Section B caption (post text for Facebook/Instagram) ----
+let _captionRaw = '';
+// Render a caption as safe HTML: escape everything, then re-enable clickable
+// links (http/https/www via safeUrl — javascript:/data: are stripped). Newlines
+// come through via CSS white-space:pre-wrap; emoji/symbols render natively.
+function linkifyCaption(text) {
+  const esc = escapeHtml(String(text || ''));
+  return esc.replace(/((?:https?:\/\/|www\.)[^\s<]+)/gi, (m) => {
+    const raw = m.replace(/&amp;/g, '&');          // undo escaping for the href
+    const href = safeUrl(raw);                     // '' if scheme not allowed
+    if (!href) return m;
+    return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${m}</a>`;
+  });
+}
+function openCaptionModal(id) {
+  const camp = getCurrentCampaign(); if (!camp) return;
+  const a = (camp.assets || []).find(x => x.id === id); if (!a) return;
+  _captionRaw = a.caption || '';
+  const box = document.getElementById('caption-render');
+  box.innerHTML = _captionRaw.trim() ? linkifyCaption(_captionRaw)
+    : '<span style="color:var(--muted)">(ยังไม่มี caption — เพิ่มได้ในปุ่ม Edit)</span>';
+  const chars = Array.from(_captionRaw).length;    // code-point count (emoji-aware)
+  document.getElementById('caption-meta').textContent = `${chars} ตัวอักษร · ${a.h2 || ''}`;
+  document.getElementById('captionModal').classList.add('show');
+}
+function closeCaptionModal() { document.getElementById('captionModal').classList.remove('show'); }
+function _captionFallbackCopy(txt, done) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+  } catch (e) { showToast('คัดลอกไม่สำเร็จ — เลือกข้อความแล้วกด Ctrl+C', 'warn'); }
+}
+function copyCaption() {
+  const txt = _captionRaw || '';
+  const done = () => showToast('✓ คัดลอก caption แล้ว — ไปแปะโพสต์ได้เลย', 'ok');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done).catch(() => _captionFallbackCopy(txt, done));
+  } else { _captionFallbackCopy(txt, done); }
+}
+
 function renderAssets() {
   const camp = getCurrentCampaign();
   const tbody = document.getElementById('asset-tbody');
@@ -7037,6 +7103,7 @@ function renderAssets() {
         <div class="row-actions">
           <button class="row-action" title="Edit" ${isLocked?'disabled':''} onclick="editAsset('${a.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
           <button class="row-action" title="Delete" ${isLocked?'disabled':''} onclick="confirmDeleteAsset('${a.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
+          ${a.caption && a.caption.trim() ? `<button class="row-action" title="ดู/คัดลอก Caption" onclick="openCaptionModal('${a.id}')">📝</button>` : ''}
         </div>
       </td>`;
     tbody.appendChild(tr);
@@ -7560,7 +7627,7 @@ function openAddAssetModal() {
   pendingFiles = [];
   pendingLinks = [];
   document.getElementById('asset-modal-title').textContent = 'Add New Asset · ' + (camp.campaign || camp.id);
-  ['asset-h2','asset-h3','asset-prompt','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
+  ['asset-h2','asset-h3','asset-prompt','asset-caption','asset-link','asset-date'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('asset-link-input').value = '';
   syncDateTrigger('asset-date');
   document.getElementById('asset-cat').value = 'catch';
@@ -7587,6 +7654,7 @@ function editAsset(id) {
   document.getElementById('asset-cat').value = a.catClass;
   document.getElementById('asset-type').value = a.assetType || 'image';
   document.getElementById('asset-prompt').value = a.imagePrompt || '';
+  document.getElementById('asset-caption').value = a.caption || '';
   document.getElementById('asset-link').value = pendingLinks[0] || '';
   document.getElementById('asset-link-input').value = '';
   document.getElementById('asset-date').value = a.scheduledDate || '';
@@ -7889,12 +7957,18 @@ function saveAssetFromModal() {
   if (!h2) { showToast('กรอก H2 อย่างน้อย', 'warn'); return; }
   const existing = editingAssetId ? (camp.assets || []).find(x => x.id === editingAssetId) : null;
   const data = {
+    // Spread the existing asset first so content NOT edited in this form is
+    // preserved — notably Section C `metrics`, which this rebuild used to drop
+    // (editing an asset in Section B wiped its performance data). The explicit
+    // fields below override the ones the form owns.
+    ...(existing || {}),
     id: editingAssetId || ('asset-' + Date.now() + Math.random().toString(36).slice(2,7)),
     catClass: cat,
     catLabel: sch.label,
     assetType: document.getElementById('asset-type').value,
     h2, h3,
     imagePrompt: document.getElementById('asset-prompt').value.trim(),
+    caption: document.getElementById('asset-caption').value,   // raw — keep emoji/newlines/links
     link: pendingLinks[0] || '',
     links: pendingLinks.slice(),
     scheduledDate: document.getElementById('asset-date').value,
