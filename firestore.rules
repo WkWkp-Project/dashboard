@@ -39,28 +39,30 @@ service cloud.firestore {
     }
 
     // Shared campaign index (discovery metadata only — content stays on Drive).
-    // Any signed-in user may read; admins (or bootstrap-domain admins, e.g. the
-    // first admin before any admin doc exists) may write.
+    // Any signed-in user may read; ADMINS ONLY may write. (Bootstrap is not
+    // needed here: the first admin self-provisions their control_members doc
+    // via isBootstrapAdmin below, which makes isAdmin() true before they ever
+    // write a campaign — so opening this to the whole domain was unnecessary.)
     match /control_campaigns/{campaignId} {
       allow read: if request.auth != null;
-      allow write: if isAdmin() || isBootstrapAdmin();
+      allow write: if isAdmin();
     }
 
     // Shared brand registry — { name, company, logoFileId, logoUrl }. The logo
     // image stays on Drive; only pointers live here. Any signed-in user may
-    // read; admins (or bootstrap-domain admins) may write.
+    // read; ADMINS ONLY may write.
     match /control_brands/{brandId} {
       allow read: if request.auth != null;
-      allow write: if isAdmin() || isBootstrapAdmin();
+      allow write: if isAdmin();
     }
 
     // Lightweight signal channel — { ts, modifiedBy, displayName, deleted? }
     // pinged after a successful Drive write or campaign delete, so other admins
     // see a live "Refresh" banner instead of waiting for the 45s poll. Carries
-    // no campaign content; Drive remains the source of truth.
+    // no campaign content; Drive remains the source of truth. ADMINS ONLY write.
     match /control_signals/{campaignId} {
       allow read: if request.auth != null;
-      allow write: if isAdmin() || isBootstrapAdmin();
+      allow write: if isAdmin();
     }
 
     // Online presence (Wkwk team). Any signed-in user may read; a user may only
