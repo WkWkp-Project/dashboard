@@ -2711,6 +2711,7 @@ function initGoogleAuth() {
       callback: (resp) => {
         if (resp.access_token) {
           _silentRefreshInFlight = false;
+          _initialTokenSilent = false;
           accessToken = resp.access_token;
           // Schedule the next silent refresh ~5 min before expiry
           if (refreshTimer) clearTimeout(refreshTimer);
@@ -2729,6 +2730,14 @@ function initGoogleAuth() {
       },
       error_callback: (err) => {
         console.warn('OAuth error_callback:', err);
+        // First-ever login: the silent (prompt:'') request needs the consent
+        // screen once. Retry a single time WITH consent; after this the user
+        // has granted and future logins are silent.
+        if (_initialTokenSilent) {
+          _initialTokenSilent = false;
+          try { setSaveStatus('saving', 'Requesting Drive access...'); tokenClient.requestAccessToken({ prompt: 'consent' }); return; }
+          catch(e) { console.error('consent retry failed:', e); }
+        }
         // A silent (prompt:'') refresh that needs interaction → fall back to
         // the Firebase popup quietly instead of surfacing an error.
         if (_silentRefreshInFlight) { _silentRefreshInFlight = false; refreshTokenViaPopup(); return; }
@@ -2751,6 +2760,7 @@ const TOKEN_REFRESH_AFTER_MS = 50 * 60 * 1000;        // proactive refresh point
 const TOKEN_VISIBILITY_REFRESH_AFTER_MS = 45 * 60 * 1000; // tighter ceiling on focus return
 let _isInitialLogin = false;
 let _silentRefreshInFlight = false;
+let _initialTokenSilent = false; // true while the first-login silent token request is in flight
 // Refresh the Drive access token. Tries GIS silent refresh first (no popup);
 // the tokenClient error_callback falls back to refreshTokenViaPopup() if the
 // silent attempt needs user interaction.
@@ -2802,9 +2812,16 @@ function handleRealGoogleLogin() {
         console.warn('Firebase signInWithPopup returned no Drive accessToken — falling back to GIS tokenClient');
         setSaveStatus('saving', 'Requesting Drive access...');
         try {
-          tokenClient.requestAccessToken({ prompt: 'consent' });
+          // Silent first: a returning user who already granted the scopes gets a
+          // token with NO consent screen — this is the fix for "asks permission
+          // every login". If they have never granted (first-ever login), the
+          // silent call errors and error_callback retries once, that time
+          // showing the consent screen.
+          _initialTokenSilent = true;
+          tokenClient.requestAccessToken({ prompt: '' });
           return; // success path resumes inside tokenClient.callback
         } catch(e) {
+          _initialTokenSilent = false;
           console.error('GIS fallback request failed:', e);
         }
       }
@@ -12335,10 +12352,13 @@ window.__runTests = async function() {
     ok(/trimLogByRetention/.test(src) && /_logTrimAnnounced/.test(src),
        'logAction must apply trimLogByRetention + one-shot toast guard');
   });
-  t('handleRealGoogleLogin falls back to GIS tokenClient when Firebase returns no Drive token (source guard)', () => {
+  t('handleRealGoogleLogin falls back to GIS tokenClient SILENTLY when Firebase returns no Drive token (source guard)', () => {
     const src = handleRealGoogleLogin.toString();
-    ok(/tokenClient\.requestAccessToken/.test(src) && /prompt:\s*['"]consent['"]/.test(src),
-       'expected GIS fallback path with prompt:consent for missing-token branch');
+    // The fallback must request a token, do it SILENTLY (prompt:'' + arm the
+    // _initialTokenSilent flag so error_callback can retry with consent once),
+    // and must NOT force the consent screen on every login.
+    ok(/tokenClient\.requestAccessToken/.test(src) && /_initialTokenSilent\s*=\s*true/.test(src) && !/prompt:\s*['"]consent['"]/.test(src),
+       'fallback should request a token silently and arm _initialTokenSilent, not force consent');
   });
   t('Section A thumb size constants present + enforced', () => {
     ok(THUMB_RECOMMENDED_W === 1200 && THUMB_RECOMMENDED_H === 900 && THUMB_MAX_SIZE_BYTES === 5*1024*1024);
