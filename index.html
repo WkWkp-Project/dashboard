@@ -3172,7 +3172,10 @@ async function onLoginSuccess() {
   document.getElementById('sb-mode-tag').style.color = "var(--connect)";
   logAction('SYSTEM', `User authenticated${userEmail ? ': ' + userEmail : ''}`);
   saveSession();
-  // 2) Load DB — failure here must NOT throw away the session
+  // 2) Load DB. SWR: paint the cached campaigns first so the page is usable at
+  // once, then revalidate against Drive (which re-renders with the truth).
+  const _swrPainted = hydrateFromLocalCacheForDisplay();
+  if (_swrPainted) setSaveStatus('saving', '🔄 กำลังซิงค์ข้อมูลล่าสุด…');
   try { await syncDatabaseFromDrive(); }
   catch(e) { console.error('syncDatabaseFromDrive failed:', e); setSaveStatus('error', 'โหลดข้อมูลจาก Drive ไม่ได้ · click'); }
   _controlLiveRender = true; // initial load done → control real-time updates may re-render now
@@ -3343,6 +3346,30 @@ function readLocalBackup() {
 function clearLocalBackup() { try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {} }
 
 // Offered after login when Drive returned no DB file but we have a local copy.
+// Stale-while-revalidate: paint the LAST-KNOWN campaigns from localStorage
+// immediately so the page is interactive at once, before the (slow) Drive
+// fetch. Display-only — it never marks anything dirty, never flips the data
+// source, and never touches accessTokens; the subsequent syncDatabaseFromDrive
+// replaces campaigns with Drive's authoritative copy and re-renders. Returns
+// true if it actually painted from cache.
+function hydrateFromLocalCacheForDisplay() {
+  try {
+    if (userRole === 'client' || isOfflineMode) return false;
+    const bk = readLocalBackup();
+    if (!bk || !bk.db || !Array.isArray(bk.db.campaigns) || !bk.db.campaigns.length) return false;
+    // Same identity guard as restore: never show user A's cache to user B.
+    if (!bk.email || !currentUserEmail || bk.email !== currentUserEmail) return false;
+    campaigns = bk.db.campaigns.map(normalizeCampaign);
+    const wantId = bk.db.currentCampaignId;
+    currentCampaignId = (wantId && campaigns.find(c => c.id === wantId)) ? wantId
+      : ((campaigns[0] && campaigns[0].id) || null);
+    const cur = campaigns.find(c => c.id === currentCampaignId);
+    if (cur) currentMemberEmail = (cur.clientEmail || '').toLowerCase() || currentMemberEmail;
+    renderEverything();
+    return true;
+  } catch (e) { console.warn('hydrateFromLocalCacheForDisplay failed:', e); return false; }
+}
+
 function maybeOfferLocalRestore() {
   if (userRole === 'client' || isOfflineMode) return;
   const bk = readLocalBackup();
@@ -3491,6 +3518,9 @@ async function tryRestoreSession() {
       const uc2 = document.querySelector('.user-chip'); if (uc2) uc2.title = currentUserEmail || '';
       document.getElementById('sb-mode-tag').textContent = isAdmin ? 'Cloud Sync Active' : 'Member · Read-only';
       document.getElementById('sb-mode-tag').style.color = isAdmin ? 'var(--connect)' : 'var(--gold)';
+      // SWR: paint cached campaigns first (instant), then revalidate via Drive.
+      const _swrPainted = hydrateFromLocalCacheForDisplay();
+      if (_swrPainted) setSaveStatus('saving', '🔄 กำลังซิงค์ข้อมูลล่าสุด…');
       try { await syncDatabaseFromDrive(); } catch(e) { console.warn('restore sync failed:', e); }
       _controlLiveRender = true; // initial load done → control real-time updates may re-render now
       startAutoResync(); // keep Drive data fresh while the tab is open
