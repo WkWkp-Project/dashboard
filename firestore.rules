@@ -1,0 +1,81 @@
+rules_version = '2';
+
+// ============================================================================
+// Wakuwaku Dashboard — control plane rules
+// ----------------------------------------------------------------------------
+// Only the lightweight control data lives in Firestore:
+//   /control_members/{email} → { email, name, role, campaignFolderIds[], ... }
+// Campaign JSON + media stay on Google Drive (NOT here).
+//
+// Deploy:  firebase deploy --only firestore:rules
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Is the caller an admin? (their own control doc has role == 'admin')
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/control_members/$(request.auth.token.email))
+        && get(/databases/$(database)/documents/control_members/$(request.auth.token.email)).data.role == 'admin';
+    }
+
+    // Bootstrap admin by email domain — lets the very first admin create their
+    // own doc before any admin exists. Tighten this domain to your org.
+    function isBootstrapAdmin() {
+      return request.auth != null
+        && request.auth.token.email.matches('.*@team[.]wkwkp[.]com');
+    }
+
+    match /control_members/{email} {
+      // Any signed-in user may read the roster (the app filters what it shows
+      // per role). Tighten to `isAdmin() || request.auth.token.email == email`
+      // if you don't want members to see each other.
+      allow read: if request.auth != null;
+
+      // Writes are admin-only. A bootstrap-domain admin may also create *their
+      // own* doc so the first login can self-provision.
+      allow write: if isAdmin()
+        || (isBootstrapAdmin() && request.auth.token.email == email);
+    }
+
+    // Shared campaign index (discovery metadata only — content stays on Drive).
+    // Any signed-in user may read; ADMINS ONLY may write. (Bootstrap is not
+    // needed here: the first admin self-provisions their control_members doc
+    // via isBootstrapAdmin below, which makes isAdmin() true before they ever
+    // write a campaign — so opening this to the whole domain was unnecessary.)
+    match /control_campaigns/{campaignId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Shared brand registry — { name, company, logoFileId, logoUrl }. The logo
+    // image stays on Drive; only pointers live here. Any signed-in user may
+    // read; ADMINS ONLY may write.
+    match /control_brands/{brandId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Lightweight signal channel — { ts, modifiedBy, displayName, deleted? }
+    // pinged after a successful Drive write or campaign delete, so other admins
+    // see a live "Refresh" banner instead of waiting for the 45s poll. Carries
+    // no campaign content; Drive remains the source of truth. ADMINS ONLY write.
+    match /control_signals/{campaignId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Online presence (Wkwk team). Any signed-in user may read; a user may only
+    // write a presence doc whose key contains their own email (key format is
+    // "g:<email>" or "op:<token>"; team members use their email).
+    match /control_presence/{key} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && key.matches('.*' + request.auth.token.email + '.*');
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
